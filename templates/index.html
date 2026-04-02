@@ -5,123 +5,219 @@
     <title>Black Chat | Workspace</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
     <style>
-        :root { --glass: rgba(255, 255, 255, 0.05); --border: rgba(255, 255, 255, 0.1); --neon: #38bdf8; --bg: #050505; }
-        body { margin: 0; display: flex; height: 100vh; background: var(--bg); color: #e2e8f0; font-family: 'Segoe UI', Tahoma, sans-serif; background-image: radial-gradient(circle at bottom left, #0f172a 0%, var(--bg) 60%); }
+        /* Telegram + Glassmorphism Theme */
+        :root { 
+            --bg-main: #020617; 
+            --glass-panel: rgba(30, 41, 59, 0.4); 
+            --glass-border: rgba(255, 255, 255, 0.08); 
+            --neon-blue: #38bdf8; 
+            --text-light: #f8fafc; 
+            --text-muted: #94a3b8;
+            --bubble-self: rgba(56, 189, 248, 0.15);
+            --bubble-other: rgba(255, 255, 255, 0.05);
+        }
         
-        .sidebar { width: 260px; background: var(--glass); backdrop-filter: blur(10px); border-right: 1px solid var(--border); padding: 20px; display: flex; flex-direction: column; }
-        .sidebar h3 { color: var(--neon); text-transform: uppercase; font-size: 0.9rem; letter-spacing: 1px; margin-top: 0; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
-        .btn { display: block; width: 100%; padding: 12px; margin-bottom: 10px; background: transparent; color: #e2e8f0; border: 1px solid transparent; border-radius: 8px; cursor: pointer; text-align: left; transition: 0.3s; font-weight: 500; }
-        .btn:hover { background: rgba(56, 189, 248, 0.1); border: 1px solid var(--neon); color: var(--neon); box-shadow: inset 0 0 10px rgba(56, 189, 248, 0.2); }
-        .logout { margin-top: auto; color: #f87171; border: 1px solid #f87171; text-align: center; text-decoration: none; padding: 10px; border-radius: 8px; transition: 0.3s; }
-        .logout:hover { background: #f87171; color: #000; box-shadow: 0 0 10px #f87171; }
-
-        .chat-container { flex: 1; display: flex; flex-direction: column; padding: 20px; }
-        .header { padding-bottom: 15px; border-bottom: 1px solid var(--border); margin-bottom: 15px; color: var(--neon); }
+        body { margin: 0; display: flex; height: 100vh; background: var(--bg-main); color: var(--text-light); font-family: 'Segoe UI', Tahoma, sans-serif; background-image: radial-gradient(circle at top right, #0f172a 0%, var(--bg-main) 70%); }
         
-        .messages { flex: 1; background: var(--glass); backdrop-filter: blur(10px); border: 1px solid var(--border); border-radius: 12px; padding: 20px; overflow-y: auto; margin-bottom: 20px; }
-        .msg-line { margin-bottom: 15px; line-height: 1.5; }
-        .msg-user { color: var(--neon); font-weight: bold; margin-right: 8px; }
-        .media-msg img, .media-msg video { max-width: 350px; border-radius: 8px; margin-top: 8px; border: 1px solid var(--border); }
-        .media-msg audio { margin-top: 8px; }
+        /* Sidebar (Telegram Left Panel) */
+        .sidebar { width: 300px; background: var(--glass-panel); backdrop-filter: blur(12px); border-right: 1px solid var(--glass-border); display: flex; flex-direction: column; }
+        .sidebar-header { padding: 20px; border-bottom: 1px solid var(--glass-border); }
+        .sidebar-header h3 { margin: 0; color: var(--neon-blue); letter-spacing: 1px; text-transform: uppercase; }
+        .sidebar-header p { margin: 5px 0 0 0; font-size: 0.85rem; color: var(--text-muted); }
+        
+        .chat-list { flex: 1; overflow-y: auto; padding: 15px; }
+        .section-title { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; margin: 15px 0 10px 5px; font-weight: bold; letter-spacing: 1px; }
+        
+        .chat-item { display: flex; align-items: center; gap: 10px; padding: 12px; margin-bottom: 8px; border-radius: 10px; cursor: pointer; transition: 0.3s; border: 1px solid transparent; background: rgba(255,255,255,0.02); }
+        .chat-item:hover, .chat-item.active { background: rgba(56, 189, 248, 0.08); border-color: var(--glass-border); }
+        .chat-item.active { box-shadow: inset 2px 0 0 var(--neon-blue); }
+        .chat-icon { width: 35px; height: 35px; border-radius: 50%; background: #1e293b; display: flex; justify-content: center; align-items: center; font-size: 1.2rem; border: 1px solid var(--glass-border); }
+        .chat-name { font-weight: 500; }
 
-        .input-box { display: flex; gap: 12px; align-items: center; background: var(--glass); padding: 10px; border-radius: 12px; border: 1px solid var(--border); }
-        .input-box input[type="text"] { flex: 1; background: transparent; border: none; color: white; outline: none; font-size: 1rem; padding: 5px; }
-        .icon-btn { background: transparent; border: 1px solid var(--border); color: #fff; padding: 10px 15px; border-radius: 8px; cursor: pointer; transition: 0.3s; }
-        .icon-btn:hover { background: var(--neon); border-color: var(--neon); color: #000; box-shadow: 0 0 10px var(--neon); }
-        .send-btn { background: var(--neon); border: none; color: #000; font-weight: bold; padding: 10px 20px; border-radius: 8px; cursor: pointer; text-transform: uppercase; transition: 0.3s; }
-        .send-btn:hover { box-shadow: 0 0 15px var(--neon); }
-        .recording { background: #ef4444 !important; border-color: #ef4444 !important; box-shadow: 0 0 15px #ef4444 !important; color: white !important;}
+        .logout-btn { margin: 15px; padding: 12px; background: rgba(239, 68, 68, 0.1); color: #ef4444; text-align: center; text-decoration: none; border-radius: 8px; border: 1px solid rgba(239, 68, 68, 0.3); transition: 0.3s; }
+        .logout-btn:hover { background: #ef4444; color: #fff; box-shadow: 0 0 15px rgba(239, 68, 68, 0.5); }
+
+        /* Main Chat Area */
+        .chat-container { flex: 1; display: flex; flex-direction: column; position: relative; }
+        .chat-header { padding: 20px; background: var(--glass-panel); backdrop-filter: blur(12px); border-bottom: 1px solid var(--glass-border); display: flex; align-items: center; gap: 15px; }
+        .chat-header h2 { margin: 0; font-size: 1.2rem; }
+        
+        .messages-wrapper { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 15px; }
+        
+        /* Chat Bubbles */
+        .message-row { display: flex; width: 100%; }
+        .message-row.self { justify-content: flex-end; }
+        .message-row.other { justify-content: flex-start; }
+        
+        .bubble { max-width: 65%; padding: 12px 16px; border-radius: 16px; position: relative; line-height: 1.5; backdrop-filter: blur(10px); border: 1px solid var(--glass-border); }
+        .message-row.self .bubble { background: var(--bubble-self); border-bottom-right-radius: 4px; border-color: rgba(56, 189, 248, 0.3); box-shadow: 0 4px 15px rgba(0,0,0,0.2); }
+        .message-row.other .bubble { background: var(--bubble-other); border-bottom-left-radius: 4px; }
+        
+        .msg-sender { font-size: 0.75rem; color: var(--neon-blue); font-weight: bold; margin-bottom: 4px; display: block; }
+        .message-row.self .msg-sender { display: none; } /* Hide sender name for own messages */
+        
+        /* Media Attachments */
+        .bubble img, .bubble video { max-width: 100%; border-radius: 8px; margin-top: 8px; border: 1px solid var(--glass-border); cursor: pointer; }
+        .bubble audio { margin-top: 8px; width: 250px; outline: none; }
+
+        /* Input Area */
+        .input-area { padding: 20px; background: var(--glass-panel); backdrop-filter: blur(12px); border-top: 1px solid var(--glass-border); display: flex; gap: 12px; align-items: center; }
+        .input-box { flex: 1; display: flex; align-items: center; background: rgba(0,0,0,0.4); border: 1px solid var(--glass-border); border-radius: 24px; padding: 5px 15px; transition: 0.3s; }
+        .input-box:focus-within { border-color: var(--neon-blue); box-shadow: 0 0 10px rgba(56, 189, 248, 0.2); }
+        .input-box input[type="text"] { flex: 1; background: transparent; border: none; color: white; outline: none; font-size: 1rem; padding: 10px 5px; }
+        
+        .action-btn { background: transparent; border: none; color: var(--text-muted); font-size: 1.2rem; cursor: pointer; padding: 10px; border-radius: 50%; transition: 0.3s; display: flex; align-items: center; justify-content: center; }
+        .action-btn:hover { color: var(--neon-blue); background: rgba(255,255,255,0.05); }
+        .send-btn { background: var(--neon-blue); color: #000; box-shadow: 0 0 10px rgba(56, 189, 248, 0.4); }
+        .send-btn:hover { background: #0ea5e9; color: #fff; transform: scale(1.05); }
     </style>
 </head>
 <body>
     <div class="sidebar">
-        <h3>Channels & Groups</h3>
-        <button class="btn" onclick="joinRoom('General')"># General Chat</button>
-        <button class="btn" onclick="joinRoom('Dev_Team')"># Dev Team</button>
-        <button class="btn" onclick="joinRoom('Alerts')">📢 System Alerts</button>
-        <hr style="border: 0; border-top: 1px solid var(--border); width: 100%; margin: 20px 0;">
-        <p style="font-size: 0.9em; color: #94a3b8;">Logged in as:<br><strong style="color: white;">{{ username }}</strong></p>
-        <a href="/logout" class="logout">Disconnect</a>
+        <div class="sidebar-header">
+            <h3>Black Chat</h3>
+            <p>@{{ username }}</p>
+        </div>
+        
+        <div class="chat-list">
+            <div class="section-title">Channels</div>
+            <div class="chat-item active" onclick="joinRoom('Announcements', 'channel', this)">
+                <div class="chat-icon">📢</div>
+                <div class="chat-name">Announcements</div>
+            </div>
+
+            <div class="section-title">Groups</div>
+            <div class="chat-item" onclick="joinRoom('General', 'group', this)">
+                <div class="chat-icon">🌍</div>
+                <div class="chat-name">General Chat</div>
+            </div>
+            <div class="chat-item" onclick="joinRoom('Dev_Team', 'group', this)">
+                <div class="chat-icon">💻</div>
+                <div class="chat-name">Dev Team</div>
+            </div>
+
+            <div class="section-title">Direct Messages</div>
+            {% for u in all_users %}
+                {% if u != username %}
+                <div class="chat-item" onclick="joinPrivateChat('{{ u }}', this)">
+                    <div class="chat-icon">👤</div>
+                    <div class="chat-name">{{ u }}</div>
+                </div>
+                {% endif %}
+            {% endfor %}
+        </div>
+        
+        <a href="/logout" class="logout-btn">Logout</a>
     </div>
 
     <div class="chat-container">
-        <div class="header"><h2 id="room-name" style="margin:0;">Room: General</h2></div>
-        <div class="messages" id="messages"></div>
-        <div class="input-box">
+        <div class="chat-header">
+            <div class="chat-icon" id="header-icon">📢</div>
+            <h2 id="room-name">Announcements</h2>
+        </div>
+        
+        <div class="messages-wrapper" id="messages">
+            </div>
+        
+        <div class="input-area">
             <input type="file" id="fileInput" style="display:none" onchange="uploadFile()">
-            <button class="icon-btn" onclick="document.getElementById('fileInput').click()">📎</button>
-            <button class="icon-btn" id="recordBtn" onclick="toggleRecord()">🎤</button>
-            <input type="text" id="msgInput" placeholder="Enter message here...">
-            <button class="send-btn" onclick="sendText()">Send</button>
+            <button class="action-btn" onclick="document.getElementById('fileInput').click()" title="Attach File">📎</button>
+            
+            <div class="input-box">
+                <input type="text" id="msgInput" placeholder="Write a message..." onkeypress="handleEnter(event)">
+            </div>
+            
+            <button class="action-btn send-btn" onclick="sendText()">➤</button>
         </div>
     </div>
 
     <script>
         const socket = io();
-        const username = "{{ username }}";
-        let currentRoom = 'General';
+        const currentUser = "{{ username }}";
+        let currentRoom = 'Announcements';
         
-        socket.on('connect', () => { joinRoom('General'); });
+        socket.on('connect', () => { 
+            socket.emit('join', {room: currentRoom}); 
+        });
 
+        // دریافت پیام جدید
         socket.on('message', (data) => {
             const msgBox = document.getElementById('messages');
-            let content = `<span class="msg-user">${data.user}:</span> `;
+            const isSelf = data.user === currentUser;
+            const rowClass = isSelf ? 'self' : 'other';
             
-            if (data.msgType === 'text') content += data.text;
-            else if (data.msgType.startsWith('image')) content += `<br><div class="media-msg"><img src="${data.url}"></div>`;
-            else if (data.msgType.startsWith('video')) content += `<br><div class="media-msg"><video controls src="${data.url}"></video></div>`;
-            else if (data.msgType.startsWith('audio')) content += `<br><div class="media-msg"><audio controls src="${data.url}"></audio></div>`;
+            let mediaContent = '';
+            if (data.msgType.startsWith('image')) mediaContent = `<img src="${data.url}" onclick="window.open('${data.url}', '_blank')">`;
+            else if (data.msgType.startsWith('video')) mediaContent = `<video controls src="${data.url}"></video>`;
+            else if (data.msgType.startsWith('audio')) mediaContent = `<audio controls src="${data.url}"></audio>`;
 
-            msgBox.innerHTML += `<div class="msg-line">${content}</div>`;
+            const html = `
+                <div class="message-row ${rowClass}">
+                    <div class="bubble">
+                        <span class="msg-sender">${data.user}</span>
+                        ${data.msgType === 'text' ? data.text : mediaContent}
+                    </div>
+                </div>
+            `;
+            
+            msgBox.innerHTML += html;
             msgBox.scrollTop = msgBox.scrollHeight;
         });
 
-        function joinRoom(room) {
+        // تغییر استایل دکمه‌های سایدبار
+        function setActive(element) {
+            document.querySelectorAll('.chat-item').forEach(el => el.classList.remove('active'));
+            element.classList.add('active');
+        }
+
+        // ورود به کانال یا گروه
+        function joinRoom(room, type, element) {
             currentRoom = room;
-            document.getElementById('room-name').innerText = 'Room: ' + room;
+            document.getElementById('room-name').innerText = room;
+            document.getElementById('header-icon').innerText = type === 'channel' ? '📢' : '🌍';
             document.getElementById('messages').innerHTML = '';
+            setActive(element);
             socket.emit('join', {room: room});
         }
 
+        // ورود به چت خصوصی (تولید آیدی یکتا برای اتاق دونفره)
+        function joinPrivateChat(targetUser, element) {
+            // ترکیب دو نام کاربری بر اساس حروف الفبا برای ایجاد روم ثابت بین دو نفر
+            const users = [currentUser, targetUser].sort();
+            currentRoom = `dm_${users[0]}_${users[1]}`;
+            
+            document.getElementById('room-name').innerText = targetUser;
+            document.getElementById('header-icon').innerText = '👤';
+            document.getElementById('messages').innerHTML = '';
+            setActive(element);
+            socket.emit('join', {room: currentRoom});
+        }
+
+        // ارسال متن
         function sendText() {
             const input = document.getElementById('msgInput');
             if(input.value.trim() !== '') {
-                socket.emit('send_message', {user: username, room: currentRoom, msgType: 'text', text: input.value});
+                socket.emit('send_message', {user: currentUser, room: currentRoom, msgType: 'text', text: input.value});
                 input.value = '';
             }
         }
 
+        function handleEnter(e) {
+            if (e.key === 'Enter') sendText();
+        }
+
+        // آپلود و ارسال عکس/فیلم
         async function uploadFile() {
             const file = document.getElementById('fileInput').files[0];
             if (!file) return;
-            const formData = new FormData(); formData.append('file', file);
+            const formData = new FormData(); 
+            formData.append('file', file);
+            
             const res = await fetch('/upload', { method: 'POST', body: formData });
             const data = await res.json();
-            if (data.url) socket.emit('send_message', {user: username, room: currentRoom, msgType: data.type, url: data.url});
-        }
-
-        let mediaRecorder; let audioChunks = []; let isRecording = false;
-        async function toggleRecord() {
-            const btn = document.getElementById('recordBtn');
-            if (!isRecording) {
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                mediaRecorder = new MediaRecorder(stream);
-                mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
-                mediaRecorder.onstop = async () => {
-                    const file = new File([new Blob(audioChunks, { type: 'audio/webm' })], "voice.webm", { type: 'audio/webm' });
-                    const formData = new FormData(); formData.append('file', file);
-                    const res = await fetch('/upload', { method: 'POST', body: formData });
-                    const data = await res.json();
-                    socket.emit('send_message', {user: username, room: currentRoom, msgType: 'audio/webm', url: data.url});
-                    audioChunks = [];
-                };
-                mediaRecorder.start();
-                btn.classList.add("recording");
-                isRecording = true;
-            } else {
-                mediaRecorder.stop();
-                btn.classList.remove("recording");
-                isRecording = false;
+            
+            if (data.url) {
+                socket.emit('send_message', {user: currentUser, room: currentRoom, msgType: data.type, url: data.url});
             }
         }
     </script>
