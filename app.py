@@ -9,10 +9,8 @@ app.config['SECRET_KEY'] = 'black-chat-secure-key'
 app.config['UPLOAD_FOLDER'] = 'static/uploads'
 socketio = SocketIO(app, cors_allowed_origins="*")
 
-# ساخت پوشه آپلود اگر وجود نداشت
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
-# مقداردهی اولیه دیتابیس برای ذخیره چت‌ها
 def init_db():
     conn = sqlite3.connect('chat.db')
     c = conn.cursor()
@@ -72,12 +70,11 @@ def upload_file():
     filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
     file.save(filepath)
     
-    # تشخیص نوع فایل برای فرانت‌اند
     content_type = file.content_type or ''
     if content_type.startswith('image/'): msg_type = 'image'
     elif content_type.startswith('video/'): msg_type = 'video'
     elif content_type.startswith('audio/'): msg_type = 'audio'
-    else: msg_type = 'file' # برای فایل‌های متنی، پی‌دی‌اف، زیپ و ...
+    else: msg_type = 'file'
     
     return jsonify({'url': '/' + filepath, 'type': msg_type, 'name': filename})
 
@@ -86,14 +83,12 @@ def on_join(data):
     room = data['room']
     join_room(room)
     
-    # واکشی تاریخچه چت از دیتابیس
     conn = sqlite3.connect('chat.db')
     c = conn.cursor()
     c.execute("SELECT user, msg_type, content, file_name FROM messages WHERE room=? ORDER BY timestamp ASC", (room,))
     msgs = c.fetchall()
     conn.close()
     
-    # ارسال تاریخچه فقط به کاربری که تازه وارد شده
     history = []
     for m in msgs:
         history.append({
@@ -112,7 +107,6 @@ def handle_message(data):
     content = data.get('text', data.get('url', ''))
     file_name = data.get('fileName', '')
 
-    # ذخیره پیام جدید در دیتابیس
     conn = sqlite3.connect('chat.db')
     c = conn.cursor()
     c.execute("INSERT INTO messages (room, user, msg_type, content, file_name) VALUES (?, ?, ?, ?, ?)",
@@ -121,6 +115,8 @@ def handle_message(data):
     conn.close()
 
     emit('message', data, room=room)
+    # ارسال نوتیفیکیشن برای کلاینت‌ها (تا اگر در روم نبودند باخبر شوند)
+    emit('notification', data, broadcast=True)
 
 if __name__ == '__main__':
     socketio.run(app, host='0.0.0.0', port=5000, debug=True)
