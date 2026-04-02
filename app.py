@@ -8,6 +8,16 @@ app.config['SECRET_KEY'] = 'black-chat-secure-key'
 app.config['UPLOAD_FOLDER'] = 'static/uploads'
 socketio = SocketIO(app, cors_allowed_origins="*")
 
+# تابع خواندن تمام کاربران برای چت خصوصی
+def get_all_users():
+    users = []
+    if os.path.exists('users.txt'):
+        with open('users.txt', 'r') as f:
+            for line in f:
+                if ':' in line:
+                    users.append(line.strip().split(':')[0])
+    return users
+
 def check_user(username, password):
     if not os.path.exists('users.txt'): return False
     with open('users.txt', 'r') as f:
@@ -37,7 +47,8 @@ def logout():
 @app.route('/')
 def index():
     if 'user' not in session: return redirect(url_for('login'))
-    return render_template('index.html', username=session['user'])
+    # ارسال نام کاربری فعلی و لیست کل کاربران به قالب HTML
+    return render_template('index.html', username=session['user'], all_users=get_all_users())
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
@@ -54,7 +65,8 @@ def on_join(data):
 
 @socketio.on('send_message')
 def handle_message(data):
+    # پیام به اتاقی که کاربر در آن است ارسال می‌شود (چه گروه، چه خصوصی)
     emit('message', data, room=data['room'])
 
 if __name__ == '__main__':
-    socketio.run(app, host='127.0.0.1', port=5000, debug=True)
+    socketio.run(app, host='0.0.0.0', port=5000, debug=True)
