@@ -6,7 +6,7 @@ PY_SCRIPT="app.py"
 SERVICE_FILE="/etc/systemd/system/$APP_NAME.service"
 WORKING_DIR="/opt/black-chat"
 CONF_FILE="chatserver.conf"
-REPO_URL="https://raw.githubusercontent.com/saeederamy/Black-Chat/main" # لینک گیت‌هابت رو بذار
+REPO_URL="https://raw.githubusercontent.com/saeederamy/Black-Chat/main"
 
 # ایجاد و انتقال به پوشه
 mkdir -p "$WORKING_DIR"
@@ -25,7 +25,6 @@ ask() {
     echo "$res" | tr -d '\r\n '
 }
 
-# ساخت میانبر در صورت نیاز
 if [ ! -f "/usr/local/bin/black-chat" ]; then
     sudo ln -sf "$WORKING_DIR/manage_chat.sh" /usr/local/bin/black-chat
     sudo chmod +x /usr/local/bin/black-chat
@@ -64,12 +63,16 @@ while true; do
 
     case "$opt" in
         1) 
+            # پرسیدن پورت از کاربر
+            echo -e "\n${CYAN}--- Configuration ---${NC}"
+            APP_PORT=$(ask "Enter port for Black Chat (default 5000): ")
+            [ -z "$APP_PORT" ] && APP_PORT=5000
+            
             sudo apt update && sudo apt install python3 python3-pip python3-venv -y
             python3 -m venv venv
             source venv/bin/activate
             pip install Flask Flask-SocketIO eventlet gunicorn werkzeug
             
-            # دانلود فایل‌های پایتون و قالب‌ها از گیت‌هاب
             echo -e "${CYAN}Downloading app files from GitHub...${NC}"
             curl -sL "$REPO_URL/app.py" -o "$WORKING_DIR/app.py"
             mkdir -p "$WORKING_DIR/templates" "$WORKING_DIR/static/uploads"
@@ -77,8 +80,9 @@ while true; do
             curl -sL "$REPO_URL/templates/index.html" -o "$WORKING_DIR/templates/index.html"
             
             touch "$WORKING_DIR/users.txt"
-            echo "PORT=5000" > "$WORKING_DIR/$CONF_FILE"
+            echo "PORT=$APP_PORT" > "$WORKING_DIR/$CONF_FILE"
 
+            # تنظیم Gunicorn برای گوش دادن به تمام آی‌پی‌ها (0.0.0.0) با پورت انتخابی
             sudo tee $SERVICE_FILE > /dev/null <<EOF
 [Unit]
 Description=Black Chat Web Messenger
@@ -87,7 +91,7 @@ After=network.target
 [Service]
 User=root
 WorkingDirectory=$WORKING_DIR
-ExecStart=$WORKING_DIR/venv/bin/gunicorn --worker-class eventlet -w 1 -b 127.0.0.1:5000 app:app
+ExecStart=$WORKING_DIR/venv/bin/gunicorn --worker-class eventlet -w 1 -b 0.0.0.0:$APP_PORT app:app
 Restart=always
 
 [Install]
@@ -96,7 +100,7 @@ EOF
             sudo systemctl daemon-reload
             sudo systemctl enable $APP_NAME
             sudo systemctl restart $APP_NAME
-            echo -e "${GREEN}[✔] Setup Complete and Service Started!${NC}"
+            echo -e "${GREEN}[✔] Setup Complete and Service Started on Port $APP_PORT!${NC}"
             sleep 2
             ;;
         2)
@@ -112,20 +116,11 @@ EOF
             sleep 2
             ;;
         3) 
-            sudo systemctl start $APP_NAME
-            echo -e "${GREEN}[✔] Service Started.${NC}"
-            sleep 1
-            ;;
+            sudo systemctl start $APP_NAME; echo -e "${GREEN}[✔] Service Started.${NC}"; sleep 1 ;;
         4) 
-            sudo systemctl stop $APP_NAME
-            echo -e "${RED}[✔] Service Stopped.${NC}"
-            sleep 1
-            ;;
+            sudo systemctl stop $APP_NAME; echo -e "${RED}[✔] Service Stopped.${NC}"; sleep 1 ;;
         5) 
-            sudo systemctl restart $APP_NAME
-            echo -e "${GREEN}[✔] Service Restarted.${NC}"
-            sleep 1
-            ;;
+            sudo systemctl restart $APP_NAME; echo -e "${GREEN}[✔] Service Restarted.${NC}"; sleep 1 ;;
         6) 
             sudo systemctl stop $APP_NAME
             echo -e "${YELLOW}Running in debug mode. Press Ctrl+C to stop and return to menu.${NC}"
@@ -226,13 +221,11 @@ EOF
         10)
             confirm=$(ask "ARE YOU SURE? This will delete EVERYTHING (y/n): ")
             if [ "$confirm" == "y" ]; then
-                echo "Stopping and removing service..."
                 sudo systemctl stop $APP_NAME 2>/dev/null
                 sudo systemctl disable $APP_NAME 2>/dev/null
                 sudo rm -f $SERVICE_FILE
                 sudo systemctl daemon-reload
                 
-                echo "Removing Nginx configs..."
                 if [ -f "$CONF_FILE" ]; then
                     D_NAME=$(grep "DOMAIN=" $CONF_FILE | cut -d'=' -f2 | tr -d '\r')
                     if [ -n "$D_NAME" ]; then
@@ -242,11 +235,9 @@ EOF
                     fi
                 fi
 
-                echo "Deleting files and commands..."
                 cd /tmp || exit
                 sudo rm -rf "$WORKING_DIR"
                 sudo rm -f /usr/local/bin/black-chat
-                
                 echo -e "${RED}Uninstall complete. The 'black-chat' command has been removed. Bye!${NC}"
                 exit 0
             fi 
