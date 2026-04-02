@@ -6,7 +6,7 @@ PY_SCRIPT="app.py"
 SERVICE_FILE="/etc/systemd/system/$APP_NAME.service"
 WORKING_DIR="/opt/black-chat"
 CONF_FILE="chatserver.conf"
-REPO_URL="https://raw.githubusercontent.com/YOUR_GITHUB/REPO/main" # لینک گیت‌هابت رو بذار
+REPO_URL="https://raw.githubusercontent.com/saeederamy/Black-Chat/main" # لینک گیت‌هابت رو بذار
 
 # ایجاد و انتقال به پوشه
 mkdir -p "$WORKING_DIR"
