@@ -1,4 +1,5 @@
 import os
+import sqlite3
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from werkzeug.utils import secure_filename
@@ -8,7 +9,21 @@ app.config['SECRET_KEY'] = 'black-chat-secure-key'
 app.config['UPLOAD_FOLDER'] = 'static/uploads'
 socketio = SocketIO(app, cors_allowed_origins="*")
 
-# تابع خواندن تمام کاربران برای چت خصوصی
+# ساخت پوشه آپلود اگر وجود نداشت
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+
+# مقداردهی اولیه دیتابیس برای ذخیره چت‌ها
+def init_db():
+    conn = sqlite3.connect('chat.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS messages
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  room TEXT, user TEXT, msg_type TEXT, content TEXT, file_name TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
+    conn.commit()
+    conn.close()
+
+init_db()
+
 def get_all_users():
     users = []
     if os.path.exists('users.txt'):
@@ -47,7 +62,6 @@ def logout():
 @app.route('/')
 def index():
     if 'user' not in session: return redirect(url_for('login'))
-    # ارسال نام کاربری فعلی و لیست کل کاربران به قالب HTML
     return render_template('index.html', username=session['user'], all_users=get_all_users())
 
 @app.route('/upload', methods=['POST'])
@@ -57,16 +71,56 @@ def upload_file():
     filename = secure_filename(file.filename)
     filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
     file.save(filepath)
-    return jsonify({'url': '/' + filepath, 'type': file.content_type})
+    
+    # تشخیص نوع فایل برای فرانت‌اند
+    content_type = file.content_type or ''
+    if content_type.startswith('image/'): msg_type = 'image'
+    elif content_type.startswith('video/'): msg_type = 'video'
+    elif content_type.startswith('audio/'): msg_type = 'audio'
+    else: msg_type = 'file' # برای فایل‌های متنی، پی‌دی‌اف، زیپ و ...
+    
+    return jsonify({'url': '/' + filepath, 'type': msg_type, 'name': filename})
 
 @socketio.on('join')
 def on_join(data):
-    join_room(data['room'])
+    room = data['room']
+    join_room(room)
+    
+    # واکشی تاریخچه چت از دیتابیس
+    conn = sqlite3.connect('chat.db')
+    c = conn.cursor()
+    c.execute("SELECT user, msg_type, content, file_name FROM messages WHERE room=? ORDER BY timestamp ASC", (room,))
+    msgs = c.fetchall()
+    conn.close()
+    
+    # ارسال تاریخچه فقط به کاربری که تازه وارد شده
+    history = []
+    for m in msgs:
+        history.append({
+            'user': m[0], 'msgType': m[1], 
+            'text': m[2] if m[1] == 'text' else '',
+            'url': m[2] if m[1] != 'text' else '',
+            'fileName': m[3]
+        })
+    emit('history', history)
 
 @socketio.on('send_message')
 def handle_message(data):
-    # پیام به اتاقی که کاربر در آن است ارسال می‌شود (چه گروه، چه خصوصی)
-    emit('message', data, room=data['room'])
+    room = data['room']
+    user = data['user']
+    msg_type = data['msgType']
+    content = data.get('text', data.get('url', ''))
+    file_name = data.get('fileName', '')
+
+    # ذخیره پیام جدید در دیتابیس
+    conn = sqlite3.connect('chat.db')
+    c = conn.cursor()
+    c.execute("INSERT INTO messages (room, user, msg_type, content, file_name) VALUES (?, ?, ?, ?, ?)",
+              (room, user, msg_type, content, file_name))
+    conn.commit()
+    conn.close()
+
+    emit('message', data, room=room)
 
 if __name__ == '__main__':
     socketio.run(app, host='0.0.0.0', port=5000, debug=True)
