@@ -23,4 +23,4 @@ A lightweight, secure, and real-time web messenger built with Python (Flask) and
 Run the following one-liner command on your Linux server (Ubuntu/Debian recommended) as `root`. This will automatically download and install the required dependencies, set up the service, and create the management command.
 
 ```bash
-bash <(curl -sL [https://raw.githubusercontent.com/saeederamy/Black-Chat/main/install.sh](https://raw.githubusercontent.com/saeederamy/Black-Chat/main/install.sh))
+bash <(curl -sL https://raw.githubusercontent.com/saeederamy/Black-Chat/main/install.sh)
