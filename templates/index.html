@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Black Chat | Workspace</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <style>
+        :root { --glass: rgba(255, 255, 255, 0.05); --border: rgba(255, 255, 255, 0.1); --neon: #38bdf8; --bg: #050505; }
+        body { margin: 0; display: flex; height: 100vh; background: var(--bg); color: #e2e8f0; font-family: 'Segoe UI', Tahoma, sans-serif; background-image: radial-gradient(circle at bottom left, #0f172a 0%, var(--bg) 60%); }
+        
+        .sidebar { width: 260px; background: var(--glass); backdrop-filter: blur(10px); border-right: 1px solid var(--border); padding: 20px; display: flex; flex-direction: column; }
+        .sidebar h3 { color: var(--neon); text-transform: uppercase; font-size: 0.9rem; letter-spacing: 1px; margin-top: 0; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+        .btn { display: block; width: 100%; padding: 12px; margin-bottom: 10px; background: transparent; color: #e2e8f0; border: 1px solid transparent; border-radius: 8px; cursor: pointer; text-align: left; transition: 0.3s; font-weight: 500; }
+        .btn:hover { background: rgba(56, 189, 248, 0.1); border: 1px solid var(--neon); color: var(--neon); box-shadow: inset 0 0 10px rgba(56, 189, 248, 0.2); }
+        .logout { margin-top: auto; color: #f87171; border: 1px solid #f87171; text-align: center; text-decoration: none; padding: 10px; border-radius: 8px; transition: 0.3s; }
+        .logout:hover { background: #f87171; color: #000; box-shadow: 0 0 10px #f87171; }
+
+        .chat-container { flex: 1; display: flex; flex-direction: column; padding: 20px; }
+        .header { padding-bottom: 15px; border-bottom: 1px solid var(--border); margin-bottom: 15px; color: var(--neon); }
+        
+        .messages { flex: 1; background: var(--glass); backdrop-filter: blur(10px); border: 1px solid var(--border); border-radius: 12px; padding: 20px; overflow-y: auto; margin-bottom: 20px; }
+        .msg-line { margin-bottom: 15px; line-height: 1.5; }
+        .msg-user { color: var(--neon); font-weight: bold; margin-right: 8px; }
+        .media-msg img, .media-msg video { max-width: 350px; border-radius: 8px; margin-top: 8px; border: 1px solid var(--border); }
+        .media-msg audio { margin-top: 8px; }
+
+        .input-box { display: flex; gap: 12px; align-items: center; background: var(--glass); padding: 10px; border-radius: 12px; border: 1px solid var(--border); }
+        .input-box input[type="text"] { flex: 1; background: transparent; border: none; color: white; outline: none; font-size: 1rem; padding: 5px; }
+        .icon-btn { background: transparent; border: 1px solid var(--border); color: #fff; padding: 10px 15px; border-radius: 8px; cursor: pointer; transition: 0.3s; }
+        .icon-btn:hover { background: var(--neon); border-color: var(--neon); color: #000; box-shadow: 0 0 10px var(--neon); }
+        .send-btn { background: var(--neon); border: none; color: #000; font-weight: bold; padding: 10px 20px; border-radius: 8px; cursor: pointer; text-transform: uppercase; transition: 0.3s; }
+        .send-btn:hover { box-shadow: 0 0 15px var(--neon); }
+        .recording { background: #ef4444 !important; border-color: #ef4444 !important; box-shadow: 0 0 15px #ef4444 !important; color: white !important;}
+    </style>
+</head>
+<body>
+    <div class="sidebar">
+        <h3>Channels & Groups</h3>
+        <button class="btn" onclick="joinRoom('General')"># General Chat</button>
+        <button class="btn" onclick="joinRoom('Dev_Team')"># Dev Team</button>
+        <button class="btn" onclick="joinRoom('Alerts')">📢 System Alerts</button>
+        <hr style="border: 0; border-top: 1px solid var(--border); width: 100%; margin: 20px 0;">
+        <p style="font-size: 0.9em; color: #94a3b8;">Logged in as:<br><strong style="color: white;">{{ username }}</strong></p>
+        <a href="/logout" class="logout">Disconnect</a>
+    </div>
+
+    <div class="chat-container">
+        <div class="header"><h2 id="room-name" style="margin:0;">Room: General</h2></div>
+        <div class="messages" id="messages"></div>
+        <div class="input-box">
+            <input type="file" id="fileInput" style="display:none" onchange="uploadFile()">
+            <button class="icon-btn" onclick="document.getElementById('fileInput').click()">📎</button>
+            <button class="icon-btn" id="recordBtn" onclick="toggleRecord()">🎤</button>
+            <input type="text" id="msgInput" placeholder="Enter message here...">
+            <button class="send-btn" onclick="sendText()">Send</button>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        const username = "{{ username }}";
+        let currentRoom = 'General';
+        
+        socket.on('connect', () => { joinRoom('General'); });
+
+        socket.on('message', (data) => {
+            const msgBox = document.getElementById('messages');
+            let content = `<span class="msg-user">${data.user}:</span> `;
+            
+            if (data.msgType === 'text') content += data.text;
+            else if (data.msgType.startsWith('image')) content += `<br><div class="media-msg"><img src="${data.url}"></div>`;
+            else if (data.msgType.startsWith('video')) content += `<br><div class="media-msg"><video controls src="${data.url}"></video></div>`;
+            else if (data.msgType.startsWith('audio')) content += `<br><div class="media-msg"><audio controls src="${data.url}"></audio></div>`;
+
+            msgBox.innerHTML += `<div class="msg-line">${content}</div>`;
+            msgBox.scrollTop = msgBox.scrollHeight;
+        });
+
+        function joinRoom(room) {
+            currentRoom = room;
+            document.getElementById('room-name').innerText = 'Room: ' + room;
+            document.getElementById('messages').innerHTML = '';
+            socket.emit('join', {room: room});
+        }
+
+        function sendText() {
+            const input = document.getElementById('msgInput');
+            if(input.value.trim() !== '') {
+                socket.emit('send_message', {user: username, room: currentRoom, msgType: 'text', text: input.value});
+                input.value = '';
+            }
+        }
+
+        async function uploadFile() {
+            const file = document.getElementById('fileInput').files[0];
+            if (!file) return;
+            const formData = new FormData(); formData.append('file', file);
+            const res = await fetch('/upload', { method: 'POST', body: formData });
+            const data = await res.json();
+            if (data.url) socket.emit('send_message', {user: username, room: currentRoom, msgType: data.type, url: data.url});
+        }
+
+        let mediaRecorder; let audioChunks = []; let isRecording = false;
+        async function toggleRecord() {
+            const btn = document.getElementById('recordBtn');
+            if (!isRecording) {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaRecorder = new MediaRecorder(stream);
+                mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+                mediaRecorder.onstop = async () => {
+                    const file = new File([new Blob(audioChunks, { type: 'audio/webm' })], "voice.webm", { type: 'audio/webm' });
+                    const formData = new FormData(); formData.append('file', file);
+                    const res = await fetch('/upload', { method: 'POST', body: formData });
+                    const data = await res.json();
+                    socket.emit('send_message', {user: username, room: currentRoom, msgType: 'audio/webm', url: data.url});
+                    audioChunks = [];
+                };
+                mediaRecorder.start();
+                btn.classList.add("recording");
+                isRecording = true;
+            } else {
+                mediaRecorder.stop();
+                btn.classList.remove("recording");
+                isRecording = false;
+            }
+        }
+    </script>
+</body>
+</html>
