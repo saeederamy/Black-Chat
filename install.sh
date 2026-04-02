@@ -6,7 +6,7 @@ mkdir -p "$WORKING_DIR"
 
 echo "[+] Downloading Management Script..."
 # لینک زیر را با آدرس فایل manage_chat.sh در گیت‌هاب خودت عوض کن
-curl -sL "https://raw.githubusercontent.com/YOUR_GITHUB/REPO/main/manage_chat.sh" -o "$WORKING_DIR/manage_chat.sh"
+curl -sL "https://raw.githubusercontent.com/saeederamy/Black-Chat/main/manage_chat.sh" -o "$WORKING_DIR/manage_chat.sh"
 chmod +x "$WORKING_DIR/manage_chat.sh"
 
 sudo ln -sf "$WORKING_DIR/manage_chat.sh" /usr/local/bin/black-chat
