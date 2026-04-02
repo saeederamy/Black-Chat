@@ -44,26 +44,26 @@ show_menu() {
     echo -e "-----------------------------------------"
     
     echo -e " ${YELLOW}1)${NC} 🚀 Initial Setup (Install & Config)"
-    echo -e " ${YELLOW}2)${NC} 👤 Add New User (Terminal Only)"
-    echo -e " ${YELLOW}3)${NC} ▶️  Start Service"
-    echo -e " ${YELLOW}4)${NC} 🛑 Stop Service"
-    echo -e " ${YELLOW}5)${NC} ♻️  Restart Service"
-    echo -e " ${YELLOW}6)${NC} 🛠️  Run Manually (Debug Mode)"
-    echo -e " ${YELLOW}7)${NC} 🔐 Setup Nginx & Auto SSL (Certbot)"
-    echo -e " ${YELLOW}8)${NC} 🔐 Setup Nginx & Manual SSL"
-    echo -e " ${YELLOW}9)${NC} 🔑 Show Users & Info"
-    echo -e "${RED}10)${NC} 🗑️  Full Uninstall (Nuclear Option)"
+    echo -e " ${YELLOW}2)${NC} 🔄 Update App (Fetch Latest from GitHub)"
+    echo -e " ${YELLOW}3)${NC} 👤 Add New User (Terminal Only)"
+    echo -e " ${YELLOW}4)${NC} ▶️  Start Service"
+    echo -e " ${YELLOW}5)${NC} 🛑 Stop Service"
+    echo -e " ${YELLOW}6)${NC} ♻️  Restart Service"
+    echo -e " ${YELLOW}7)${NC} 🛠️  Run Manually (Debug Mode)"
+    echo -e " ${YELLOW}8)${NC} 🔐 Setup Nginx & Auto SSL (Certbot)"
+    echo -e " ${YELLOW}9)${NC} 🔐 Setup Nginx & Manual SSL"
+    echo -e "${YELLOW}10)${NC} 🔑 Show Users & Info"
+    echo -e "${RED}11)${NC} 🗑️  Full Uninstall (Nuclear Option)"
     echo -e "  ${RED}0)${NC} ❌ Exit"
     echo -e "-----------------------------------------"
 }
 
 while true; do
     show_menu
-    opt=$(ask "Choose an option (0-10): ")
+    opt=$(ask "Choose an option (0-11): ")
 
     case "$opt" in
         1) 
-            # پرسیدن پورت از کاربر
             echo -e "\n${CYAN}--- Configuration ---${NC}"
             APP_PORT=$(ask "Enter port for Black Chat (default 5000): ")
             [ -z "$APP_PORT" ] && APP_PORT=5000
@@ -82,7 +82,6 @@ while true; do
             touch "$WORKING_DIR/users.txt"
             echo "PORT=$APP_PORT" > "$WORKING_DIR/$CONF_FILE"
 
-            # تنظیم Gunicorn برای گوش دادن به تمام آی‌پی‌ها (0.0.0.0) با پورت انتخابی
             sudo tee $SERVICE_FILE > /dev/null <<EOF
 [Unit]
 Description=Black Chat Web Messenger
@@ -104,6 +103,26 @@ EOF
             sleep 2
             ;;
         2)
+            echo -e "\n${CYAN}🔄 Fetching latest updates from GitHub...${NC}"
+            
+            # دانلود آخرین تغییرات
+            curl -sL "$REPO_URL/app.py" -o "$WORKING_DIR/app.py"
+            mkdir -p "$WORKING_DIR/templates"
+            curl -sL "$REPO_URL/templates/login.html" -o "$WORKING_DIR/templates/login.html"
+            curl -sL "$REPO_URL/templates/index.html" -o "$WORKING_DIR/templates/index.html"
+            curl -sL "$REPO_URL/manage_chat.sh" -o "$WORKING_DIR/manage_chat.sh"
+            chmod +x "$WORKING_DIR/manage_chat.sh"
+            
+            # ری‌استارت سرویس برای اعمال تغییرات
+            if systemctl is-active --quiet $APP_NAME; then
+                sudo systemctl restart $APP_NAME
+            fi
+            
+            echo -e "${GREEN}[✔] Update Complete! Users and uploads are safe.${NC}"
+            sleep 2
+            exec black-chat # اجرای مجدد منو برای لود شدن تغییرات احتمالی منو
+            ;;
+        3)
             echo -e "\n${CYAN}--- Add New User ---${NC}"
             u_name=$(ask "Enter Username: ")
             u_pass=$(ask "Enter Password: ")
@@ -115,19 +134,19 @@ EOF
             fi
             sleep 2
             ;;
-        3) 
-            sudo systemctl start $APP_NAME; echo -e "${GREEN}[✔] Service Started.${NC}"; sleep 1 ;;
         4) 
-            sudo systemctl stop $APP_NAME; echo -e "${RED}[✔] Service Stopped.${NC}"; sleep 1 ;;
+            sudo systemctl start $APP_NAME; echo -e "${GREEN}[✔] Service Started.${NC}"; sleep 1 ;;
         5) 
-            sudo systemctl restart $APP_NAME; echo -e "${GREEN}[✔] Service Restarted.${NC}"; sleep 1 ;;
+            sudo systemctl stop $APP_NAME; echo -e "${RED}[✔] Service Stopped.${NC}"; sleep 1 ;;
         6) 
+            sudo systemctl restart $APP_NAME; echo -e "${GREEN}[✔] Service Restarted.${NC}"; sleep 1 ;;
+        7) 
             sudo systemctl stop $APP_NAME
             echo -e "${YELLOW}Running in debug mode. Press Ctrl+C to stop and return to menu.${NC}"
             source venv/bin/activate
             python3 "$PY_SCRIPT"
             ;;
-        7)
+        8)
             DOMAIN=$(ask "Enter domain: ")
             [ -z "$DOMAIN" ] && continue
             sudo apt update && sudo apt install nginx certbot python3-certbot-nginx -y
@@ -158,7 +177,7 @@ EOF
             fi
             sleep 2
             ;;
-        8)
+        9)
             DOMAIN=$(ask "Enter domain: ")
             [ -z "$DOMAIN" ] && continue
             
@@ -211,14 +230,14 @@ EOF
             fi
             sleep 2
             ;;
-        9)
+        10)
             echo -e "\n${YELLOW}--- Registered Users ---${NC}"
             cat "$WORKING_DIR/users.txt" 2>/dev/null || echo "No users found."
             echo -e "\n${YELLOW}--- Configuration ---${NC}"
             cat "$WORKING_DIR/$CONF_FILE" 2>/dev/null || echo "No config found."
             ask "Press Enter to return to menu..."
             ;;
-        10)
+        11)
             confirm=$(ask "ARE YOU SURE? This will delete EVERYTHING (y/n): ")
             if [ "$confirm" == "y" ]; then
                 sudo systemctl stop $APP_NAME 2>/dev/null
