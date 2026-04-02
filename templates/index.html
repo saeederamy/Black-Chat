@@ -5,128 +5,121 @@
     <title>Black Chat | Workspace</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
     <style>
-        /* Telegram + Glassmorphism Theme */
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;800&display=swap');
+        
         :root { 
-            --bg-main: #020617; 
-            --glass-panel: rgba(30, 41, 59, 0.4); 
-            --glass-border: rgba(255, 255, 255, 0.08); 
-            --neon-blue: #38bdf8; 
-            --text-light: #f8fafc; 
+            --bg-dark: #0a0a0a; 
+            --glass-bg: rgba(255, 255, 255, 0.03); 
+            --glass-border: rgba(255, 255, 255, 0.1); 
+            --accent: #ffffff; 
+            --accent-glow: rgba(255, 255, 255, 0.3);
+            --text-main: #f8fafc; 
             --text-muted: #94a3b8;
-            --bubble-self: rgba(56, 189, 248, 0.15);
-            --bubble-other: rgba(255, 255, 255, 0.05);
+            --bubble-self: rgba(255, 255, 255, 0.08);
+            --bubble-other: rgba(255, 255, 255, 0.02);
+            --input-bg: rgba(0,0,0,0.4);
         }
         
-        body { margin: 0; display: flex; height: 100vh; background: var(--bg-main); color: var(--text-light); font-family: 'Segoe UI', Tahoma, sans-serif; background-image: radial-gradient(circle at top right, #0f172a 0%, var(--bg-main) 70%); }
+        body { margin: 0; display: flex; height: 100vh; background: var(--bg-dark); color: var(--text-main); font-family: 'Inter', Tahoma, sans-serif; }
         
-        /* Sidebar (Telegram Left Panel) */
-        .sidebar { width: 300px; background: var(--glass-panel); backdrop-filter: blur(12px); border-right: 1px solid var(--glass-border); display: flex; flex-direction: column; }
+        .sidebar { width: 300px; background: var(--glass-bg); backdrop-filter: blur(12px); border-right: 1px solid var(--glass-border); display: flex; flex-direction: column; }
         .sidebar-header { padding: 20px; border-bottom: 1px solid var(--glass-border); }
-        .sidebar-header h3 { margin: 0; color: var(--neon-blue); letter-spacing: 1px; text-transform: uppercase; }
+        .sidebar-header h3 { margin: 0; color: var(--accent); letter-spacing: 1px; text-transform: uppercase; font-weight: 800;}
         .sidebar-header p { margin: 5px 0 0 0; font-size: 0.85rem; color: var(--text-muted); }
         
         .chat-list { flex: 1; overflow-y: auto; padding: 15px; }
         .section-title { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; margin: 15px 0 10px 5px; font-weight: bold; letter-spacing: 1px; }
         
-        .chat-item { display: flex; align-items: center; gap: 10px; padding: 12px; margin-bottom: 8px; border-radius: 10px; cursor: pointer; transition: 0.3s; border: 1px solid transparent; background: rgba(255,255,255,0.02); }
-        .chat-item:hover, .chat-item.active { background: rgba(56, 189, 248, 0.08); border-color: var(--glass-border); }
-        .chat-item.active { box-shadow: inset 2px 0 0 var(--neon-blue); }
-        .chat-icon { width: 35px; height: 35px; border-radius: 50%; background: #1e293b; display: flex; justify-content: center; align-items: center; font-size: 1.2rem; border: 1px solid var(--glass-border); }
+        .chat-item { display: flex; align-items: center; gap: 10px; padding: 12px; margin-bottom: 8px; border-radius: 10px; cursor: pointer; transition: 0.3s; border: 1px solid transparent; }
+        .chat-item:hover, .chat-item.active { background: rgba(255, 255, 255, 0.05); border-color: var(--glass-border); }
+        .chat-item.active { border-left: 3px solid var(--accent); }
+        .chat-icon { width: 35px; height: 35px; border-radius: 8px; background: rgba(255,255,255,0.05); display: flex; justify-content: center; align-items: center; font-size: 1.2rem; border: 1px solid var(--glass-border); }
         .chat-name { font-weight: 500; }
 
-        .logout-btn { margin: 15px; padding: 12px; background: rgba(239, 68, 68, 0.1); color: #ef4444; text-align: center; text-decoration: none; border-radius: 8px; border: 1px solid rgba(239, 68, 68, 0.3); transition: 0.3s; }
-        .logout-btn:hover { background: #ef4444; color: #fff; box-shadow: 0 0 15px rgba(239, 68, 68, 0.5); }
+        .logout-btn { margin: 15px; padding: 12px; background: rgba(239, 68, 68, 0.1); color: #ef4444; text-align: center; text-decoration: none; border-radius: 8px; border: 1px solid rgba(239, 68, 68, 0.3); transition: 0.3s; font-weight:bold;}
+        .logout-btn:hover { background: #ef4444; color: #fff; box-shadow: 0 0 15px rgba(239, 68, 68, 0.4); }
 
-        /* Main Chat Area */
         .chat-container { flex: 1; display: flex; flex-direction: column; position: relative; }
-        .chat-header { padding: 20px; background: var(--glass-panel); backdrop-filter: blur(12px); border-bottom: 1px solid var(--glass-border); display: flex; align-items: center; gap: 15px; }
-        .chat-header h2 { margin: 0; font-size: 1.2rem; }
+        .chat-header { padding: 20px; background: var(--glass-bg); backdrop-filter: blur(12px); border-bottom: 1px solid var(--glass-border); display: flex; align-items: center; gap: 15px; }
+        .chat-header h2 { margin: 0; font-size: 1.2rem; font-weight: 600; }
         
         .messages-wrapper { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 15px; }
         
-        /* Chat Bubbles */
         .message-row { display: flex; width: 100%; }
         .message-row.self { justify-content: flex-end; }
         .message-row.other { justify-content: flex-start; }
         
-        .bubble { max-width: 65%; padding: 12px 16px; border-radius: 16px; position: relative; line-height: 1.5; backdrop-filter: blur(10px); border: 1px solid var(--glass-border); }
-        .message-row.self .bubble { background: var(--bubble-self); border-bottom-right-radius: 4px; border-color: rgba(56, 189, 248, 0.3); box-shadow: 0 4px 15px rgba(0,0,0,0.2); }
+        .bubble { max-width: 65%; padding: 12px 16px; border-radius: 12px; position: relative; line-height: 1.5; border: 1px solid var(--glass-border); word-break: break-word; }
+        .message-row.self .bubble { background: var(--bubble-self); border-bottom-right-radius: 4px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); }
         .message-row.other .bubble { background: var(--bubble-other); border-bottom-left-radius: 4px; }
         
-        .msg-sender { font-size: 0.75rem; color: var(--neon-blue); font-weight: bold; margin-bottom: 4px; display: block; }
-        .message-row.self .msg-sender { display: none; } /* Hide sender name for own messages */
+        .msg-sender { font-size: 0.75rem; color: var(--text-muted); font-weight: bold; margin-bottom: 4px; display: block; text-transform: uppercase; letter-spacing: 1px;}
+        .message-row.self .msg-sender { display: none; }
         
-        /* Media Attachments */
-        .bubble img, .bubble video { max-width: 100%; border-radius: 8px; margin-top: 8px; border: 1px solid var(--glass-border); cursor: pointer; }
+        /* Media & Files */
+        .bubble img, .bubble video { max-width: 100%; border-radius: 8px; margin-top: 8px; border: 1px solid var(--glass-border); }
         .bubble audio { margin-top: 8px; width: 250px; outline: none; }
+        .file-link { display: inline-flex; align-items: center; gap: 8px; background: rgba(255,255,255,0.05); padding: 10px 15px; border-radius: 8px; text-decoration: none; color: var(--accent); border: 1px solid var(--glass-border); margin-top: 5px; transition: 0.3s; }
+        .file-link:hover { background: var(--accent); color: #000; box-shadow: 0 0 15px var(--accent-glow); }
 
-        /* Input Area */
-        .input-area { padding: 20px; background: var(--glass-panel); backdrop-filter: blur(12px); border-top: 1px solid var(--glass-border); display: flex; gap: 12px; align-items: center; }
-        .input-box { flex: 1; display: flex; align-items: center; background: rgba(0,0,0,0.4); border: 1px solid var(--glass-border); border-radius: 24px; padding: 5px 15px; transition: 0.3s; }
-        .input-box:focus-within { border-color: var(--neon-blue); box-shadow: 0 0 10px rgba(56, 189, 248, 0.2); }
-        .input-box input[type="text"] { flex: 1; background: transparent; border: none; color: white; outline: none; font-size: 1rem; padding: 10px 5px; }
+        .input-area { padding: 20px; background: var(--glass-bg); backdrop-filter: blur(12px); border-top: 1px solid var(--glass-border); display: flex; gap: 12px; align-items: center; }
+        .input-box { flex: 1; display: flex; align-items: center; background: var(--input-bg); border: 1px solid var(--glass-border); border-radius: 12px; padding: 5px 15px; transition: 0.3s; }
+        .input-box:focus-within { border-color: var(--accent); box-shadow: 0 0 10px var(--accent-glow); }
+        .input-box input[type="text"] { flex: 1; background: transparent; border: none; color: white; outline: none; font-size: 1rem; padding: 10px 5px; font-family: 'Inter'; }
         
-        .action-btn { background: transparent; border: none; color: var(--text-muted); font-size: 1.2rem; cursor: pointer; padding: 10px; border-radius: 50%; transition: 0.3s; display: flex; align-items: center; justify-content: center; }
-        .action-btn:hover { color: var(--neon-blue); background: rgba(255,255,255,0.05); }
-        .send-btn { background: var(--neon-blue); color: #000; box-shadow: 0 0 10px rgba(56, 189, 248, 0.4); }
-        .send-btn:hover { background: #0ea5e9; color: #fff; transform: scale(1.05); }
+        .action-btn { background: transparent; border: 1px solid var(--glass-border); color: var(--text-main); font-size: 1.2rem; cursor: pointer; padding: 10px; border-radius: 8px; transition: 0.3s; display: flex; align-items: center; justify-content: center; }
+        .action-btn:hover { background: rgba(255,255,255,0.1); }
+        .send-btn { background: var(--accent); color: #000; border: none; font-weight: bold; }
+        .send-btn:hover { box-shadow: 0 0 15px var(--accent-glow); background: #e5e5e5; transform: translateY(-2px); }
     </style>
 </head>
 <body>
     <div class="sidebar">
         <div class="sidebar-header">
-            <h3>Black Chat</h3>
+            <h3>Black Hub Chat</h3>
             <p>@{{ username }}</p>
         </div>
         
         <div class="chat-list">
             <div class="section-title">Channels</div>
             <div class="chat-item active" onclick="joinRoom('Announcements', 'channel', this)">
-                <div class="chat-icon">📢</div>
-                <div class="chat-name">Announcements</div>
+                <div class="chat-icon">📢</div><div class="chat-name">Announcements</div>
             </div>
 
             <div class="section-title">Groups</div>
             <div class="chat-item" onclick="joinRoom('General', 'group', this)">
-                <div class="chat-icon">🌍</div>
-                <div class="chat-name">General Chat</div>
+                <div class="chat-icon">🌍</div><div class="chat-name">General Chat</div>
             </div>
             <div class="chat-item" onclick="joinRoom('Dev_Team', 'group', this)">
-                <div class="chat-icon">💻</div>
-                <div class="chat-name">Dev Team</div>
+                <div class="chat-icon">💻</div><div class="chat-name">Dev Team</div>
             </div>
 
             <div class="section-title">Direct Messages</div>
             {% for u in all_users %}
                 {% if u != username %}
                 <div class="chat-item" onclick="joinPrivateChat('{{ u }}', this)">
-                    <div class="chat-icon">👤</div>
-                    <div class="chat-name">{{ u }}</div>
+                    <div class="chat-icon">👤</div><div class="chat-name">{{ u }}</div>
                 </div>
                 {% endif %}
             {% endfor %}
         </div>
-        
         <a href="/logout" class="logout-btn">Logout</a>
     </div>
 
     <div class="chat-container">
         <div class="chat-header">
-            <div class="chat-icon" id="header-icon">📢</div>
+            <div class="chat-icon" id="header-icon" style="background:transparent; border:none;">📢</div>
             <h2 id="room-name">Announcements</h2>
         </div>
         
-        <div class="messages-wrapper" id="messages">
-            </div>
+        <div class="messages-wrapper" id="messages"></div>
         
         <div class="input-area">
             <input type="file" id="fileInput" style="display:none" onchange="uploadFile()">
-            <button class="action-btn" onclick="document.getElementById('fileInput').click()" title="Attach File">📎</button>
-            
+            <button class="action-btn" onclick="document.getElementById('fileInput').click()" title="Attach Document/Media">📎</button>
             <div class="input-box">
-                <input type="text" id="msgInput" placeholder="Write a message..." onkeypress="handleEnter(event)">
+                <input type="text" id="msgInput" placeholder="Message..." onkeypress="handleEnter(event)">
             </div>
-            
             <button class="action-btn send-btn" onclick="sendText()">➤</button>
         </div>
     </div>
@@ -136,64 +129,67 @@
         const currentUser = "{{ username }}";
         let currentRoom = 'Announcements';
         
-        socket.on('connect', () => { 
-            socket.emit('join', {room: currentRoom}); 
+        socket.on('connect', () => { socket.emit('join', {room: currentRoom}); });
+
+        // گرفتن تاریخچه کامل هنگام ورود
+        socket.on('history', (messages) => {
+            document.getElementById('messages').innerHTML = '';
+            messages.forEach(data => appendMessage(data));
         });
 
         // دریافت پیام جدید
         socket.on('message', (data) => {
+            appendMessage(data);
+        });
+
+        function appendMessage(data) {
             const msgBox = document.getElementById('messages');
             const isSelf = data.user === currentUser;
-            const rowClass = isSelf ? 'self' : 'other';
             
             let mediaContent = '';
-            if (data.msgType.startsWith('image')) mediaContent = `<img src="${data.url}" onclick="window.open('${data.url}', '_blank')">`;
-            else if (data.msgType.startsWith('video')) mediaContent = `<video controls src="${data.url}"></video>`;
-            else if (data.msgType.startsWith('audio')) mediaContent = `<audio controls src="${data.url}"></audio>`;
+            if (data.msgType === 'image') mediaContent = `<img src="${data.url}">`;
+            else if (data.msgType === 'video') mediaContent = `<video controls src="${data.url}"></video>`;
+            else if (data.msgType === 'audio') mediaContent = `<audio controls src="${data.url}"></audio>`;
+            else if (data.msgType === 'file') {
+                // نمایش زیبا برای دانلود فایل متنی، پی دی اف، فایل زیپ و...
+                let fName = data.fileName || "Download File";
+                mediaContent = `<a href="${data.url}" class="file-link" target="_blank">📄 ${fName}</a>`;
+            }
 
             const html = `
-                <div class="message-row ${rowClass}">
+                <div class="message-row ${isSelf ? 'self' : 'other'}">
                     <div class="bubble">
                         <span class="msg-sender">${data.user}</span>
                         ${data.msgType === 'text' ? data.text : mediaContent}
                     </div>
-                </div>
-            `;
+                </div>`;
             
             msgBox.innerHTML += html;
             msgBox.scrollTop = msgBox.scrollHeight;
-        });
+        }
 
-        // تغییر استایل دکمه‌های سایدبار
         function setActive(element) {
             document.querySelectorAll('.chat-item').forEach(el => el.classList.remove('active'));
             element.classList.add('active');
         }
 
-        // ورود به کانال یا گروه
         function joinRoom(room, type, element) {
             currentRoom = room;
             document.getElementById('room-name').innerText = room;
             document.getElementById('header-icon').innerText = type === 'channel' ? '📢' : '🌍';
-            document.getElementById('messages').innerHTML = '';
             setActive(element);
             socket.emit('join', {room: room});
         }
 
-        // ورود به چت خصوصی (تولید آیدی یکتا برای اتاق دونفره)
         function joinPrivateChat(targetUser, element) {
-            // ترکیب دو نام کاربری بر اساس حروف الفبا برای ایجاد روم ثابت بین دو نفر
             const users = [currentUser, targetUser].sort();
             currentRoom = `dm_${users[0]}_${users[1]}`;
-            
             document.getElementById('room-name').innerText = targetUser;
             document.getElementById('header-icon').innerText = '👤';
-            document.getElementById('messages').innerHTML = '';
             setActive(element);
             socket.emit('join', {room: currentRoom});
         }
 
-        // ارسال متن
         function sendText() {
             const input = document.getElementById('msgInput');
             if(input.value.trim() !== '') {
@@ -202,11 +198,9 @@
             }
         }
 
-        function handleEnter(e) {
-            if (e.key === 'Enter') sendText();
-        }
+        function handleEnter(e) { if (e.key === 'Enter') sendText(); }
 
-        // آپلود و ارسال عکس/فیلم
+        // آپلود عکس، ویدیو، وویس و فایل متنی و PDF
         async function uploadFile() {
             const file = document.getElementById('fileInput').files[0];
             if (!file) return;
@@ -217,7 +211,10 @@
             const data = await res.json();
             
             if (data.url) {
-                socket.emit('send_message', {user: currentUser, room: currentRoom, msgType: data.type, url: data.url});
+                socket.emit('send_message', {
+                    user: currentUser, room: currentRoom, 
+                    msgType: data.type, url: data.url, fileName: data.name
+                });
             }
         }
     </script>
