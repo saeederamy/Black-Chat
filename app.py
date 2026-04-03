@@ -14,15 +14,17 @@ os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 def init_db():
     conn = sqlite3.connect('chat.db')
     c = conn.cursor()
-    # جدول پیام‌ها
     c.execute('''CREATE TABLE IF NOT EXISTS messages
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   room TEXT, user TEXT, msg_type TEXT, content TEXT, file_name TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
-    # جدول گروه‌ها
+    
+    # ایندکس برای افزایش وحشتناک سرعت لود پیام‌ها
+    c.execute('CREATE INDEX IF NOT EXISTS idx_room_time ON messages(room, timestamp)')
+    
     c.execute('''CREATE TABLE IF NOT EXISTS groups (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE)''')
     c.execute("INSERT OR IGNORE INTO groups (name) VALUES ('General')")
     c.execute("INSERT OR IGNORE INTO groups (name) VALUES ('Dev_Team')")
-    # جدول مخاطبین (برای ادد کردن یوزر با آیدی)
+    
     c.execute('''CREATE TABLE IF NOT EXISTS contacts (id INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT, contact TEXT, UNIQUE(owner, contact))''')
     conn.commit()
     conn.close()
@@ -33,8 +35,7 @@ def check_user_exists(username):
     if not os.path.exists('users.txt'): return False
     with open('users.txt', 'r') as f:
         for line in f:
-            if ':' in line and line.strip().split(':')[0] == username:
-                return True
+            if ':' in line and line.strip().split(':')[0] == username: return True
     return False
 
 def check_user_login(username, password):
@@ -81,7 +82,6 @@ def logout():
 @app.route('/')
 def index():
     if 'user' not in session: return redirect(url_for('login'))
-    # فقط گروه‌ها و مخاطبین ادد شده خود کاربر ارسال می‌شود
     return render_template('index.html', username=session['user'], all_groups=get_all_groups(), contacts=get_contacts(session['user']))
 
 @app.route('/upload', methods=['POST'])
@@ -121,6 +121,13 @@ def handle_message(data):
     conn = sqlite3.connect('chat.db')
     c = conn.cursor()
     c.execute("INSERT INTO messages (room, user, msg_type, content, file_name) VALUES (?, ?, ?, ?, ?)", (room, user, msg_type, content, file_name))
+    
+    # اگر پیام خصوصی بود، مطمئن شویم دو طرف در لیست هم هستند
+    if room.startswith('dm_'):
+        target = room.replace('dm_', '').replace(user, '').replace('_', '')
+        c.execute("INSERT OR IGNORE INTO contacts (owner, contact) VALUES (?, ?)", (user, target))
+        c.execute("INSERT OR IGNORE INTO contacts (owner, contact) VALUES (?, ?)", (target, user))
+        
     conn.commit()
     conn.close()
 
@@ -156,12 +163,15 @@ def handle_add_contact(data):
     try:
         conn = sqlite3.connect('chat.db')
         c = conn.cursor()
-        c.execute("INSERT INTO contacts (owner, contact) VALUES (?, ?)", (owner, target))
+        # ایجاد ارتباط دو طرفه
+        c.execute("INSERT OR IGNORE INTO contacts (owner, contact) VALUES (?, ?)", (owner, target))
+        c.execute("INSERT OR IGNORE INTO contacts (owner, contact) VALUES (?, ?)", (target, owner))
         conn.commit()
         conn.close()
-        emit('contact_response', {'success': True, 'contact': target})
-    except sqlite3.IntegrityError:
-        emit('contact_response', {'success': False, 'msg': "User is already in your contacts!"})
+        # ارسال موفقیت برای همه کلاینت‌ها تا هر دو طرف لیستشان آپدیت شود
+        emit('contact_response', {'success': True, 'owner': owner, 'contact': target}, broadcast=True)
+    except Exception as e:
+        emit('contact_response', {'success': False, 'msg': "Error adding contact!"})
 
 if __name__ == '__main__':
     socketio.run(app, host='0.0.0.0', port=5000, debug=True)
