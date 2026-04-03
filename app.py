@@ -17,6 +17,12 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS messages
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   room TEXT, user TEXT, msg_type TEXT, content TEXT, file_name TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
+    # جدول جدید برای ذخیره گروه‌ها
+    c.execute('''CREATE TABLE IF NOT EXISTS groups (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE)''')
+    # ساخت دو گروه پیش‌فرض اگر وجود نداشتند
+    c.execute("INSERT OR IGNORE INTO groups (name) VALUES ('General')")
+    c.execute("INSERT OR IGNORE INTO groups (name) VALUES ('Dev_Team')")
+    
     conn.commit()
     conn.close()
 
@@ -27,9 +33,16 @@ def get_all_users():
     if os.path.exists('users.txt'):
         with open('users.txt', 'r') as f:
             for line in f:
-                if ':' in line:
-                    users.append(line.strip().split(':')[0])
+                if ':' in line: users.append(line.strip().split(':')[0])
     return users
+
+def get_all_groups():
+    conn = sqlite3.connect('chat.db')
+    c = conn.cursor()
+    c.execute("SELECT name FROM groups")
+    groups = [row[0] for row in c.fetchall()]
+    conn.close()
+    return groups
 
 def check_user(username, password):
     if not os.path.exists('users.txt'): return False
@@ -37,8 +50,7 @@ def check_user(username, password):
         for line in f:
             if ':' in line:
                 u, p = line.strip().split(':', 1)
-                if u == username and p == password:
-                    return True
+                if u == username and p == password: return True
     return False
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -60,7 +72,7 @@ def logout():
 @app.route('/')
 def index():
     if 'user' not in session: return redirect(url_for('login'))
-    return render_template('index.html', username=session['user'], all_users=get_all_users())
+    return render_template('index.html', username=session['user'], all_users=get_all_users(), all_groups=get_all_groups())
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
@@ -82,41 +94,44 @@ def upload_file():
 def on_join(data):
     room = data['room']
     join_room(room)
-    
     conn = sqlite3.connect('chat.db')
     c = conn.cursor()
     c.execute("SELECT user, msg_type, content, file_name FROM messages WHERE room=? ORDER BY timestamp ASC", (room,))
     msgs = c.fetchall()
     conn.close()
     
-    history = []
-    for m in msgs:
-        history.append({
-            'user': m[0], 'msgType': m[1], 
-            'text': m[2] if m[1] == 'text' else '',
-            'url': m[2] if m[1] != 'text' else '',
-            'fileName': m[3]
-        })
+    history = [{'user': m[0], 'msgType': m[1], 'text': m[2] if m[1] == 'text' else '', 'url': m[2] if m[1] != 'text' else '', 'fileName': m[3]} for m in msgs]
     emit('history', history)
 
 @socketio.on('send_message')
 def handle_message(data):
-    room = data['room']
-    user = data['user']
-    msg_type = data['msgType']
-    content = data.get('text', data.get('url', ''))
-    file_name = data.get('fileName', '')
+    room, user, msg_type = data['room'], data['user'], data['msgType']
+    content, file_name = data.get('text', data.get('url', '')), data.get('fileName', '')
 
     conn = sqlite3.connect('chat.db')
     c = conn.cursor()
-    c.execute("INSERT INTO messages (room, user, msg_type, content, file_name) VALUES (?, ?, ?, ?, ?)",
-              (room, user, msg_type, content, file_name))
+    c.execute("INSERT INTO messages (room, user, msg_type, content, file_name) VALUES (?, ?, ?, ?, ?)", (room, user, msg_type, content, file_name))
     conn.commit()
     conn.close()
 
     emit('message', data, room=room)
-    # ارسال نوتیفیکیشن برای کلاینت‌ها (تا اگر در روم نبودند باخبر شوند)
     emit('notification', data, broadcast=True)
+
+# دریافت درخواست ساخت گروه و اطلاع به بقیه
+@socketio.on('create_group')
+def handle_create_group(data):
+    group_name = data['group_name'].replace(' ', '_')
+    if not group_name: return
+    try:
+        conn = sqlite3.connect('chat.db')
+        c = conn.cursor()
+        c.execute("INSERT INTO groups (name) VALUES (?)", (group_name,))
+        conn.commit()
+        conn.close()
+        # به همه کلاینت‌ها اطلاع میده تا گروه جدید در لیستشان اضافه شود
+        emit('new_group', {'name': group_name}, broadcast=True)
+    except sqlite3.IntegrityError:
+        pass # گروه قبلاً وجود داشته
 
 if __name__ == '__main__':
     socketio.run(app, host='0.0.0.0', port=5000, debug=True)
