@@ -1,10 +1,7 @@
-// ==========================================
-// Black Chat Logic (Global WebSocket, PWA)
-// ==========================================
-
 let currentUser = null;
 let currentRole = null;
 let currentRoom = null;
+let targetUserForDM = null; // متغیر حیاتی برای رفع باگ پیام دادن
 let ws = null;
 let autoDownload = true;
 let currentLang = localStorage.getItem('lang') || 'fa';
@@ -14,17 +11,15 @@ if(savedBg) document.getElementById('chatArea').style.backgroundImage = `url('${
 
 const translations = {
     'en': {
-        login_title: 'System Login', btn_login: 'Authenticate', search_ph: 'Search...', type_ph: 'Message...',
-        new_group: 'New Group', settings: 'Settings', logout: 'Log Out', add_contact: 'Add Contact', 
-        username_ph: 'Enter Username', cancel: 'Cancel', add: 'Add', create: 'Create', language: 'Language', 
-        auto_dl: 'Auto-Download', active_sessions: 'Active Sessions', close: 'Close', chat_bg: 'Chat Background URL',
-        system_channel: 'System Channel', private_chat: 'Private Chat', group: 'Public Group', channel: 'Public Channel'
+        login_title: 'System Login', btn_login: 'Login', search_ph: 'Search...', type_ph: 'Message...',
+        settings: 'Settings', add_contact: 'New Chat', username_ph: 'Enter exact username', 
+        language: 'Language', auto_dl: 'Auto-Download', active_sessions: 'Active IPs', chat_bg: 'Chat Wallpaper URL',
+        system_channel: 'System Channel', private_chat: 'Private Chat', group: 'Group', channel: 'Channel'
     },
     'fa': {
         login_title: 'ورود به سیستم', btn_login: 'ورود / تایید', search_ph: 'جستجو...', type_ph: 'پیام خود را بنویسید...',
-        new_group: 'گروه / کانال جدید', settings: 'تنظیمات', logout: 'خروج', add_contact: 'افزودن مخاطب', 
-        username_ph: 'آیدی دقیق را وارد کنید', cancel: 'لغو', add: 'افزودن', create: 'ساختن', language: 'زبان برنامه', 
-        auto_dl: 'دانلود خودکار', active_sessions: 'نشست‌های فعال', close: 'بستن', chat_bg: 'لینک پس‌زمینه چت',
+        settings: 'تنظیمات سیستم', add_contact: 'چت خصوصی جدید', username_ph: 'آیدی دقیق را وارد کنید', 
+        language: 'زبان برنامه', auto_dl: 'دانلود خودکار', active_sessions: 'آی‌پی‌های متصل شما', chat_bg: 'پس‌زمینه چت (لینک عکس)',
         system_channel: 'کانال سیستم', private_chat: 'چت خصوصی', group: 'گروه عمومی', channel: 'کانال عمومی'
     }
 };
@@ -53,10 +48,6 @@ async function login() {
     const data = await res.json();
     if (data.success) {
         currentUser = data.username; currentRole = data.role;
-        document.getElementById('profile-name').innerText = currentUser;
-        document.getElementById('profile-role').innerText = currentRole === 'admin' ? 'Admin' : 'User';
-        document.getElementById('my-initial').innerText = currentUser.substring(0,2).toUpperCase();
-        
         document.getElementById('login-screen').style.display = 'none';
         document.getElementById('app').style.display = 'flex';
         
@@ -91,7 +82,6 @@ function initWebSocket() {
 async function loadInitData() {
     const res = await fetch('/api/action', { method: 'POST', body: JSON.stringify({action: 'get_init_data', user: currentUser}), headers: {'Content-Type': 'application/json'} });
     const data = await res.json();
-    if(data.avatar) { document.getElementById('my-avatar').src = data.avatar; document.getElementById('my-avatar').style.display='block'; document.getElementById('my-initial').style.display='none'; }
 
     const list = document.getElementById('chat-list');
     list.innerHTML = `<div class="chat-item" data-room="Announcements" onclick="openChat('Announcements', 'channel', '📢', 'Announcements')">
@@ -105,65 +95,52 @@ async function loadInitData() {
     });
 
     data.contacts.forEach(c => {
-        list.innerHTML += `<div class="chat-item" data-room="${c}" onclick="openChat('${c}', 'private', '👤', '${c}')">
+        list.innerHTML += `<div class="chat-item" data-room="${c}" onclick="openChat('${c}', 'private', '👤', '${c}', '${c}')">
                 <div class="avatar">👤</div><div class="chat-info"><div class="chat-name">${c}</div><div class="chat-preview" data-i18n="private_chat">${translations[currentLang].private_chat}</div></div><span class="unread-badge" id="badge-dm_${c}">0</span></div>`;
     });
     openChat('Announcements', 'channel', '📢', 'Announcements');
 }
 
-// --- Navigation & Modals ---
-function toggleDrawer() {
-    const d = document.getElementById('sideDrawer'); const o = document.getElementById('menuOverlay');
-    if(d.classList.contains('open')) { d.classList.remove('open'); o.style.display = 'none'; }
-    else { d.classList.add('open'); o.style.display = 'flex'; }
-}
-
-function openModal(id) { toggleDrawer(); document.getElementById('menuOverlay').style.display = 'flex'; document.getElementById(id).style.display = 'flex'; if(id === 'settingsModal') fetchIPs(); }
-function closeModal(id) { document.getElementById(id).style.display = 'none'; closeAll(); }
-function closeAll() { document.getElementById('menuOverlay').style.display = 'none'; document.getElementById('sideDrawer').classList.remove('open'); document.querySelectorAll('.modal-overlay').forEach(m => m.style.display='none'); }
+function openModal(id) { document.getElementById('menuOverlay').style.display = 'flex'; document.getElementById(id).style.display = 'flex'; if(id === 'settingsModal') fetchIPs(); }
+function closeModal(id) { document.getElementById(id).style.display = 'none'; document.getElementById('menuOverlay').style.display = 'none'; }
 
 function searchChat() {
     let q = document.getElementById('searchInput').value.toLowerCase();
     document.querySelectorAll('.chat-item').forEach(i => { i.style.display = i.querySelector('.chat-name').innerText.toLowerCase().includes(q) ? 'flex' : 'none'; });
 }
 
-// --- Actions ---
 async function fetchIPs() {
     const res = await fetch('/api/action', { method: 'POST', body: JSON.stringify({action: 'get_ips', user: currentUser}), headers: {'Content-Type': 'application/json'} });
     const data = await res.json();
-    document.getElementById('ipList').innerHTML = data.ips.map(i => `<div style="border-bottom:1px solid #333; padding:5px 0;">🌐 ${i.ip} <br><span style="color:#666;">${i.date}</span></div>`).join('');
-}
-
-async function uploadAvatar() {
-    const file = document.getElementById('avatarInput').files[0]; if (!file) return;
-    const fd = new FormData(); fd.append('file', file); fd.append('username', currentUser);
-    const res = await fetch('/api/upload_avatar', { method: 'POST', body: fd });
-    const data = await res.json();
-    if (data.success) { document.getElementById('my-avatar').src = data.url; document.getElementById('my-avatar').style.display = 'block'; document.getElementById('my-initial').style.display = 'none'; }
+    document.getElementById('ipList').innerHTML = data.ips.map(i => `<div style="border-bottom:1px solid #333; padding:5px 0;">🌐 ${i.ip} <br><span style="color:#aaa;">${i.date}</span></div>`).join('');
 }
 
 async function submitContact() {
     const t = document.getElementById('contactUsername').value.trim(); if(!t) return;
     const res = await fetch('/api/action', { method: 'POST', body: JSON.stringify({action:'add_contact', owner: currentUser, target: t}), headers: {'Content-Type': 'application/json'} });
     const data = await res.json();
-    if(data.success) { closeModal('contactModal'); loadInitData(); openChat(data.target, 'private', '👤', data.target); } else alert(data.msg);
+    if(data.success) { closeModal('contactModal'); loadInitData(); openChat(data.target, 'private', '👤', data.target, data.target); } else alert(data.msg);
 }
 
 async function submitCreation() {
     const n = document.getElementById('creationName').value.trim(); const t = document.getElementById('creationType').value; if(!n) return;
     const res = await fetch('/api/action', { method: 'POST', body: JSON.stringify({action:'create_room', type: t, name: n, user: currentUser}), headers: {'Content-Type': 'application/json'} });
     const data = await res.json();
-    if(data.success) { closeModal('groupModal'); loadInitData(); openChat(data.room_id, t, t==='group'?'🌍':'📢', n); }
+    if(data.success) { closeModal('contactModal'); loadInitData(); openChat(data.room_id, t, t==='group'?'🌍':'📢', n); }
 }
 
-// --- Chat Functions ---
-function openChat(roomId, type, icon, title) {
+function openChat(roomId, type, icon, title, targetUser = null) {
     document.querySelectorAll('.chat-item').forEach(c => c.classList.remove('active'));
     let activeItem = document.querySelector(`.chat-item[data-room="${roomId}"]`);
     if(activeItem) activeItem.classList.add('active');
 
+    targetUserForDM = targetUser; // ذخیره دقیق شخص مقابل
+    
     let realRoomId = roomId;
-    if (type === 'private') { const users = [currentUser, roomId].sort(); realRoomId = `dm_${users[0]}_${users[1]}`; }
+    if (type === 'private') { 
+        const users = [currentUser, roomId].sort(); 
+        realRoomId = `dm_${users.join('-')}`; // استفاده از خط تیره برای امنیت
+    }
     currentRoom = realRoomId;
 
     document.getElementById('room-title').innerText = title;
@@ -191,11 +168,17 @@ function openChat(roomId, type, icon, title) {
 function closeChat() { document.getElementById('sidebar').classList.remove('hidden'); }
 
 function handleNotification(msg) {
+    // پیدا کردن فرستنده برای روشن کردن چراغ نوتیفیکیشن
     let isDM = msg.room.startsWith('dm_');
     if (isDM && !msg.room.includes(currentUser)) return;
     
-    let targetId = isDM ? msg.room : msg.room;
-    let badge = document.getElementById(`badge-${targetId}`);
+    // اگر خصوصی بود و شخص در لیست نبود اضافه شود
+    if (isDM && !document.querySelector(`.chat-item[data-room="${msg.data.user}"]`)) {
+        loadInitData(); // رفرش لیست
+    }
+
+    let targetId = isDM ? msg.data.user : msg.room;
+    let badge = document.getElementById(`badge-${isDM ? 'dm_'+targetId : targetId}`);
     if(badge) { badge.style.display = 'inline-block'; badge.innerText = parseInt(badge.innerText) + 1; }
     
     try { document.getElementById('notif-sound').play(); } catch(e){}
@@ -207,18 +190,15 @@ function appendMessage(data) {
     
     let media = '';
     if (data.msgType === 'image' || data.msgType === 'video') {
-        let tag = data.msgType === 'image' ? `<img src="${data.url}" loading="lazy">` : `<video controls src="${data.url}"></video>`;
-        if(!autoDownload) {
-            media = `<div style="position:relative; max-width:250px;" onclick="this.innerHTML='${tag}'">
-                        ${data.msgType === 'image' ? `<img src="${data.url}" class="blur-media">` : `<div style="width:250px;height:150px;background:#111;border-radius:12px;border:1px solid #333;"></div>`}
-                        <div class="dl-overlay"><svg style="width:24px;fill:white;"><use href="#icon-dl"></use></svg></div>
-                     </div>`;
+        let tag = data.msgType === 'image' ? `<img src="${data.url}">` : `<video controls src="${data.url}"></video>`;
+        if(!autoDownload && data.msgType === 'image') {
+            media = `<div style="position:relative;" onclick="this.innerHTML='${tag}'"><img src="${data.url}" style="filter:blur(10px);"><div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:30px;">⬇️</div></div>`;
         } else media = tag;
     }
     else if (data.msgType === 'audio') media = `<audio controls src="${data.url}"></audio>`;
-    else if (data.msgType === 'file') media = `<a href="${data.url}" class="file-link" download><div class="file-icon" style="font-size:20px;">📄</div> <div style="overflow:hidden; text-overflow:ellipsis;">${data.fileName}</div></a>`;
+    else if (data.msgType === 'file') media = `<a href="${data.url}" class="file-link" download><div class="file-icon">📄</div> <div style="overflow:hidden; text-overflow:ellipsis;">${data.fileName}</div></a>`;
 
-    let delBtn = (isSelf || currentRole === 'admin') ? `<button class="delete-msg-btn" onclick="deleteMsg('${data.id}')"><svg style="width:16px;fill:currentColor;"><use href="#icon-trash"></use></svg></button>` : '';
+    let delBtn = (isSelf || currentRole === 'admin') ? `<button class="delete-btn" onclick="deleteMsg('${data.id}')">🗑</button>` : '';
 
     const html = `
         <div class="msg-row ${isSelf ? 'out' : 'in'}" id="msg-${data.id}">
@@ -234,9 +214,9 @@ function appendMessage(data) {
     msgBox.scrollTop = msgBox.scrollHeight;
 }
 
-function deleteMsg(id) { if(confirm("Delete message?")) ws.send(JSON.stringify({action: 'delete_msg', msg_id: id})); }
+function deleteMsg(id) { if(confirm("آیا پیام برای همه پاک شود؟")) ws.send(JSON.stringify({action: 'delete_msg', msg_id: id})); }
 
-// --- Input & Recording ---
+// --- Inputs & Recording ---
 let mediaRecorder; let audioChunks = []; let isRecording = false;
 let recTimerInterval; let recSeconds = 0;
 
@@ -246,10 +226,10 @@ function checkInput() {
     const vBtn = document.getElementById('actionVideoBtn');
     
     if (input.value.trim() !== '') { 
-        btn.innerHTML = '<svg class="svg-icon"><use href="#icon-send"></use></svg>'; btn.classList.add('send'); 
+        btn.innerText = '➤'; btn.classList.add('send'); 
         vBtn.style.display = 'none';
     } else { 
-        btn.innerHTML = '<svg class="svg-icon"><use href="#icon-mic"></use></svg>'; btn.classList.remove('send'); 
+        btn.innerText = '🎤'; btn.classList.remove('send'); 
         vBtn.style.display = 'flex';
     }
 }
@@ -258,16 +238,14 @@ function handleAction() {
     const btn = document.getElementById('actionBtn');
     const input = document.getElementById('msgInput');
     if (btn.classList.contains('send')) {
-        if (input.value.trim() !== '') { ws.send(JSON.stringify({action: 'send_msg', room: currentRoom, user: currentUser, msgType: 'text', text: input.value})); input.value = ''; checkInput(); }
+        if (input.value.trim() !== '') { 
+            ws.send(JSON.stringify({action: 'send_msg', room: currentRoom, user: currentUser, targetUser: targetUserForDM, msgType: 'text', text: input.value})); 
+            input.value = ''; checkInput(); 
+        }
     } else { startRecord('audio', btn); }
 }
 
 document.getElementById('msgInput')?.addEventListener('keypress', (e) => { if(e.key === 'Enter') handleAction(); });
-
-function toggleVideoRecord() {
-    const vBtn = document.getElementById('actionVideoBtn');
-    startRecord('video', vBtn);
-}
 
 function updateTimer() {
     recSeconds++;
@@ -279,19 +257,18 @@ function updateTimer() {
 async function startRecord(type, btn) {
     if (!isRecording) {
         try {
-            const constraints = type === 'video' ? { audio: true, video: { facingMode: "user" } } : { audio: true };
-            const stream = await navigator.mediaDevices.getUserMedia(constraints);
+            const stream = await navigator.mediaDevices.getUserMedia(type === 'video' ? { audio: true, video: true } : { audio: true });
             mediaRecorder = new MediaRecorder(stream);
             mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
             mediaRecorder.onstop = async () => {
-                const mimeType = type === 'video' ? 'video/webm' : 'audio/webm';
-                const blob = new Blob(audioChunks, { type: mimeType }); audioChunks = [];
-                const fd = new FormData(); fd.append('file', new File([blob], `record.${type==='video'?'webm':'webm'}`, { type: mimeType }));
+                const mime = type === 'video' ? 'video/webm' : 'audio/webm';
+                const fd = new FormData(); fd.append('file', new File([new Blob(audioChunks, { type: mime })], `rec.${type==='video'?'webm':'webm'}`, { type: mime }));
+                audioChunks = [];
                 const res = await fetch('/api/upload', { method: 'POST', body: fd });
                 const data = await res.json();
-                if(data.url) ws.send(JSON.stringify({action: 'send_msg', room: currentRoom, user: currentUser, msgType: type, url: data.url}));
+                if(data.url) ws.send(JSON.stringify({action: 'send_msg', room: currentRoom, user: currentUser, targetUser: targetUserForDM, msgType: type, url: data.url}));
             };
-            mediaRecorder.start(); isRecording = true; btn.classList.add('recording');
+            mediaRecorder.start(); isRecording = true; btn.classList.add('rec');
             
             document.getElementById('msgInput').style.display = 'none';
             document.getElementById('recTimer').style.display = 'inline';
@@ -301,9 +278,9 @@ async function startRecord(type, btn) {
             if(type === 'video') document.getElementById('actionBtn').style.display = 'none';
             else document.getElementById('actionVideoBtn').style.display = 'none';
             
-        } catch (err) { alert("Camera/Microphone access denied or HTTPS required."); }
+        } catch (err) { alert("دسترسی دوربین/میکروفون وجود ندارد"); }
     } else {
-        mediaRecorder.stop(); isRecording = false; btn.classList.remove('recording');
+        mediaRecorder.stop(); isRecording = false; btn.classList.remove('rec');
         clearInterval(recTimerInterval);
         document.getElementById('recTimer').style.display = 'none';
         document.getElementById('msgInput').style.display = 'block';
@@ -317,5 +294,5 @@ async function uploadFile() {
     const fd = new FormData(); fd.append('file', file);
     const res = await fetch('/api/upload', { method: 'POST', body: fd });
     const data = await res.json();
-    if (data.url) ws.send(JSON.stringify({action: 'send_msg', room: currentRoom, user: currentUser, msgType: data.type, url: data.url, fileName: data.name}));
+    if (data.url) ws.send(JSON.stringify({action: 'send_msg', room: currentRoom, user: currentUser, targetUser: targetUserForDM, msgType: data.type, url: data.url, fileName: data.name}));
 }
