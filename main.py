@@ -1,6 +1,7 @@
 import os
 import sqlite3
 import json
+import uuid
 import aiofiles
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, UploadFile, File, Form
 from fastapi.responses import FileResponse, JSONResponse
@@ -24,9 +25,12 @@ os.makedirs(TPL_DIR, exist_ok=True)
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, room TEXT, user TEXT, msg_type TEXT, content TEXT, file_name TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS messages (msg_id TEXT PRIMARY KEY, room TEXT, user TEXT, msg_type TEXT, content TEXT, file_name TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
     c.execute('CREATE INDEX IF NOT EXISTS idx_room ON messages(room)')
     c.execute('''CREATE TABLE IF NOT EXISTS contacts (id INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT, contact TEXT, UNIQUE(owner, contact))''')
+    c.execute('''CREATE TABLE IF NOT EXISTS active_ips (user TEXT, ip TEXT, last_seen DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE(user, ip))''')
+    c.execute('''CREATE TABLE IF NOT EXISTS profiles (user TEXT PRIMARY KEY, avatar TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS custom_rooms (room_id TEXT PRIMARY KEY, type TEXT, name TEXT, owner TEXT)''')
     conn.commit()
     conn.close()
 
@@ -38,13 +42,11 @@ class ConnectionManager:
 
     async def connect(self, websocket: WebSocket, room: str):
         await websocket.accept()
-        if room not in self.active_connections:
-            self.active_connections[room] = []
+        if room not in self.active_connections: self.active_connections[room] = []
         self.active_connections[room].append(websocket)
 
     def disconnect(self, websocket: WebSocket, room: str):
-        if room in self.active_connections:
-            self.active_connections[room].remove(websocket)
+        if room in self.active_connections: self.active_connections[room].remove(websocket)
 
     async def broadcast(self, message: dict, room: str):
         if room in self.active_connections:
@@ -58,8 +60,7 @@ def check_login(username, password):
     with open(USERS_FILE, "r") as f:
         for line in f:
             parts = line.strip().split(':')
-            if len(parts) >= 3 and parts[0] == username and parts[1] == password:
-                return parts[2] # role
+            if len(parts) >= 3 and parts[0] == username and parts[1] == password: return parts[2]
     return None
 
 def get_all_users():
@@ -73,15 +74,21 @@ def get_all_users():
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 @app.get("/")
-async def get_index():
-    return FileResponse(os.path.join(TPL_DIR, 'index.html'))
+async def get_index(): return FileResponse(os.path.join(TPL_DIR, 'index.html'))
 
 @app.post("/api/login")
 async def login_api(request: Request):
     data = await request.json()
-    role = check_login(data.get("username"), data.get("password"))
+    user, pwd = data.get("username"), data.get("password")
+    role = check_login(user, pwd)
     if role:
-        return {"success": True, "role": role, "username": data.get("username")}
+        ip = request.client.host
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("INSERT OR REPLACE INTO active_ips (user, ip, last_seen) VALUES (?, ?, CURRENT_TIMESTAMP)", (user, ip))
+        conn.commit()
+        conn.close()
+        return {"success": True, "role": role, "username": user}
     return {"success": False, "message": "Invalid Credentials"}
 
 @app.post("/api/upload")
@@ -99,40 +106,68 @@ async def upload_file(file: UploadFile = File(...)):
     
     return {"url": f"/static/uploads/{file.filename}", "type": msg_type, "name": file.filename}
 
-@app.post("/api/contacts")
-async def add_contact(request: Request):
-    data = await request.json()
-    owner, target = data.get("owner"), data.get("target")
-    if target not in get_all_users(): return {"success": False, "msg": "User not found!"}
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        c.execute("INSERT OR IGNORE INTO contacts (owner, contact) VALUES (?, ?)", (owner, target))
-        c.execute("INSERT OR IGNORE INTO contacts (owner, contact) VALUES (?, ?)", (target, owner))
-        conn.commit()
-        conn.close()
-        return {"success": True, "target": target}
-    except Exception as e:
-        return {"success": False, "msg": str(e)}
-
-@app.get("/api/init_data")
-async def init_data(username: str):
+@app.post("/api/upload_avatar")
+async def upload_avatar(username: str = Form(...), file: UploadFile = File(...)):
+    ext = file.filename.split('.')[-1]
+    avatar_name = f"avatar_{username}_{uuid.uuid4().hex[:6]}.{ext}"
+    file_location = os.path.join(UPLOAD_DIR, avatar_name)
+    async with aiofiles.open(file_location, 'wb') as out_file:
+        content = await file.read()
+        await out_file.write(content)
+    
+    url = f"/static/uploads/{avatar_name}"
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("SELECT contact FROM contacts WHERE owner=?", (username,))
-    contacts = [row[0] for row in c.fetchall()]
+    c.execute("INSERT OR REPLACE INTO profiles (user, avatar) VALUES (?, ?)", (username, url))
+    conn.commit()
     conn.close()
-    return {"contacts": contacts}
+    return {"success": True, "url": url}
+
+@app.post("/api/action")
+async def api_action(request: Request):
+    data = await request.json()
+    act = data.get("action")
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    res = {"success": True}
+    
+    if act == "get_ips":
+        c.execute("SELECT ip, last_seen FROM active_ips WHERE user=?", (data.get("user"),))
+        res["ips"] = [{"ip": r[0], "date": r[1]} for r in c.fetchall()]
+    elif act == "create_room":
+        room_id = "rm_" + uuid.uuid4().hex[:8]
+        c.execute("INSERT INTO custom_rooms (room_id, type, name, owner) VALUES (?, ?, ?, ?)", (room_id, data.get("type"), data.get("name"), data.get("user")))
+        res["room_id"] = room_id
+    elif act == "get_init_data":
+        u = data.get("user")
+        c.execute("SELECT contact FROM contacts WHERE owner=?", (u,))
+        res["contacts"] = [r[0] for r in c.fetchall()]
+        c.execute("SELECT room_id, type, name FROM custom_rooms")
+        res["custom_rooms"] = [{"id": r[0], "type": r[1], "name": r[2]} for r in c.fetchall()]
+        c.execute("SELECT avatar FROM profiles WHERE user=?", (u,))
+        av = c.fetchone()
+        res["avatar"] = av[0] if av else ""
+    elif act == "add_contact":
+        owner, target = data.get("owner"), data.get("target")
+        if target not in get_all_users(): 
+            res = {"success": False, "msg": "User not found"}
+        else:
+            c.execute("INSERT OR IGNORE INTO contacts (owner, contact) VALUES (?, ?)", (owner, target))
+            c.execute("INSERT OR IGNORE INTO contacts (owner, contact) VALUES (?, ?)", (target, owner))
+            res["target"] = target
+            
+    conn.commit()
+    conn.close()
+    return res
 
 @app.websocket("/ws/{room}/{username}/{role}")
 async def websocket_endpoint(websocket: WebSocket, room: str, username: str, role: str):
     await manager.connect(websocket, room)
     
-    # ارسال تاریخچه
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("SELECT user, msg_type, content, file_name FROM messages WHERE room=? ORDER BY timestamp ASC", (room,))
-    history = [{"user": m[0], "msgType": m[1], "text": m[2] if m[1]=='text' else '', "url": m[2] if m[1]!='text' else '', "fileName": m[3]} for m in c.fetchall()]
+    c.execute("SELECT msg_id, user, msg_type, content, file_name FROM messages WHERE room=? ORDER BY timestamp ASC", (room,))
+    history = [{"id": m[0], "user": m[1], "msgType": m[2], "text": m[3] if m[2]=='text' else '', "url": m[3] if m[2]!='text' else '', "fileName": m[4]} for m in c.fetchall()]
     conn.close()
     await websocket.send_json({"type": "history", "data": history})
 
@@ -141,17 +176,33 @@ async def websocket_endpoint(websocket: WebSocket, room: str, username: str, rol
             data = await websocket.receive_text()
             msg = json.loads(data)
             
-            # جلوگیری از ارسال پیام توسط کاربران عادی در کانال همگانی
-            if room == "Announcements" and role != "admin":
-                continue
-
             conn = sqlite3.connect(DB_FILE)
             c = conn.cursor()
-            c.execute("INSERT INTO messages (room, user, msg_type, content, file_name) VALUES (?, ?, ?, ?, ?)", 
-                      (room, msg['user'], msg['msgType'], msg.get('text', msg.get('url', '')), msg.get('fileName', '')))
+            
+            if msg.get("action") == "delete":
+                msg_id = msg.get("msg_id")
+                # چک کردن دسترسی ادمین یا سازنده پیام
+                c.execute("SELECT user FROM messages WHERE msg_id=?", (msg_id,))
+                row = c.fetchone()
+                if row and (row[0] == username or role == 'admin'):
+                    c.execute("DELETE FROM messages WHERE msg_id=?", (msg_id,))
+                    await manager.broadcast({"type": "deleted", "msg_id": msg_id}, room)
+            else:
+                if room == "Announcements" and role != "admin": continue
+                # اگر اتاق کانال کاستوم باشد چک شود مالک است یا ادمین
+                c.execute("SELECT type, owner FROM custom_rooms WHERE room_id=?", (room,))
+                r_data = c.fetchone()
+                if r_data and r_data[0] == 'channel' and role != 'admin' and r_data[1] != username:
+                    continue
+                
+                msg_id = str(uuid.uuid4())
+                msg["id"] = msg_id
+                c.execute("INSERT INTO messages (msg_id, room, user, msg_type, content, file_name) VALUES (?, ?, ?, ?, ?, ?)", 
+                          (msg_id, room, msg['user'], msg['msgType'], msg.get('text', msg.get('url', '')), msg.get('fileName', '')))
+                await manager.broadcast({"type": "message", "data": msg}, room)
+                
             conn.commit()
             conn.close()
-
-            await manager.broadcast({"type": "message", "data": msg}, room)
+            
     except WebSocketDisconnect:
         manager.disconnect(websocket, room)
