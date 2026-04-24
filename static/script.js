@@ -9,7 +9,6 @@ let ws = null;
 let autoDownload = true;
 let currentLang = localStorage.getItem('lang') || 'fa';
 
-// بارگذاری بک‌گراند تنظیم شده
 let savedBg = localStorage.getItem('chatBg');
 if(savedBg) document.getElementById('chatArea').style.backgroundImage = `url('${savedBg}')`;
 
@@ -18,12 +17,12 @@ const translations = {
         login_title: 'System Login', btn_login: 'Authenticate', search_ph: 'Search...', type_ph: 'Message...',
         new_group: 'New Group', settings: 'Settings', logout: 'Log Out', add_contact: 'Add Contact', 
         username_ph: 'Enter Username', cancel: 'Cancel', add: 'Add', create: 'Create', language: 'Language', 
-        auto_dl: 'Auto-Download', active_sessions: 'Active Sessions (IPs)', close: 'Close', chat_bg: 'Chat Background URL',
+        auto_dl: 'Auto-Download', active_sessions: 'Active Sessions', close: 'Close', chat_bg: 'Chat Background URL',
         system_channel: 'System Channel', private_chat: 'Private Chat', group: 'Public Group', channel: 'Public Channel'
     },
     'fa': {
         login_title: 'ورود به سیستم', btn_login: 'ورود / تایید', search_ph: 'جستجو...', type_ph: 'پیام خود را بنویسید...',
-        new_group: 'گروه / کانال جدید', settings: 'تنظیمات', logout: 'خروج از حساب', add_contact: 'افزودن مخاطب', 
+        new_group: 'گروه / کانال جدید', settings: 'تنظیمات', logout: 'خروج', add_contact: 'افزودن مخاطب', 
         username_ph: 'آیدی دقیق را وارد کنید', cancel: 'لغو', add: 'افزودن', create: 'ساختن', language: 'زبان برنامه', 
         auto_dl: 'دانلود خودکار', active_sessions: 'نشست‌های فعال', close: 'بستن', chat_bg: 'لینک پس‌زمینه چت',
         system_channel: 'کانال سیستم', private_chat: 'چت خصوصی', group: 'گروه عمومی', channel: 'کانال عمومی'
@@ -86,6 +85,7 @@ function initWebSocket() {
             if(msg.room === currentRoom) { const el = document.getElementById(`msg-${msg.msg_id}`); if(el) el.remove(); }
         }
     };
+    ws.onclose = () => { setTimeout(initWebSocket, 2000); };
 }
 
 async function loadInitData() {
@@ -127,7 +127,7 @@ function searchChat() {
     document.querySelectorAll('.chat-item').forEach(i => { i.style.display = i.querySelector('.chat-name').innerText.toLowerCase().includes(q) ? 'flex' : 'none'; });
 }
 
-// --- Actions (Groups, Contacts, IPs) ---
+// --- Actions ---
 async function fetchIPs() {
     const res = await fetch('/api/action', { method: 'POST', body: JSON.stringify({action: 'get_ips', user: currentUser}), headers: {'Content-Type': 'application/json'} });
     const data = await res.json();
@@ -156,7 +156,7 @@ async function submitCreation() {
     if(data.success) { closeModal('groupModal'); loadInitData(); openChat(data.room_id, t, t==='group'?'🌍':'📢', n); }
 }
 
-// --- WebSocket & Chat Functions ---
+// --- Chat Functions ---
 function openChat(roomId, type, icon, title) {
     document.querySelectorAll('.chat-item').forEach(c => c.classList.remove('active'));
     let activeItem = document.querySelector(`.chat-item[data-room="${roomId}"]`);
@@ -173,7 +173,6 @@ function openChat(roomId, type, icon, title) {
     document.getElementById('header-avatar').innerText = icon;
     document.getElementById('messages').innerHTML = '';
     
-    // پاک کردن بج نوتیفیکیشن
     let badgeId = type === 'private' ? `badge-dm_${roomId}` : `badge-${roomId}`;
     let badge = document.getElementById(badgeId);
     if(badge) { badge.style.display = 'none'; badge.innerText = '0'; }
@@ -184,7 +183,9 @@ function openChat(roomId, type, icon, title) {
 
     if (window.innerWidth <= 768) document.getElementById('sidebar').classList.add('hidden');
 
-    ws.send(JSON.stringify({action: 'get_history', room: currentRoom}));
+    if(ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({action: 'get_history', room: currentRoom}));
+    }
 }
 
 function closeChat() { document.getElementById('sidebar').classList.remove('hidden'); }
@@ -193,7 +194,7 @@ function handleNotification(msg) {
     let isDM = msg.room.startsWith('dm_');
     if (isDM && !msg.room.includes(currentUser)) return;
     
-    let targetId = isDM ? msg.room : msg.room; // باگ بج برای خصوصی در اینجا رفع شد
+    let targetId = isDM ? msg.room : msg.room;
     let badge = document.getElementById(`badge-${targetId}`);
     if(badge) { badge.style.display = 'inline-block'; badge.innerText = parseInt(badge.innerText) + 1; }
     
@@ -210,14 +211,14 @@ function appendMessage(data) {
         if(!autoDownload) {
             media = `<div style="position:relative; max-width:250px;" onclick="this.innerHTML='${tag}'">
                         ${data.msgType === 'image' ? `<img src="${data.url}" class="blur-media">` : `<div style="width:250px;height:150px;background:#111;border-radius:12px;border:1px solid #333;"></div>`}
-                        <div class="dl-overlay"><svg class="svg-icon"><use href="#icon-dl"></use></svg></div>
+                        <div class="dl-overlay"><svg style="width:24px;fill:white;"><use href="#icon-dl"></use></svg></div>
                      </div>`;
         } else media = tag;
     }
     else if (data.msgType === 'audio') media = `<audio controls src="${data.url}"></audio>`;
-    else if (data.msgType === 'file') media = `<a href="${data.url}" class="file-link" download><div class="file-icon"><svg class="svg-icon" style="width:20px;height:20px;"><use href="#icon-doc"></use></svg></div> <div style="overflow:hidden; text-overflow:ellipsis;">${data.fileName}</div></a>`;
+    else if (data.msgType === 'file') media = `<a href="${data.url}" class="file-link" download><div class="file-icon" style="font-size:20px;">📄</div> <div style="overflow:hidden; text-overflow:ellipsis;">${data.fileName}</div></a>`;
 
-    let delBtn = (isSelf || currentRole === 'admin') ? `<button class="delete-msg-btn" onclick="deleteMsg('${data.id}')"><svg class="svg-icon" style="width:16px;height:16px;"><use href="#icon-trash"></use></svg></button>` : '';
+    let delBtn = (isSelf || currentRole === 'admin') ? `<button class="delete-msg-btn" onclick="deleteMsg('${data.id}')"><svg style="width:16px;fill:currentColor;"><use href="#icon-trash"></use></svg></button>` : '';
 
     const html = `
         <div class="msg-row ${isSelf ? 'out' : 'in'}" id="msg-${data.id}">
@@ -233,9 +234,9 @@ function appendMessage(data) {
     msgBox.scrollTop = msgBox.scrollHeight;
 }
 
-function deleteMsg(id) { if(confirm("Delete message for everyone?")) ws.send(JSON.stringify({action: 'delete_msg', msg_id: id})); }
+function deleteMsg(id) { if(confirm("Delete message?")) ws.send(JSON.stringify({action: 'delete_msg', msg_id: id})); }
 
-// --- Input & Recording (Voice / Video) ---
+// --- Input & Recording ---
 let mediaRecorder; let audioChunks = []; let isRecording = false;
 let recTimerInterval; let recSeconds = 0;
 
