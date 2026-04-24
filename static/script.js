@@ -3,9 +3,18 @@ let currentRole = null;
 let currentRoom = null;
 let targetUserForDM = null; 
 let ws = null;
-let autoDownload = true;
 let currentLang = localStorage.getItem('lang') || 'fa';
 let myContacts = [];
+
+// بارگذاری تم ذخیره شده
+let savedTheme = localStorage.getItem('hub_theme') || 'dark';
+document.documentElement.setAttribute('data-theme', savedTheme);
+
+function toggleTheme() {
+    savedTheme = savedTheme === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', savedTheme);
+    localStorage.setItem('hub_theme', savedTheme);
+}
 
 let savedBg = localStorage.getItem('chatBg');
 if(savedBg) document.getElementById('chatArea').style.backgroundImage = `url('${savedBg}')`;
@@ -14,13 +23,13 @@ const translations = {
     'en': {
         login_title: 'System Login', btn_login: 'Login', search_ph: 'Search...', type_ph: 'Message...',
         settings: 'Settings', add_contact: 'New Chat / Group', username_ph: 'Enter exact username', 
-        language: 'Language', auto_dl: 'Auto-Download', active_sessions: 'Active IPs (Real IP)', chat_bg: 'Chat Wallpaper URL',
+        language: 'Language', active_sessions: 'Active IPs (Real IP)', chat_bg: 'Chat Wallpaper URL',
         system_channel: 'System Channel', private_chat: 'Private Chat', group: 'Private Group'
     },
     'fa': {
         login_title: 'ورود به سیستم', btn_login: 'ورود / تایید', search_ph: 'جستجو...', type_ph: 'پیام خود را بنویسید...',
         settings: 'تنظیمات سیستم', add_contact: 'چت یا گروه جدید', username_ph: 'آیدی دقیق را وارد کنید', 
-        language: 'زبان برنامه', auto_dl: 'دانلود خودکار', active_sessions: 'آی‌پی‌های متصل شما', chat_bg: 'پس‌زمینه چت (لینک عکس)',
+        language: 'زبان برنامه', active_sessions: 'آی‌پی‌های متصل شما', chat_bg: 'پس‌زمینه چت (لینک عکس)',
         system_channel: 'کانال سیستم', private_chat: 'چت خصوصی', group: 'گروه خصوصی'
     }
 };
@@ -35,7 +44,7 @@ function applyLang() {
 applyLang();
 
 function changeLang(lang) { currentLang = lang; localStorage.setItem('lang', lang); applyLang(); }
-function toggleAutoDl(state) { autoDownload = state; }
+
 function changeBg(url) { 
     if(url.trim() === '') { localStorage.removeItem('chatBg'); document.getElementById('chatArea').style.backgroundImage = 'none'; }
     else { localStorage.setItem('chatBg', url); document.getElementById('chatArea').style.backgroundImage = `url('${url}')`; }
@@ -57,8 +66,8 @@ async function login() {
             
             initWebSocket();
             loadInitData();
-        } else alert("اطلاعات ورود اشتباه است / Invalid Login");
-    } catch(e) { alert("خطا در اتصال"); }
+        } else alert("اطلاعات ورود اشتباه است");
+    } catch(e) { alert("خطا در اتصال به سرور"); }
 }
 
 function initWebSocket() {
@@ -78,7 +87,6 @@ function initWebSocket() {
             }
         } 
         else if (msg.type === 'new_msg') { 
-            // اگر کاربر در روم است پیام رندر شود، وگرنه نوتیف برود (بک‌اند فیلتر را انجام داده)
             if(msg.room === currentRoom) appendMessage(msg.data);
             else handleNotification(msg);
         }
@@ -92,7 +100,7 @@ function initWebSocket() {
 async function loadInitData() {
     const res = await fetch('/api/action', { method: 'POST', body: JSON.stringify({action: 'get_init_data', user: currentUser}), headers: {'Content-Type': 'application/json'} });
     const data = await res.json();
-    myContacts = data.contacts; // ذخیره مخاطبین برای ساخت گروه
+    myContacts = data.contacts; 
 
     const list = document.getElementById('chat-list');
     list.innerHTML = `<div class="chat-item" data-room="Announcements" onclick="openChat('Announcements', 'channel', '📢', 'Announcements')">
@@ -108,7 +116,7 @@ async function loadInitData() {
                 <div class="avatar">👤</div><div class="chat-info"><div class="chat-name">${c}</div><div class="chat-preview" data-i18n="private_chat">${translations[currentLang].private_chat}</div></div><span class="unread-badge" id="badge-dm_${c}">0</span></div>`;
     });
     
-    openChat('Announcements', 'channel', '📢', 'Announcements');
+    if(!currentRoom) openChat('Announcements', 'channel', '📢', 'Announcements');
 }
 
 function openModal(id) { 
@@ -131,7 +139,7 @@ function openContactModal() {
     myContacts.forEach(c => {
         html += `<label class="contact-check"><input type="checkbox" value="${c}"> <span>${c}</span></label>`;
     });
-    document.getElementById('groupMembersList').innerHTML = html;
+    document.getElementById('groupMembersList').innerHTML = html || '<p style="font-size:12px; color:var(--c-gray);">شما هنوز با کسی چت نکرده‌اید.</p>';
     openModal('contactModal');
 }
 
@@ -156,9 +164,8 @@ async function submitCreation() {
     const n = document.getElementById('creationName').value.trim(); 
     if(!n) return;
     
-    // جمع‌آوری اعضای انتخاب شده
     let members = [];
-    document.querySelectorAll('.contact-check input:checked').forEach(chk => members.append(chk.value));
+    document.querySelectorAll('.contact-check input:checked').forEach(chk => members.push(chk.value));
 
     const res = await fetch('/api/action', { method: 'POST', body: JSON.stringify({action:'create_room', type: 'group', name: n, user: currentUser, members: members}), headers: {'Content-Type': 'application/json'} });
     const data = await res.json();
@@ -208,10 +215,8 @@ function closeChat() { document.getElementById('sidebar').classList.remove('hidd
 
 function handleNotification(msg) {
     let isDM = msg.room.startsWith('dm_');
-    // بررسی پیام خصوصی
     if (isDM && !msg.room.includes(currentUser)) return;
     
-    // بررسی اینکه اگر گروه خصوصی است، آیا کاربر عضو آن است؟ (بک‌اند فیلتر می‌کند، اما اینجا هم چک می‌کنیم)
     if (msg.data.roomMembers && !msg.data.roomMembers.includes(currentUser)) return;
 
     if (isDM && !document.querySelector(`.chat-item[data-room="${msg.data.user}"]`)) loadInitData(); 
@@ -228,16 +233,32 @@ function appendMessage(data) {
     const msgBox = document.getElementById('messages');
     
     let media = '';
-    if (data.msgType === 'image' || data.msgType === 'video') {
-        let tag = data.msgType === 'image' ? `<img src="${data.url}">` : `<video controls src="${data.url}" playsinline></video>`;
-        if(!autoDownload && data.msgType === 'image') {
-            media = `<div style="position:relative;" onclick="this.innerHTML='${tag}'"><img src="${data.url}" style="filter:blur(10px);"></div>`;
-        } else media = tag;
+    if (data.msgType === 'image') {
+        media = `<img src="${data.url}">`;
+    }
+    else if (data.msgType === 'video') {
+        // ایجاد حالت دایره ای مثل تلگرام برای ویدیو مسیج
+        let isVideoMessage = data.url.includes('rec.webm') || data.url.includes('rec.mp4');
+        if (isVideoMessage) {
+            media = `<video class="video-msg" autoplay loop muted playsinline src="${data.url}"></video>`;
+        } else {
+            media = `<video controls playsinline style="max-width:100%; border-radius:12px; margin-top:5px;" src="${data.url}"></video>`;
+        }
     }
     else if (data.msgType === 'audio') media = `<audio controls src="${data.url}"></audio>`;
-    else if (data.msgType === 'file') media = `<a href="${data.url}" class="file-link" download><div class="file-icon"><svg style="width:24px;"><use href="#icon-attach"></use></svg></div> <div style="overflow:hidden; text-overflow:ellipsis;">${data.fileName}</div></a>`;
+    else if (data.msgType === 'file') {
+        let fName = data.fileName || "File";
+        media = `
+        <a href="${data.url}" class="file-link" download>
+            <div class="file-icon"><svg style="width:24px;fill:white;"><use href="#icon-doc"></use></svg></div> 
+            <div class="file-info-dl">
+                <span class="file-name-dl" dir="auto">${fName}</span>
+                <span style="font-size:11px; opacity:0.7;">Download</span>
+            </div>
+        </a>`;
+    }
 
-    let delBtn = (isSelf || currentRole === 'admin') ? `<button class="delete-btn" onclick="deleteMsg('${data.id}')"><svg style="width:20px;"><use href="#icon-trash"></use></svg></button>` : '';
+    let delBtn = (isSelf || currentRole === 'admin') ? `<button class="delete-btn" onclick="deleteMsg('${data.id}')"><svg style="width:20px; fill:currentColor;"><use href="#icon-trash"></use></svg></button>` : '';
 
     const html = `
         <div class="msg-row ${isSelf ? 'out' : 'in'}" id="msg-${data.id}">
@@ -253,7 +274,7 @@ function appendMessage(data) {
     msgBox.scrollTop = msgBox.scrollHeight;
 }
 
-function deleteMsg(id) { if(confirm("آیا از حذف پیام مطمئن هستید؟")) ws.send(JSON.stringify({action: 'delete_msg', msg_id: id})); }
+function deleteMsg(id) { if(confirm("حذف پیام برای همه؟")) ws.send(JSON.stringify({action: 'delete_msg', msg_id: id})); }
 
 // --- Inputs & Recording ---
 let mediaRecorder; let audioChunks = []; let isRecording = false;
@@ -265,10 +286,10 @@ function checkInput() {
     const vBtn = document.getElementById('actionVideoBtn');
     
     if (input.value.trim() !== '') { 
-        btn.innerHTML = '<svg><use href="#icon-send"></use></svg>'; btn.classList.add('send'); 
+        btn.innerHTML = '<svg style="width:24px;fill:currentColor;"><use href="#icon-send"></use></svg>'; btn.classList.add('send'); 
         vBtn.style.display = 'none';
     } else { 
-        btn.innerHTML = '<svg><use href="#icon-mic"></use></svg>'; btn.classList.remove('send'); 
+        btn.innerHTML = '<svg style="width:24px;fill:currentColor;"><use href="#icon-mic"></use></svg>'; btn.classList.remove('send'); 
         vBtn.style.display = 'flex';
     }
 }
@@ -296,9 +317,8 @@ function updateTimer() {
 async function startRecord(type, btn) {
     if (!isRecording) {
         try {
-            const stream = await navigator.mediaDevices.getUserMedia(type === 'video' ? { audio: true, video: { facingMode: "user" } } : { audio: true });
+            const stream = await navigator.mediaDevices.getUserMedia(type === 'video' ? { audio: true, video: { facingMode: "user", aspectRatio: 1 } } : { audio: true });
             
-            // نمایش زنده چهره در ویدیو مسیج
             if (type === 'video') {
                 const vidPrev = document.getElementById('videoPreview');
                 vidPrev.srcObject = stream;
@@ -308,7 +328,6 @@ async function startRecord(type, btn) {
             mediaRecorder = new MediaRecorder(stream);
             mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
             mediaRecorder.onstop = async () => {
-                // مخفی کردن ویدیو پریویو
                 const vidPrev = document.getElementById('videoPreview');
                 vidPrev.style.display = 'none';
                 vidPrev.srcObject = null;
@@ -331,7 +350,7 @@ async function startRecord(type, btn) {
             if(type === 'video') document.getElementById('actionBtn').style.display = 'none';
             else document.getElementById('actionVideoBtn').style.display = 'none';
             
-        } catch (err) { alert("لطفا دسترسی میکروفون/دوربین را در مرورگر مجاز کنید."); }
+        } catch (err) { alert("لطفا دسترسی میکروفون/دوربین را در مرورگر تایید کنید"); }
     } else {
         mediaRecorder.stop(); isRecording = false; btn.classList.remove('rec');
         clearInterval(recTimerInterval);
