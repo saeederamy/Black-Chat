@@ -147,15 +147,11 @@ async def api_action(request: Request):
         u = data.get("user")
         c.execute("SELECT contact FROM contacts WHERE owner=?", (u,))
         res["contacts"] = [r[0] for r in c.fetchall()]
-        
         c.execute("SELECT r.room_id, r.name FROM custom_rooms r JOIN room_members m ON r.room_id = m.room_id WHERE m.user = ?", (u,))
         res["custom_rooms"] = [{"id": r[0], "type": "group", "name": r[1]} for r in c.fetchall()]
-        
         c.execute("SELECT avatar FROM profiles WHERE user=?", (u,))
         av = c.fetchone()
         res["avatar"] = av[0] if av else ""
-        
-        # گرفتن پروفایل بقیه برای لود شدن سریع
         c.execute("SELECT user, avatar FROM profiles")
         res["all_avatars"] = {r[0]: r[1] for r in c.fetchall()}
 
@@ -168,7 +164,6 @@ async def api_action(request: Request):
         owner = data.get("user")
         room_name = data.get("name")
         members = data.get("members", [])
-        
         c.execute("INSERT INTO custom_rooms (room_id, name, owner) VALUES (?, ?, ?)", (room_id, room_name, owner))
         c.execute("INSERT INTO room_members (room_id, user) VALUES (?, ?)", (room_id, owner))
         for m in members:
@@ -196,6 +191,10 @@ async def websocket_endpoint(websocket: WebSocket, username: str, role: str):
             data = await websocket.receive_text()
             msg = json.loads(data)
             action = msg.get("action")
+            
+            # --- سیستم جلوگیری از قطع شدن CDN ایران (Heartbeat) ---
+            if action == "ping":
+                continue 
             
             conn = sqlite3.connect(DB_FILE)
             c = conn.cursor()
@@ -257,7 +256,6 @@ async def websocket_endpoint(websocket: WebSocket, username: str, role: str):
                 
                 await manager.broadcast({"type": "new_msg", "room": room, "data": msg_payload})
                 
-            # WebRTC Signaling Route
             elif action == "webrtc":
                 await manager.broadcast({"type": "webrtc", "data": msg})
                 
