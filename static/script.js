@@ -1,8 +1,15 @@
+const SERVER_CONFIG = {
+    turnDomain: window.location.hostname,   
+    turnPort: "3478",                 
+    turnUser: "user",            
+    turnPass: "pass"         
+};
+
 let currentUser = null; let currentRole = null; let currentRoom = null; let targetUserForDM = null; 
 let ws = null; let currentLang = localStorage.getItem('lang') || 'fa'; let myContacts = [];
 let contextMsgId = null; let contextMsgText = null; let contextMsgSender = null;
 let replyToMsg = null; let selectionMode = false; let selectedMsgs = [];
-let editMsgId = null; // برای ویرایش پیام
+let editMsgId = null; 
 let autoDownload = true; 
 
 let savedTheme = localStorage.getItem('hub_theme') || 'dark';
@@ -28,7 +35,6 @@ function changeLang(lang) { currentLang = lang; localStorage.setItem('lang', lan
 function toggleAutoDl(state) { autoDownload = state; }
 function changeBg(url) { if(url.trim() === '') { localStorage.removeItem('chatBg'); document.getElementById('chatArea').style.backgroundImage = 'none'; } else { localStorage.setItem('chatBg', url); document.getElementById('chatArea').style.backgroundImage = `url('${url}')`; } }
 
-// --- حفظ لاگین ---
 window.onload = () => {
     const s_usr = localStorage.getItem('bc_user');
     const s_role = localStorage.getItem('bc_role');
@@ -87,6 +93,7 @@ function initWebSocket() {
             }
         }
         else if (msg.type === 'reaction_updated') { if(msg.room === currentRoom) updateReactionUI(msg.msg_id, msg.reactions); }
+        else if (msg.type === 'webrtc') { handleWebRTC(msg.data); }
     };
     ws.onclose = () => { setTimeout(initWebSocket, 2000); };
     setInterval(() => { if(ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({action: 'ping'})); }, 15000);
@@ -104,13 +111,12 @@ async function loadInitData() {
 
     const list = document.getElementById('chat-list');
     
-    // ایزوله کردن دیتا از onclick
     list.innerHTML = `<div class="chat-item" data-room="Announcements" onclick="openChat('Announcements', 'channel', 'Announcements')">
             <div class="avatar" style="background:var(--c-red); color:white;">📢</div><div class="chat-info"><div class="chat-name">Announcements</div><div class="chat-preview" data-i18n="system_channel">${translations[currentLang].system_channel}</div></div><span class="unread-badge" id="badge-Announcements">0</span></div>`;
     
     data.custom_rooms.forEach(r => {
         let sub = translations[currentLang].group;
-        list.innerHTML += `<div class="chat-item" data-room="${r.id}" onclick="openChat('${r.id}', 'group', '${r.name}')">
+        list.innerHTML += `<div class="chat-item" data-room="${r.id}" onclick="openChat('${r.id}', 'group', '${r.name.replace(/'/g, "\\'")}')">
                 <div class="avatar" style="background:var(--c-blue); color:white;">👥</div><div class="chat-info"><div class="chat-name">${r.name}</div><div class="chat-preview">${sub}</div></div><span class="unread-badge" id="badge-${r.id}">0</span></div>`;
     });
 
@@ -130,7 +136,7 @@ function closeContextMenu() { document.getElementById('msgContextMenu').style.di
 function openCreateModal() {
     let html = '';
     myContacts.forEach(c => { 
-        html += `<label class="contact-check"><input type="checkbox" value="${c}" style="width:18px;height:18px;cursor:pointer;accent-color:var(--c-blue);"> <span>${c}</span></label>`; 
+        html += `<label class="contact-check"><input type="checkbox" value="${c}"> <span>${c}</span></label>`; 
     });
     document.getElementById('groupMembersList').innerHTML = html || '<p style="font-size:12px; color:var(--c-gray);">مخاطبی یافت نشد.</p>';
     switchCreateTab('private');
@@ -198,7 +204,6 @@ function openChat(roomId, type, title, targetUser = null) {
     if(roomId === 'Announcements') st = translations[currentLang].system_channel;
     document.getElementById('room-status').innerText = st;
     
-    // حل باگ کوتیشن با پردازش محلی
     let headerAv = '📢';
     if (type === 'group') headerAv = '👥';
     if (type === 'private') headerAv = (targetUser && userAvatars[targetUser]) ? `<img src="${userAvatars[targetUser]}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;">` : '👤';
@@ -213,6 +218,9 @@ function openChat(roomId, type, title, targetUser = null) {
     const inputArea = document.getElementById('input-container');
     if ((roomId === 'Announcements' || type === 'channel') && currentRole !== 'admin') inputArea.style.display = 'none';
     else inputArea.style.display = 'flex';
+    
+    if(type === 'private') document.getElementById('callBtn').style.display = 'flex';
+    else document.getElementById('callBtn').style.display = 'none';
 
     if (window.innerWidth <= 768) document.getElementById('sidebar').classList.add('hidden');
     if(ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({action: 'get_history', room: currentRoom}));
@@ -233,7 +241,7 @@ function openProfile() {
         if(vid) mediaH += `<video src="${vid.src}" style="width:30%; height:80px; object-fit:cover; border-radius:8px; border:1px solid var(--border);"></video>`;
         
         let aud = b.querySelector('audio'); 
-        if(aud) audioH += `<audio controls src="${aud.src}" style="width:100%; height:40px; margin-bottom:5px; border-radius:20px;"></audio>`;
+        if(aud) audioH += `<div style="background:var(--bg-input); padding:10px; border-radius:12px; display:flex; align-items:center; gap:10px; width:100%; border:1px solid var(--border);"><div style="background:var(--c-blue); width:40px; height:40px; border-radius:50%; display:flex; justify-content:center; align-items:center; color:white; flex-shrink:0;">🎵</div><audio controls src="${aud.src}" style="height:35px; width:100%; outline:none;"></audio></div>`;
 
         let link = b.querySelector('.file-link');
         if(link) filesH += `<a href="${link.href}" class="file-link" download>${link.innerHTML}</a>`;
@@ -241,7 +249,7 @@ function openProfile() {
         let txt = b.querySelector('.msg-text-content');
         if(txt) {
             let urls = txt.innerText.match(/https?:\/\/[^\s]+/g);
-            if(urls) urls.forEach(u => linksH += `<a href="${u}" target="_blank" style="color:var(--c-blue); padding:10px; border-bottom:1px solid var(--border); display:block;">${u}</a>`);
+            if(urls) urls.forEach(u => linksH += `<a href="${u}" target="_blank" style="color:var(--c-blue); padding:10px; border-bottom:1px solid var(--border); display:block; border-radius:8px; background:var(--bg-input); margin-bottom:5px;">${u}</a>`);
         }
     });
     
@@ -262,21 +270,24 @@ function switchProfTab(tab, btn) {
 
 function handleNotification(msg) {
     let isDM = msg.room.startsWith('dm_');
+    let isGroup = msg.room.startsWith('rm_');
+
     if (isDM && !msg.room.includes(currentUser)) return;
-    if (msg.data.roomMembers && !msg.data.roomMembers.includes(currentUser)) return;
+    if (isGroup && msg.data.roomMembers && !msg.data.roomMembers.includes(currentUser)) return;
+
     if (isDM && !document.querySelector(`.chat-item[data-room="${msg.data.user}"]`)) loadInitData(); 
 
     let targetId = isDM ? msg.data.user : msg.room;
     let badge = document.getElementById(`badge-${isDM ? 'dm_'+targetId : targetId}`);
-    if(badge) { badge.style.display = 'inline-block'; badge.innerText = parseInt(badge.innerText) + 1; }
+    if(badge) { badge.style.display = 'inline-block'; badge.innerText = (parseInt(badge.innerText) || 0) + 1; }
+    
     try { document.getElementById('notif-sound').play(); } catch(e){}
 
     if ("Notification" in window && Notification.permission === "granted" && document.hidden) {
-        new Notification(isDM ? msg.data.user : msg.room, { body: msg.data.msgType === 'text' ? msg.data.text : "پیام جدید" });
+        new Notification(isDM ? msg.data.user : msg.room, { body: msg.data.msgType === 'text' ? msg.data.text : "پیام جدید رسانه‌ای" });
     }
 }
 
-// سیستم تشخیص کلیک طولانی (Long Press) برای باز شدن منو در موبایل
 let pressTimer;
 function startPress(e, id, text, sender) { pressTimer = window.setTimeout(() => { openMsgMenu(e, id, text, sender); }, 600); }
 function cancelPress() { clearTimeout(pressTimer); }
@@ -286,7 +297,6 @@ function appendMessage(data) {
     const msgBox = document.getElementById('messages');
     
     let media = '';
-    // ویدیو مسیج مربعی و استاندارد بدون دکمه‌های آزاردهنده
     if (data.msgType === 'image') media = `<img src="${data.url}">`;
     else if (data.msgType === 'video') {
         media = `<video controls playsinline style="max-width:100%; border-radius:12px; margin-top:5px; border:1px solid var(--border);" src="${data.url}"></video>`;
@@ -344,11 +354,9 @@ function openMsgMenu(e, id, textEncoded, sender) {
     const menu = document.getElementById('msgContextMenu');
     menu.style.display = 'flex';
     
-    // دکمه ویرایش فقط برای پیام متنی خودش
     if(sender === currentUser && contextMsgText !== '') document.getElementById('editBtnOption').style.display = 'flex';
     else document.getElementById('editBtnOption').style.display = 'none';
     
-    // تشخیص کلیک ماوس یا تاچ موبایل
     let x = window.innerWidth / 2; let y = window.innerHeight / 2;
     if(e) {
         x = e.clientX || (e.touches && e.touches[0].clientX) || x;
@@ -404,7 +412,7 @@ function cancelSelection() {
 function deleteSelected() { if(confirm(`حذف ${selectedMsgs.length} پیام برای همه؟`)) { ws.send(JSON.stringify({action: 'delete_msg', msg_ids: selectedMsgs})); cancelSelection(); } }
 function forwardSelected() { alert("امکان هدایت به زودی..."); cancelSelection(); }
 
-// --- Inputs & Recording (خالی شدن کامل حافظه در هر بار ضبط) ---
+// --- Inputs & Recording (باگ ویس کاملاً برطرف شد) ---
 let mediaRecorder; let audioChunks = []; let isRecording = false; let isPaused = false;
 let recTimerInterval; let recSeconds = 0;
 
@@ -474,25 +482,18 @@ async function startRecord(type, btn) {
             recSeconds = 0; document.getElementById('recTimer').innerText = "00:00";
             recTimerInterval = setInterval(updateTimer, 1000);
             
-        } catch (err) { alert("لطفا دسترسی میکروفون/دوربین را در مرورگر مجاز کنید."); }
+        } catch (err) { alert("لطفا دسترسی میکروفون/دوربین را مجاز کنید."); }
     }
 }
 
 function pauseResumeRecord() {
     const btn = document.getElementById('pauseRecBtn');
-    if(isPaused) { mediaRecorder.resume(); isPaused = false; btn.innerHTML = '<svg style="width:22px;fill:currentColor;"><use href="#icon-pause"></use></svg>'; btn.style.color = "var(--c-blue)";}
+    if(isPaused) { mediaRecorder.resume(); isPaused = false; btn.innerHTML = '<svg style="width:20px;fill:currentColor;"><use href="#icon-pause"></use></svg>'; btn.style.color = "var(--c-blue)";}
     else { mediaRecorder.pause(); isPaused = true; btn.innerHTML = '▶'; btn.style.color = "var(--c-red)";}
 }
 
-function cancelRecord() {
-    audioChunks = []; // خالی کردن دیتا تا چیزی ارسال نشود
-    mediaRecorder.stop();
-    resetRecordUI();
-}
-
-function stopAndSendRecord() {
-    mediaRecorder.stop(); resetRecordUI();
-}
+function cancelRecord() { audioChunks = []; mediaRecorder.stop(); resetRecordUI(); }
+function stopAndSendRecord() { mediaRecorder.stop(); resetRecordUI(); }
 
 function resetRecordUI() {
     isRecording = false; clearInterval(recTimerInterval);
@@ -512,4 +513,95 @@ async function uploadFile() {
     const res = await fetch('/api/upload', { method: 'POST', body: fd });
     const data = await res.json();
     if (data.url) { ws.send(JSON.stringify({action: 'send_msg', room: currentRoom, user: currentUser, targetUser: targetUserForDM, msgType: data.type, url: data.url, fileName: data.name, replyTo: replyToMsg})); cancelReply(); }
+}
+
+// --- WebRTC Voice Call ---
+let localStreamCall; let peerConnection; let callTarget;
+
+const servers = { 
+    'iceServers': [
+        { 'urls': 'stun:stun.l.google.com:19302' },
+        { 
+            'urls': `turn:${SERVER_CONFIG.turnDomain}:${SERVER_CONFIG.turnPort}`,
+            'username': SERVER_CONFIG.turnUser,
+            'credential': SERVER_CONFIG.turnPass
+        }
+    ],
+    'iceTransportPolicy': 'all'
+};
+
+async function startCall() {
+    if(!targetUserForDM) return;
+    callTarget = targetUserForDM;
+    document.getElementById('callModal').style.display = 'flex';
+    document.getElementById('callStatusText').innerText = "در حال تماس...";
+    document.getElementById('callUserText').innerText = callTarget;
+    document.getElementById('callBtns').innerHTML = `<button class="call-btn btn-rej" onclick="endCall()" style="background:var(--c-red); color:white;">✖</button>`;
+    
+    try {
+        localStreamCall = await navigator.mediaDevices.getUserMedia({ audio: true });
+        peerConnection = new RTCPeerConnection(servers);
+        localStreamCall.getTracks().forEach(t => peerConnection.addTrack(t, localStreamCall));
+        
+        peerConnection.onicecandidate = e => { if(e.candidate) ws.send(JSON.stringify({action: 'webrtc', type: 'ice', targetUser: callTarget, candidate: e.candidate, from: currentUser})); };
+        peerConnection.ontrack = e => { document.getElementById('remoteAudio').srcObject = e.streams[0]; };
+        
+        const offer = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offer);
+        ws.send(JSON.stringify({action: 'webrtc', type: 'offer', targetUser: callTarget, offer: offer, from: currentUser}));
+    } catch(err) { alert("عدم دسترسی به میکروفون!"); endCall(false); }
+}
+
+function handleWebRTC(data) {
+    if(data.targetUser !== currentUser) return;
+    
+    if(data.type === 'offer') {
+        callTarget = data.from;
+        document.getElementById('callModal').style.display = 'flex';
+        document.getElementById('callStatusText').innerText = "تماس ورودی...";
+        document.getElementById('callUserText').innerText = callTarget;
+        document.getElementById('callBtns').innerHTML = `<button class="call-btn btn-ans" onclick='acceptCall(${JSON.stringify(data.offer)})' style="background:#52c41a; color:white;">📞</button><button class="call-btn btn-rej" onclick="endCall()" style="background:var(--c-red); color:white;">✖</button>`;
+        try { document.getElementById('notif-sound').play(); } catch(e){}
+    }
+    else if(data.type === 'answer') {
+        peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+        document.getElementById('callStatusText').innerText = "در حال مکالمه";
+    }
+    else if(data.type === 'ice') {
+        if(peerConnection) peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+    }
+    else if(data.type === 'end') {
+        endCall(false);
+    }
+}
+
+async function acceptCall(offerData) {
+    document.getElementById('callStatusText').innerText = "در حال اتصال...";
+    document.getElementById('callBtns').innerHTML = `<button class="call-btn btn-rej" onclick="endCall()" style="background:var(--c-red); color:white;">✖</button>`;
+    
+    try {
+        localStreamCall = await navigator.mediaDevices.getUserMedia({ audio: true });
+        peerConnection = new RTCPeerConnection(servers);
+        localStreamCall.getTracks().forEach(t => peerConnection.addTrack(t, localStreamCall));
+        
+        peerConnection.onicecandidate = e => { if(e.candidate) ws.send(JSON.stringify({action: 'webrtc', type: 'ice', targetUser: callTarget, candidate: e.candidate, from: currentUser})); };
+        peerConnection.ontrack = e => { document.getElementById('remoteAudio').srcObject = e.streams[0]; };
+        
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(offerData));
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
+        
+        ws.send(JSON.stringify({action: 'webrtc', type: 'answer', targetUser: callTarget, answer: answer, from: currentUser}));
+        document.getElementById('callStatusText').innerText = "در حال مکالمه";
+    } catch(err) { alert("عدم دسترسی به میکروفون!"); endCall(); }
+}
+
+function endCall(notifyOther = true) {
+    if(peerConnection) peerConnection.close();
+    if(localStreamCall) localStreamCall.getTracks().forEach(t => t.stop());
+    peerConnection = null; localStreamCall = null;
+    document.getElementById('callModal').style.display = 'none';
+    document.getElementById('remoteAudio').srcObject = null;
+    if(notifyOther && callTarget) ws.send(JSON.stringify({action: 'webrtc', type: 'end', targetUser: callTarget, from: currentUser}));
+    callTarget = null;
 }
