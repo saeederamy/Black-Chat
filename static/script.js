@@ -1,8 +1,8 @@
 // =========================================================
-// ⚙️ WebRTC STUN/TURN Config 
+// ⚙️ WebRTC STUN/TURN Config (بدون نیاز به دامین)
 // =========================================================
 const SERVER_CONFIG = {
-    turnDomain: window.location.hostname,   
+    turnDomain: window.location.hostname, // آی‌پی سرور شما به صورت اتوماتیک خوانده می‌شود  
     turnPort: "3478",                 
     turnUser: "user",            
     turnPass: "pass"         
@@ -37,6 +37,7 @@ function changeLang(lang) { currentLang = lang; localStorage.setItem('lang', lan
 function toggleAutoDl(state) { autoDownload = state; }
 function changeBg(url) { if(url.trim() === '') { localStorage.removeItem('chatBg'); document.getElementById('chatArea').style.backgroundImage = 'none'; } else { localStorage.setItem('chatBg', url); document.getElementById('chatArea').style.backgroundImage = `url('${url}')`; } }
 
+// سیستم حفظ لاگین
 window.onload = () => {
     const s_usr = localStorage.getItem('bc_user');
     const s_role = localStorage.getItem('bc_role');
@@ -59,6 +60,10 @@ async function login() {
         if (data.success) {
             currentUser = data.username; currentRole = data.role;
             localStorage.setItem('bc_user', currentUser); localStorage.setItem('bc_role', currentRole);
+            
+            // درخواست نوتیفیکیشن
+            if ("Notification" in window && Notification.permission !== "granted") { Notification.requestPermission(); }
+            
             document.getElementById('login-screen').style.display = 'none'; document.getElementById('app').style.display = 'flex';
             initWebSocket(); loadInitData();
         } else alert("اطلاعات ورود اشتباه است");
@@ -99,18 +104,19 @@ async function loadInitData() {
     if(data.avatar) { document.getElementById('my-avatar').src = data.avatar; document.getElementById('my-avatar').style.display='block'; document.getElementById('my-initial').style.display='none'; }
 
     const list = document.getElementById('chat-list');
-    // باگ کوتیشن برطرف شد (از پاس دادن تگ img درون onclick جلوگیری شد)
     list.innerHTML = `<div class="chat-item" data-room="Announcements" onclick="openChat('Announcements', 'channel', 'Announcements')">
             <div class="avatar" style="background:var(--c-red); color:white;">📢</div><div class="chat-info"><div class="chat-name">Announcements</div><div class="chat-preview" data-i18n="system_channel">${translations[currentLang].system_channel}</div></div><span class="unread-badge" id="badge-Announcements">0</span></div>`;
     
     data.custom_rooms.forEach(r => {
         let sub = r.type === 'group' ? translations[currentLang].group : translations[currentLang].channel;
+        // حل باگ کوتیشن: هیچ HTML ای وارد onclick نمیشود
         list.innerHTML += `<div class="chat-item" data-room="${r.id}" onclick="openChat('${r.id}', '${r.type}', '${r.name}')">
                 <div class="avatar" style="background:var(--c-blue); color:white;">👥</div><div class="chat-info"><div class="chat-name">${r.name}</div><div class="chat-preview">${sub}</div></div><span class="unread-badge" id="badge-${r.id}">0</span></div>`;
     });
 
     data.contacts.forEach(c => {
         let avHTML = userAvatars[c] ? `<img src="${userAvatars[c]}">` : '👤';
+        // حل باگ کوتیشن: فقط استرینگ های ساده پاس داده میشود
         list.innerHTML += `<div class="chat-item" data-room="${c}" onclick="openChat('${c}', 'private', '${c}', '${c}')">
                 <div class="avatar">${avHTML}</div><div class="chat-info"><div class="chat-name">${c}</div><div class="chat-preview" data-i18n="private_chat">${translations[currentLang].private_chat}</div></div><span class="unread-badge" id="badge-dm_${c}">0</span></div>`;
     });
@@ -176,7 +182,7 @@ async function submitCreation() {
     if(data.success) { closeModal('createModal'); loadInitData(); openChat(data.room_id, t, n); }
 }
 
-// تابع باز کردن چت (ایزوله از تگ‌های HTML)
+// تابع ایمن شده از باگ HTML
 function openChat(roomId, type, title, targetUser = null) {
     document.querySelectorAll('.chat-item').forEach(c => c.classList.remove('active'));
     let activeItem = document.querySelector(`.chat-item[data-room="${roomId}"]`);
@@ -192,7 +198,7 @@ function openChat(roomId, type, title, targetUser = null) {
     if(roomId === 'Announcements') st = translations[currentLang].system_channel;
     document.getElementById('room-status').innerText = st;
     
-    // تنظیم آیکون چت در هدر با جاوا اسکریپت
+    // پردازش آیکون چت در محیط امن
     let headerAv = '📢';
     if (type === 'group') headerAv = '👥';
     if (type === 'private') headerAv = (targetUser && userAvatars[targetUser]) ? `<img src="${userAvatars[targetUser]}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;">` : '👤';
@@ -217,7 +223,6 @@ function openChat(roomId, type, title, targetUser = null) {
 
 function closeChat() { document.getElementById('sidebar').classList.remove('hidden'); }
 
-// Profile Shared Media
 function openProfile() {
     if(!currentRoom) return;
     document.getElementById('prof-avatar').innerHTML = document.getElementById('header-avatar').innerHTML;
@@ -242,7 +247,7 @@ function openProfile() {
     
     document.getElementById('tab-media').innerHTML = mediaH || '<p style="padding:20px; color:var(--c-gray);">محتوایی یافت نشد.</p>';
     document.getElementById('tab-files').innerHTML = filesH || '<p style="padding:20px; color:var(--c-gray);">فایلی یافت نشد.</p>';
-    document.getElementById('tab-audio').innerHTML = audioH || '<p style="padding:20px; color:var(--c-gray);">ویسی یافت نشد.</p>';
+    document.getElementById('tab-audio').innerHTML = audioH || '<p style="padding:20px; color:var(--c-gray);">ویس/ویدیویی یافت نشد.</p>';
     document.getElementById('tab-links').innerHTML = linksH || '<p style="padding:20px; color:var(--c-gray);">لینکی یافت نشد.</p>';
     
     switchProfTab('media', document.querySelector('.prof-tab'));
@@ -265,6 +270,13 @@ function handleNotification(msg) {
     let badge = document.getElementById(`badge-${isDM ? 'dm_'+targetId : targetId}`);
     if(badge) { badge.style.display = 'inline-block'; badge.innerText = parseInt(badge.innerText) + 1; }
     try { document.getElementById('notif-sound').play(); } catch(e){}
+
+    // پاپ‌آپ ویندوز/اندروید
+    if ("Notification" in window && Notification.permission === "granted" && document.hidden) {
+        let title = isDM ? msg.data.user : msg.room;
+        let bodyText = msg.data.msgType === 'text' ? msg.data.text : "پیام جدید رسانه‌ای";
+        new Notification(title, { body: bodyText });
+    }
 }
 
 function appendMessage(data) {
@@ -272,9 +284,9 @@ function appendMessage(data) {
     const msgBox = document.getElementById('messages');
     
     let media = '';
+    // ویدیو مسیج مربعی و استاندارد بدون باگ دایره ای
     if (data.msgType === 'image') media = `<img src="${data.url}">`;
     else if (data.msgType === 'video') {
-        // ویدیو مسیج هم کاملا مربعی با حاشیه نرم (مثل بقیه مدیا) شد تا کنترلرها به هم نریزند
         media = `<video controls playsinline style="max-width:100%; border-radius:12px; margin-top:5px; border:1px solid var(--border);" src="${data.url}"></video>`;
     }
     else if (data.msgType === 'audio') media = `<audio controls preload="metadata" src="${data.url}"></audio>`;
@@ -294,7 +306,7 @@ function appendMessage(data) {
     const html = `
         <div class="msg-row ${isSelf ? 'out' : 'in'}" id="msg-${data.id}">
             ${isSelf ? delBtn : ''}
-            <div class="bubble" dir="auto" oncontextmenu="openMsgMenu(event, '${data.id}', '${encodeURIComponent(textContent)}', '${data.user}')" onclick="toggleMsgSelection('${data.id}')">
+            <div class="bubble normal-msg" dir="auto" oncontextmenu="openMsgMenu(event, '${data.id}', '${encodeURIComponent(textContent)}', '${data.user}')" onclick="toggleMsgSelection('${data.id}')">
                 <span class="sender-name">${data.user}</span>
                 ${replyHtml}
                 ${textContent}
@@ -311,7 +323,12 @@ function appendMessage(data) {
 
 function scrollToMsg(id) {
     const el = document.getElementById(id);
-    if(el) { el.scrollIntoView({behavior: 'smooth', block: 'center'}); }
+    if(el) {
+        el.scrollIntoView({behavior: 'smooth', block: 'center'});
+        const bubble = el.querySelector('.bubble');
+        bubble.style.boxShadow = '0 0 20px var(--c-orange)';
+        setTimeout(()=> bubble.style.boxShadow = '0 1px 2px rgba(0,0,0,0.2)', 2000);
+    }
 }
 
 function openMsgMenu(e, id, textEncoded, sender) {
@@ -395,7 +412,7 @@ function updateTimer() {
 async function startRecord(type, btn) {
     if (!isRecording) {
         try {
-            const constraints = type === 'video' ? { audio: true, video: { facingMode: "user", aspectRatio: 1 } } : { audio: true };
+            const constraints = type === 'video' ? { audio: true, video: { facingMode: "user" } } : { audio: true };
             const stream = await navigator.mediaDevices.getUserMedia(constraints);
             if (type === 'video') { const vidPrev = document.getElementById('videoPreview'); vidPrev.srcObject = stream; vidPrev.style.display = 'block'; }
 
@@ -431,7 +448,7 @@ async function startRecord(type, btn) {
             recSeconds = 0; document.getElementById('recTimer').innerText = "00:00";
             recTimerInterval = setInterval(updateTimer, 1000);
             
-        } catch (err) { alert("لطفا دسترسی میکروفون/دوربین را در مرورگر مجاز کنید."); }
+        } catch (err) { alert("لطفا دسترسی میکروفون/دوربین را مجاز کنید."); }
     }
 }
 
