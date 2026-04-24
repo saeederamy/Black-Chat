@@ -1,432 +1,167 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="fa" dir="rtl">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Black Chat | Secure Messenger</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <title>Black Chat | Telegram Clone</title>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700&display=swap');
         
-        :root { 
-            --bg-dark: #000000; --sidebar-bg: #0a0a0a; --chat-bg: #050505;
-            --glass-bg: rgba(25, 25, 25, 0.6); --glass-border: rgba(255, 255, 255, 0.12); 
-            --accent: #ffffff; --accent-glow: rgba(255, 255, 255, 0.15);
-            --text-main: #ffffff; --text-muted: #888888;
-            --bubble-self: linear-gradient(135deg, rgba(255,255,255,0.12), rgba(255,255,255,0.03));
-            --bubble-other: rgba(20, 20, 20, 0.8);
-            --notif-red: #ef4444;
-        }
-        
-        body { 
-            margin: 0; display: flex; 
-            height: 100vh; /* Fallback */
-            height: 100dvh; /* حل مشکل مخفی شدن پایین صفحه در گوشی */
-            background: var(--bg-dark); color: var(--text-main); 
-            font-family: 'Vazirmatn', 'Inter', Tahoma, sans-serif; overflow: hidden;
+        :root {
+            --bg-main: #0f0f0f; --bg-sidebar: #17212b; --bg-chat: #0e1621;
+            --text-main: #ffffff; --text-muted: #7f91a4;
+            --accent: #2b5278; --accent-light: #3e6d9b; --accent-glow: #5288c1;
+            --bubble-out: #2b5278; --bubble-in: #182533;
+            --border: #101921; --danger: #e53935;
         }
 
-        .mobile-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 99; backdrop-filter: blur(5px); }
-        .sidebar { width: 320px; background: var(--sidebar-bg); border-right: 1px solid var(--glass-border); display: flex; flex-direction: column; z-index: 100; flex-shrink: 0; transition: 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
-        .sidebar-header { padding: 10px 15px; display: flex; align-items: center; gap: 15px; height: 50px; flex-shrink: 0;}
-        .menu-btn { font-size: 1.5rem; color: var(--text-muted); cursor: pointer; padding: 5px; display: none; }
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Vazirmatn', sans-serif; outline: none; }
         
-        .search-bar { flex: 1; background: var(--glass-bg); border: 1px solid var(--glass-border); border-radius: 20px; padding: 8px 15px; display: flex; align-items: center; box-shadow: inset 0 2px 5px rgba(0,0,0,0.5); }
-        .search-bar input { background: transparent; border: none; color: white; outline: none; width: 100%; font-family: 'Vazirmatn', 'Inter'; }
+        body { display: flex; height: 100dvh; background: var(--bg-main); color: var(--text-main); overflow: hidden; }
 
-        .chat-list { flex: 1; overflow-y: auto; padding: 5px 0; }
-        .chat-list::-webkit-scrollbar { width: 6px; }
-        .chat-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 10px; }
+        /* Login Screen */
+        #login-screen { position: fixed; top:0; left:0; width:100%; height:100%; background: var(--bg-sidebar); display:flex; justify-content:center; align-items:center; z-index: 9999; }
+        .login-box { background: var(--bg-chat); padding: 40px; border-radius: 12px; text-align: center; width: 90%; max-width: 350px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        .login-box h2 { margin-bottom: 25px; color: var(--text-main); }
+        .login-box input { width: 100%; padding: 12px; margin-bottom: 15px; background: var(--bg-sidebar); border: 1px solid var(--border); color: white; border-radius: 8px; }
+        .login-box button { width: 100%; padding: 12px; background: var(--accent-glow); color: white; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; }
 
-        .chat-item { display: flex; align-items: center; gap: 12px; padding: 10px 15px; cursor: pointer; transition: 0.2s; position: relative; }
-        .chat-item:hover { background: rgba(255, 255, 255, 0.05); }
-        .chat-item.active { background: rgba(255, 255, 255, 0.1); border-left: 3px solid var(--accent); }
+        /* App Layout */
+        #app { display: none; width: 100%; height: 100%; }
         
-        .avatar { width: 48px; height: 48px; border-radius: 50%; background: linear-gradient(135deg, #333, #111); display: flex; justify-content: center; align-items: center; font-size: 1.2rem; flex-shrink: 0; border: 1px solid var(--glass-border); }
-        .chat-info { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; }
-        .chat-name { font-weight: 600; font-size: 0.95rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-
-        .unread-badge { background: var(--notif-red); color: white; font-size: 0.75rem; font-family: 'Inter'; font-weight: bold; padding: 2px 8px; border-radius: 20px; display: none; box-shadow: 0 0 10px rgba(239, 68, 68, 0.5); margin-left: auto; }
-
-        .section-header { display: flex; justify-content: space-between; align-items: center; padding: 15px 15px 5px 15px; }
-        .section-title { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; font-weight: bold; letter-spacing: 1px; margin: 0; }
-        .action-icon-btn { background: transparent; border: none; color: var(--accent); cursor: pointer; font-size: 1.2rem; transition: 0.2s; display: flex; align-items: center; justify-content: center; width: 25px; height: 25px; border-radius: 5px; }
-        .action-icon-btn:hover { background: rgba(255,255,255,0.1); box-shadow: 0 0 10px var(--accent-glow); }
-
-        .logout-box { padding: 15px; border-top: 1px solid var(--glass-border); text-align: center; flex-shrink: 0; padding-bottom: max(15px, env(safe-area-inset-bottom));}
-        .logout-btn { color: #ccc; text-decoration: none; font-size: 0.85rem; border: 1px solid rgba(255,255,255,0.2); padding: 8px 20px; border-radius: 20px; transition: 0.3s; display: inline-block; font-family: 'Inter'; }
-
-        /* --- Main Chat Area --- */
-        .chat-container { flex: 1; display: flex; flex-direction: column; background: var(--chat-bg); position: relative; min-width: 0; height: 100%; }
+        /* Sidebar */
+        .sidebar { width: 320px; background: var(--bg-sidebar); border-left: 1px solid var(--border); display: flex; flex-direction: column; transition: 0.3s; z-index: 100; flex-shrink: 0;}
+        .sidebar-header { display: flex; align-items: center; padding: 10px 15px; gap: 15px; height: 56px; }
+        .hamburger { background: none; border: none; color: var(--text-muted); font-size: 24px; cursor: pointer; }
+        .search-bar { flex: 1; background: var(--bg-chat); border-radius: 20px; padding: 8px 15px; border: 1px solid var(--border); }
+        .search-bar input { background: transparent; border: none; color: white; width: 100%; font-size: 14px;}
         
-        .chat-header { height: 60px; background: var(--sidebar-bg); border-bottom: 1px solid var(--glass-border); display: flex; align-items: center; padding: 0 15px; gap: 15px; z-index: 5; box-shadow: 0 2px 10px rgba(0,0,0,0.5); flex-shrink: 0;}
-        .header-avatar { width: 40px; height: 40px; border-radius: 50%; background: #222; border: 1px solid var(--glass-border); display: flex; justify-content: center; align-items: center; flex-shrink: 0;}
-        .header-info { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
-        .header-info h2 { margin: 0; font-size: 1.05rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;}
-        .header-info span { font-size: 0.75rem; color: var(--text-muted); }
+        .chat-list { flex: 1; overflow-y: auto; }
+        .chat-item { display: flex; align-items: center; padding: 10px 15px; cursor: pointer; transition: 0.2s; gap: 15px; }
+        .chat-item:hover, .chat-item.active { background: var(--accent); }
+        .avatar { width: 48px; height: 48px; border-radius: 50%; background: var(--accent-glow); display: flex; justify-content: center; align-items: center; font-size: 20px; flex-shrink:0;}
+        .chat-info { flex: 1; overflow: hidden; }
+        .chat-name { font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .chat-preview { font-size: 13px; color: var(--text-muted); margin-top: 3px; }
 
-        .messages-wrapper { flex: 1; overflow-y: auto; padding: 20px 5%; display: flex; flex-direction: column; gap: 8px; background-image: radial-gradient(circle at center, rgba(255,255,255,0.03) 0%, transparent 70%); }
-        .messages-wrapper::-webkit-scrollbar { width: 6px; }
-        .messages-wrapper::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 10px; }
+        /* Main Chat */
+        .chat-area { flex: 1; display: flex; flex-direction: column; background: var(--bg-main); background-image: url('data:image/svg+xml;utf8,<svg width="100" height="100" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><path d="M10 10 h 10 v 10 h -10 Z" fill="rgba(255,255,255,0.02)"/></svg>'); position: relative;}
         
-        .message-row { display: flex; width: 100%; }
-        .message-row.self { justify-content: flex-end; }
-        .message-row.other { justify-content: flex-start; }
-        
-        .bubble { max-width: 85%; padding: 8px 12px; border-radius: 12px; position: relative; line-height: 1.6; word-break: break-word; backdrop-filter: blur(10px); font-size: 0.95rem; border: 1px solid var(--glass-border); }
-        .message-row.self .bubble { background: var(--bubble-self); border-bottom-right-radius: 0; box-shadow: inset 0 1px 1px rgba(255,255,255,0.2), 0 2px 5px rgba(0,0,0,0.3); }
-        .message-row.other .bubble { background: var(--bubble-other); border-bottom-left-radius: 0; box-shadow: 0 2px 5px rgba(0,0,0,0.3); }
-        
-        .msg-sender { font-size: 0.75rem; color: #aaaaaa; font-weight: 600; margin-bottom: 3px; display: block; font-family: 'Inter'; }
-        .message-row.self .msg-sender { display: none; }
-        
-        .media-box { position: relative; display: inline-block; max-width: 100%; margin-top: 5px; }
-        .bubble img, .bubble video { max-width: 100%; border-radius: 8px; border: 1px solid var(--glass-border); display: block; }
-        .bubble audio { width: 250px; outline: none; height: 40px; margin-top: 5px;}
-        .dl-btn { position: absolute; bottom: 8px; right: 8px; background: rgba(0,0,0,0.6); backdrop-filter: blur(5px); color: white; border-radius: 50%; width: 35px; height: 35px; display: flex; justify-content: center; align-items: center; text-decoration: none; border: 1px solid rgba(255,255,255,0.2); transition: 0.3s; font-size: 1.2rem; }
-        .dl-btn:hover { background: var(--accent); color: black; box-shadow: 0 0 10px var(--accent-glow); transform: scale(1.1); }
+        .chat-header { height: 56px; background: var(--bg-sidebar); display: flex; align-items: center; padding: 0 20px; gap: 15px; border-bottom: 1px solid var(--border); box-shadow: 0 1px 3px rgba(0,0,0,0.2); z-index: 10;}
+        .back-btn { display: none; background: none; border: none; color: white; font-size: 20px; cursor: pointer; margin-left: 10px;}
 
-        .file-link { display: flex; align-items: center; gap: 12px; background: rgba(255,255,255,0.05); padding: 10px; border-radius: 8px; text-decoration: none; color: var(--accent); border: 1px solid var(--glass-border); transition: 0.3s; font-weight: 500; font-size: 0.9rem; margin-top:5px; }
-        .file-link:hover { background: var(--accent); color: #000; box-shadow: 0 0 15px var(--accent-glow); }
-        .file-icon { font-size: 1.5rem; background: rgba(255,255,255,0.1); padding: 8px; border-radius: 8px; }
+        .messages { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+        .msg-row { display: flex; width: 100%; }
+        .msg-row.out { justify-content: flex-start; } /* چون rtl است، پیام ما راست قرار میگیرد */
+        .msg-row.in { justify-content: flex-end; }
+        
+        .bubble { max-width: 75%; padding: 8px 14px; border-radius: 12px; font-size: 14px; line-height: 1.5; position: relative; word-break: break-word; }
+        .msg-row.out .bubble { background: var(--bubble-out); border-bottom-right-radius: 0; }
+        .msg-row.in .bubble { background: var(--bubble-in); border-bottom-left-radius: 0; }
+        .sender-name { font-size: 12px; color: var(--accent-glow); font-weight: bold; margin-bottom: 4px; display: block; }
+        .msg-row.out .sender-name { display: none; }
+        
+        /* Media */
+        .bubble img, .bubble video { max-width: 100%; border-radius: 8px; margin-top: 5px; }
+        .bubble audio { width: 250px; height: 40px; margin-top: 5px; }
+        .file-link { display: flex; align-items: center; gap: 10px; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 8px; color: white; text-decoration: none; margin-top:5px; }
 
-        /* حل مشکل منطقه تایپ پیام در موبایل */
-        .input-area { 
-            padding: 10px 5%; 
-            padding-bottom: max(15px, env(safe-area-inset-bottom)); /* پشتیبانی از خط پایین آیفون */
-            background: var(--chat-bg); display: flex; justify-content: center; z-index: 5; flex-shrink: 0; 
-        }
-        .input-wrapper { width: 100%; display: flex; align-items: flex-end; background: var(--sidebar-bg); border: 1px solid var(--glass-border); border-radius: 16px; padding: 5px; box-shadow: inset 0 1px 2px rgba(255,255,255,0.05), 0 5px 15px rgba(0,0,0,0.5); }
-        .attach-btn { background: transparent; border: none; color: var(--text-muted); font-size: 1.5rem; cursor: pointer; padding: 10px 10px; transition: 0.2s; }
-        .attach-btn:hover { color: var(--accent); }
+        /* Input Area (Telegram Style) */
+        .input-area { background: var(--bg-sidebar); padding: 10px 15px; padding-bottom: max(10px, env(safe-area-inset-bottom)); display: flex; align-items: flex-end; gap: 10px; }
+        .attach-btn { background: none; border: none; color: var(--text-muted); font-size: 24px; cursor: pointer; padding: 8px; }
+        .attach-btn:hover { color: var(--accent-glow); }
+        .msg-input-wrapper { flex: 1; background: var(--bg-chat); border-radius: 20px; display: flex; align-items: center; padding: 0 15px; min-height: 44px; }
+        .msg-input-wrapper input { width: 100%; background: transparent; border: none; color: white; font-size: 15px; padding: 10px 0; }
         
-        .input-wrapper input[type="text"] { flex: 1; background: transparent; border: none; color: white; outline: none; font-size: 1rem; padding: 15px 5px; font-family: 'Vazirmatn', 'Inter'; min-width: 0; }
+        /* Mic / Send Button */
+        .action-btn { background: var(--bg-chat); color: var(--text-muted); width: 44px; height: 44px; border-radius: 50%; border: none; font-size: 20px; display: flex; justify-content: center; align-items: center; cursor: pointer; transition: 0.2s; flex-shrink: 0;}
+        .action-btn:hover { color: var(--accent-glow); background: var(--border); }
+        .action-btn.send { color: var(--accent-glow); }
+        .action-btn.recording { background: white; color: var(--danger); animation: pulse 1s infinite; transform: scale(1.2); }
         
-        .send-btn, .mic-btn { background: transparent; color: var(--accent); border: none; font-size: 1.4rem; cursor: pointer; padding: 10px 10px; transition: 0.2s; }
-        .send-btn:hover, .mic-btn:hover { text-shadow: 0 0 15px var(--accent-glow); transform: scale(1.1); }
-        .mic-btn.recording { color: var(--notif-red); animation: pulseRecord 1s infinite; text-shadow: 0 0 15px var(--notif-red); }
-        @keyframes pulseRecord { 0%{transform:scale(1);} 50%{transform:scale(1.2);} 100%{transform:scale(1);} }
+        @keyframes pulse { 0% {box-shadow: 0 0 0 0 rgba(255,255,255,0.4);} 70% {box-shadow: 0 0 0 15px rgba(255,255,255,0);} 100% {box-shadow: 0 0 0 0 rgba(255,255,255,0);} }
+
+        /* Hamburger Menu Overlay */
+        .menu-overlay { position: fixed; top:0; right:0; width:100%; height:100%; background: rgba(0,0,0,0.5); z-index: 2000; display: none; }
+        .side-menu { position: fixed; top:0; right: -300px; width: 280px; height: 100%; background: var(--bg-sidebar); z-index: 2001; transition: 0.3s; display: flex; flex-direction: column; }
+        .side-menu.open { right: 0; }
+        .menu-profile { padding: 30px 20px; background: var(--bg-chat); border-bottom: 1px solid var(--border); }
+        .menu-items { padding: 10px 0; }
+        .menu-item { padding: 15px 20px; display: flex; align-items: center; gap: 15px; color: white; cursor: pointer; font-size: 15px; transition: 0.2s;}
+        .menu-item:hover { background: rgba(255,255,255,0.05); }
+
+        .floating-add { position: absolute; bottom: 20px; left: 20px; width: 56px; height: 56px; border-radius: 50%; background: var(--accent-glow); color: white; border: none; font-size: 24px; box-shadow: 0 4px 10px rgba(0,0,0,0.3); cursor: pointer; display: flex; justify-content: center; align-items: center; z-index: 50; transition: 0.2s;}
+        .floating-add:hover { transform: scale(1.1); }
 
         @media (max-width: 768px) {
-            .sidebar { position: fixed; left: -100%; top: 0; bottom: 0; width: 80%; max-width: 320px; box-shadow: 5px 0 15px rgba(0,0,0,0.8); }
-            .sidebar.open { left: 0; }
-            .menu-btn { display: block; } 
-            .input-area { padding: 10px; padding-bottom: max(15px, env(safe-area-inset-bottom)); }
-            .messages-wrapper { padding: 15px; }
-            .bubble { max-width: 90%; }
-            .chat-header .menu-btn { padding: 0; margin-right: 10px; }
+            .sidebar { position: absolute; top:0; right:0; width: 100%; height: 100%; z-index: 50; }
+            .sidebar.hidden { transform: translateX(100%); }
+            .back-btn { display: block; }
         }
     </style>
 </head>
 <body>
-    
-    <div class="mobile-overlay" id="mobileOverlay" onclick="toggleSidebar()"></div>
 
-    <div class="sidebar" id="sidebar">
-        <div class="sidebar-header">
-            <div class="search-bar"><input type="text" dir="auto" placeholder="Search..."></div>
-        </div>
-        
-        <div class="chat-list">
-            <div class="section-header"><span class="section-title">Channels</span></div>
-            <div class="chat-item active" data-room="Announcements" onclick="joinRoom('Announcements', 'Channel', this)">
-                <div class="avatar">📢</div>
-                <div class="chat-info"><div class="chat-name">Announcements</div></div>
-                <span class="unread-badge" id="badge-Announcements">0</span>
-            </div>
-
-            <div class="section-header">
-                <span class="section-title">Groups</span>
-                <button class="action-icon-btn" onclick="createNewGroup()" title="Create New Group">+</button>
-            </div>
-            <div id="groups-list">
-                {% for g in all_groups %}
-                <div class="chat-item" data-room="{{ g }}" onclick="joinRoom('{{ g }}', 'Group', this)">
-                    <div class="avatar">🌍</div>
-                    <div class="chat-info"><div class="chat-name" dir="auto">{{ g.replace('_', ' ') }}</div></div>
-                    <span class="unread-badge" id="badge-{{ g }}">0</span>
-                </div>
-                {% endfor %}
-            </div>
-
-            <div class="section-header">
-                <span class="section-title">Direct Messages</span>
-                <button class="action-icon-btn" onclick="addContact()" title="Add User by ID">👤+</button>
-            </div>
-            <div id="contacts-list">
-                {% for u in contacts %}
-                <div class="chat-item" data-user="{{ u }}" onclick="joinPrivateChat('{{ u }}', this)">
-                    <div class="avatar">👤</div>
-                    <div class="chat-info"><div class="chat-name">{{ u }}</div></div>
-                    <span class="unread-badge" id="badge-dm_{{ u }}">0</span>
-                </div>
-                {% endfor %}
-            </div>
-        </div>
-        
-        <div class="logout-box">
-            <div style="color:var(--text-muted); font-size:0.8rem; margin-bottom:10px; font-family:'Inter';">Logged in as <b>{{ username }}</b></div>
-            <a href="/logout" class="logout-btn">Disconnect</a>
+    <div id="login-screen">
+        <div class="login-box">
+            <h2>ورود به سیستم</h2>
+            <input type="text" id="username" placeholder="نام کاربری (آیدی)">
+            <input type="password" id="password" placeholder="رمز عبور">
+            <button onclick="login()">تایید و ورود</button>
         </div>
     </div>
 
-    <div class="chat-container">
-        <div class="chat-header">
-            <div class="menu-btn" onclick="toggleSidebar()">☰</div>
-            <div class="header-avatar" id="header-icon">📢</div>
-            <div class="header-info">
-                <h2 id="room-name" dir="auto">Announcements</h2>
-                <span id="room-status">Channel</span>
+    <div id="app">
+        <div class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <button class="hamburger" onclick="toggleMenu()">☰</button>
+                <div class="search-bar"><input type="text" placeholder="جستجو..."></div>
             </div>
+            <div class="chat-list" id="chat-list">
+                <div class="chat-item" onclick="openChat('Announcements', 'channel')">
+                    <div class="avatar">📢</div>
+                    <div class="chat-info"><div class="chat-name">اطلاعیه‌های سیستم</div><div class="chat-preview">کانال همگانی</div></div>
+                </div>
+            </div>
+            <button class="floating-add" onclick="addContact()">✏️</button>
         </div>
-        
-        <div class="messages-wrapper" id="messages"></div>
-        
-        <div class="input-area">
-            <div class="input-wrapper">
+
+        <div class="chat-area">
+            <div class="chat-header">
+                <button class="back-btn" onclick="closeChat()">➔</button>
+                <div class="avatar" id="header-avatar" style="width:40px; height:40px; font-size:18px;">📢</div>
+                <div>
+                    <h3 id="room-title" style="font-size:16px;">اطلاعیه‌های سیستم</h3>
+                    <span id="room-status" style="font-size:12px; color:var(--text-muted);">کانال سیستم</span>
+                </div>
+            </div>
+            
+            <div class="messages" id="messages"></div>
+            
+            <div class="input-area" id="input-area">
                 <input type="file" id="fileInput" style="display:none" onchange="uploadFile()">
-                <button class="attach-btn" onclick="document.getElementById('fileInput').click()" title="Attach File">📎</button>
-                
-                <input type="text" id="msgInput" dir="auto" placeholder="Message..." autocomplete="off" onkeypress="handleEnter(event)" oninput="toggleInputButtons()">
-                
-                <button class="mic-btn" id="micBtn" onclick="toggleRecord()" title="Record Voice">🎤</button>
-                <button class="send-btn" id="sendBtn" onclick="sendText()" title="Send" style="display:none;">➤</button>
+                <button class="attach-btn" onclick="document.getElementById('fileInput').click()">📎</button>
+                <div class="msg-input-wrapper">
+                    <input type="text" id="msgInput" placeholder="پیام خود را بنویسید..." autocomplete="off" oninput="checkInput()">
+                </div>
+                <button class="action-btn" id="actionBtn" onclick="handleAction()">🎤</button>
             </div>
         </div>
     </div>
 
-    <audio id="notif-sound" src="data:audio/mp3;base64,//NExAAAAANIAAAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq" preload="auto"></audio>
+    <div class="menu-overlay" id="menuOverlay" onclick="toggleMenu()"></div>
+    <div class="side-menu" id="sideMenu">
+        <div class="menu-profile">
+            <div class="avatar" style="width:60px; height:60px; font-size:24px; margin-bottom:15px;">👤</div>
+            <h3 id="profile-name">کاربر</h3>
+            <p id="profile-role" style="color:var(--text-muted); font-size:13px;">آنلاین</p>
+        </div>
+        <div class="menu-items">
+            <div class="menu-item" onclick="addContact()">👤 افزودن مخاطب با آیدی</div>
+            <div class="menu-item" style="color:var(--danger);" onclick="location.reload()">🚪 خروج از حساب</div>
+        </div>
+    </div>
 
-    <script>
-        const socket = io();
-        const currentUser = "{{ username }}";
-        let currentRoom = 'Announcements';
-        
-        if ("Notification" in window && Notification.permission !== "granted") { Notification.requestPermission(); }
-
-        socket.on('connect', () => { socket.emit('join', {room: currentRoom}); });
-
-        // بهینه سازی رندر تاریخچه برای سرعت موشکی
-        socket.on('history', (messages) => {
-            let htmlStr = '';
-            messages.forEach(data => { htmlStr += buildMessageHTML(data); });
-            const msgBox = document.getElementById('messages');
-            msgBox.innerHTML = htmlStr;
-            msgBox.scrollTop = msgBox.scrollHeight;
-        });
-
-        socket.on('message', (data) => { 
-            const msgBox = document.getElementById('messages');
-            msgBox.insertAdjacentHTML('beforeend', buildMessageHTML(data));
-            msgBox.scrollTop = msgBox.scrollHeight;
-        });
-
-        socket.on('new_group', (data) => {
-            const groupList = document.getElementById('groups-list');
-            const html = `
-                <div class="chat-item" data-room="${data.name}" onclick="joinRoom('${data.name}', 'Group', this)">
-                    <div class="avatar">🌍</div>
-                    <div class="chat-info"><div class="chat-name" dir="auto">${data.name.replace(/_/g, ' ')}</div></div>
-                    <span class="unread-badge" id="badge-${data.name}">0</span>
-                </div>`;
-            groupList.insertAdjacentHTML('beforeend', html);
-        });
-
-        // دریافت پاسخ دوطرفه کانتکت‌ها
-        socket.on('contact_response', (data) => {
-            if (data.success) {
-                // اگر من ادد کردم
-                if(data.owner === currentUser) addContactToUI(data.contact);
-                // اگر شخص دیگری من را ادد کرد
-                if(data.contact === currentUser) addContactToUI(data.owner);
-            } else if(data.owner === currentUser) {
-                alert(data.msg);
-            }
-        });
-
-        function addContactToUI(username) {
-            if(document.querySelector(`.chat-item[data-user="${username}"]`)) return;
-            const contactList = document.getElementById('contacts-list');
-            const html = `
-                <div class="chat-item" data-user="${username}" onclick="joinPrivateChat('${username}', this)">
-                    <div class="avatar">👤</div>
-                    <div class="chat-info"><div class="chat-name">${username}</div></div>
-                    <span class="unread-badge" id="badge-dm_${username}">0</span>
-                </div>`;
-            contactList.insertAdjacentHTML('beforeend', html);
-        }
-
-        socket.on('notification', (data) => {
-            if (data.user === currentUser || data.room === currentRoom) return;
-            
-            let isDM = data.room.startsWith('dm_');
-            if (isDM && !data.room.includes(currentUser)) return;
-
-            // اگر کسی پیام داد و تو لیست نبود، اتوماتیک اضافش کن
-            if (isDM && !document.querySelector(`.chat-item[data-user="${data.user}"]`)) {
-                addContactToUI(data.user);
-            }
-
-            let targetId = isDM ? `dm_${data.user}` : data.room;
-            let badge = document.getElementById(`badge-${targetId}`);
-            if(badge) {
-                badge.style.display = 'flex';
-                badge.innerText = parseInt(badge.innerText) + 1;
-            }
-
-            try { document.getElementById('notif-sound').play(); } catch(e){}
-
-            let title = isDM ? data.user : `${data.room.replace(/_/g, ' ')}`;
-            let body = data.msgType === 'text' ? `${data.user}: ${data.text}` : `${data.user} sent a file`;
-            
-            if ("Notification" in window && Notification.permission === "granted" && document.hidden) {
-                new Notification(title, { body: body });
-            }
-        });
-
-        function addContact() {
-            let target = prompt("Enter exact username/ID to add:");
-            if (target && target.trim() !== '') {
-                socket.emit('add_contact', {owner: currentUser, target: target});
-            }
-        }
-
-        function createNewGroup() {
-            let gName = prompt("Enter the new group name:");
-            if (gName && gName.trim() !== '') {
-                socket.emit('create_group', {group_name: gName.trim()});
-            }
-        }
-
-        function toggleSidebar() {
-            document.getElementById('sidebar').classList.toggle('open');
-            document.getElementById('mobileOverlay').classList.toggle('active');
-            if(document.getElementById('mobileOverlay').classList.contains('active')){
-                document.getElementById('mobileOverlay').style.display = 'block';
-            } else {
-                document.getElementById('mobileOverlay').style.display = 'none';
-            }
-        }
-
-        function buildMessageHTML(data) {
-            const isSelf = data.user === currentUser;
-            let mediaContent = '';
-            let dlBtn = `<a href="${data.url}" download="${data.fileName||'media'}" class="dl-btn" title="Download">⬇️</a>`;
-            
-            // استفاده از loading="lazy" و preload="metadata" برای جلوگیری از هنگ کردن مرورگر
-            if (data.msgType === 'image') mediaContent = `<div class="media-box"><img src="${data.url}" loading="lazy">${dlBtn}</div>`;
-            else if (data.msgType === 'video') mediaContent = `<div class="media-box"><video controls src="${data.url}" preload="metadata"></video>${dlBtn}</div>`;
-            else if (data.msgType === 'audio') mediaContent = `<audio controls src="${data.url}" preload="metadata"></audio>`;
-            else if (data.msgType === 'file') {
-                let fName = data.fileName || "File";
-                mediaContent = `<a href="${data.url}" download="${fName}" class="file-link"><div class="file-icon">📄</div><div dir="auto">${fName}</div></a>`;
-            }
-
-            return `
-                <div class="message-row ${isSelf ? 'self' : 'other'}">
-                    <div class="bubble" dir="auto">
-                        <span class="msg-sender">${data.user}</span>
-                        ${data.msgType === 'text' ? data.text : mediaContent}
-                    </div>
-                </div>`;
-        }
-
-        function setActive(element, roomIdToClear) {
-            document.querySelectorAll('.chat-item').forEach(el => el.classList.remove('active'));
-            element.classList.add('active');
-            
-            let badge = document.getElementById(`badge-${roomIdToClear}`);
-            if(badge) { badge.style.display = 'none'; badge.innerText = '0'; }
-        }
-
-        function joinRoom(room, type, element) {
-            currentRoom = room;
-            document.getElementById('room-name').innerText = room.replace(/_/g, ' ');
-            document.getElementById('room-status').innerText = type;
-            document.getElementById('header-icon').innerText = type === 'Channel' ? '📢' : '🌍';
-            setActive(element, room);
-            document.getElementById('messages').innerHTML = '';
-            socket.emit('join', {room: room});
-            if(window.innerWidth <= 768) toggleSidebar();
-        }
-
-        function joinPrivateChat(targetUser, element) {
-            const users = [currentUser, targetUser].sort();
-            currentRoom = `dm_${users[0]}_${users[1]}`;
-            document.getElementById('room-name').innerText = targetUser;
-            document.getElementById('room-status').innerText = 'Private Chat';
-            document.getElementById('header-icon').innerText = '👤';
-            setActive(element, `dm_${targetUser}`);
-            document.getElementById('messages').innerHTML = '';
-            socket.emit('join', {room: currentRoom});
-            if(window.innerWidth <= 768) toggleSidebar();
-        }
-
-        function toggleInputButtons() {
-            let input = document.getElementById('msgInput');
-            if(input.value.trim() !== '') {
-                document.getElementById('micBtn').style.display = 'none';
-                document.getElementById('sendBtn').style.display = 'block';
-            } else {
-                document.getElementById('micBtn').style.display = 'block';
-                document.getElementById('sendBtn').style.display = 'none';
-            }
-        }
-
-        function sendText() {
-            const input = document.getElementById('msgInput');
-            if(input.value.trim() !== '') {
-                socket.emit('send_message', {user: currentUser, room: currentRoom, msgType: 'text', text: input.value});
-                input.value = '';
-                toggleInputButtons();
-            }
-        }
-
-        function handleEnter(e) { if (e.key === 'Enter') sendText(); }
-
-        let mediaRecorder; let audioChunks = []; let isRecording = false;
-        async function toggleRecord() {
-            const btn = document.getElementById('micBtn');
-            if (!isRecording) {
-                try {
-                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                    mediaRecorder = new MediaRecorder(stream);
-                    mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
-                    mediaRecorder.onstop = async () => {
-                        const file = new File([new Blob(audioChunks, { type: 'audio/webm' })], "voice.webm", { type: 'audio/webm' });
-                        const formData = new FormData(); formData.append('file', file);
-                        const res = await fetch('/upload', { method: 'POST', body: formData });
-                        const data = await res.json();
-                        if(data.url) socket.emit('send_message', {user: currentUser, room: currentRoom, msgType: 'audio', url: data.url});
-                        audioChunks = [];
-                    };
-                    mediaRecorder.start();
-                    btn.classList.add("recording");
-                    isRecording = true;
-                } catch (err) { alert("Microphone access denied! (HTTPS required)"); }
-            } else {
-                mediaRecorder.stop();
-                btn.classList.remove("recording");
-                isRecording = false;
-            }
-        }
-
-        async function uploadFile() {
-            const file = document.getElementById('fileInput').files[0];
-            if (!file) return;
-            const formData = new FormData(); 
-            formData.append('file', file);
-            
-            const res = await fetch('/upload', { method: 'POST', body: formData });
-            const data = await res.json();
-            
-            if (data.url) {
-                socket.emit('send_message', {
-                    user: currentUser, room: currentRoom, 
-                    msgType: data.type, url: data.url, fileName: data.name
-                });
-            }
-        }
-    </script>
+    <script src="/static/script.js"></script>
 </body>
 </html>
