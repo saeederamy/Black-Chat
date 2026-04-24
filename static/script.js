@@ -1,26 +1,38 @@
+// =========================================================
+// ⚙️ WebRTC STUN/TURN Config (Prepared for Iran Servers - MCI fix)
+// =========================================================
 const SERVER_CONFIG = {
-    turnDomain: "turn.yourdomain.ir",   
+    turnDomain: window.location.hostname,   
     turnPort: "3478",                 
     turnUser: "user",            
     turnPass: "pass"         
 };
 
-let currentUser = null; let currentRole = null; let currentRoom = null; let targetUserForDM = null; 
-let ws = null; let currentLang = localStorage.getItem('lang') || 'fa'; let myContacts = [];
+let currentUser = null;
+let currentRole = null;
+let currentRoom = null;
+let targetUserForDM = null; 
+let ws = null;
+let currentLang = localStorage.getItem('lang') || 'fa';
+let myContacts = [];
+
 let contextMsgId = null; let contextMsgText = null; let contextMsgSender = null;
 let replyToMsg = null; let selectionMode = false; let selectedMsgs = [];
-let autoDownload = true; 
 
 let savedTheme = localStorage.getItem('hub_theme') || 'dark';
 document.documentElement.setAttribute('data-theme', savedTheme);
-function toggleTheme() { savedTheme = savedTheme === 'dark' ? 'light' : 'dark'; document.documentElement.setAttribute('data-theme', savedTheme); localStorage.setItem('hub_theme', savedTheme); }
+function toggleTheme() {
+    savedTheme = savedTheme === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', savedTheme);
+    localStorage.setItem('hub_theme', savedTheme);
+}
 
 let savedBg = localStorage.getItem('chatBg');
 if(savedBg) document.getElementById('chatArea').style.backgroundImage = `url('${savedBg}')`;
 
 const translations = {
-    'en': { login_title: 'System Login', btn_login: 'Login', search_ph: 'Search...', type_ph: 'Message...', settings: 'Settings', add_contact: 'New Chat / Group', username_ph: 'Enter exact username', language: 'Language', active_sessions: 'Active IPs (Real IP)', chat_bg: 'Chat Wallpaper URL', system_channel: 'System Channel', private_chat: 'Private Chat', group: 'Private Group' },
-    'fa': { login_title: 'ورود به سیستم', btn_login: 'ورود / تایید', search_ph: 'جستجو...', type_ph: 'پیام خود را بنویسید...', settings: 'تنظیمات سیستم', add_contact: 'چت یا گروه جدید', username_ph: 'آیدی دقیق را وارد کنید', language: 'زبان برنامه', active_sessions: 'آی‌پی‌های متصل شما', chat_bg: 'پس‌زمینه چت (لینک عکس)', system_channel: 'کانال سیستم', private_chat: 'چت خصوصی', group: 'گروه خصوصی' }
+    'en': { login_title: 'System Login', btn_login: 'Login', search_ph: 'Search...', type_ph: 'Message...', settings: 'Settings', add_contact: 'New Chat / Group', username_ph: 'Enter exact username', language: 'Language', active_sessions: 'Active IPs (Real IP)', chat_bg: 'Chat Wallpaper URL', system_channel: 'System Channel', private_chat: 'Private Chat', group: 'Private Group', channel: 'Public Channel' },
+    'fa': { login_title: 'ورود به سیستم', btn_login: 'ورود / تایید', search_ph: 'جستجو...', type_ph: 'پیام خود را بنویسید...', settings: 'تنظیمات سیستم', add_contact: 'چت یا گروه جدید', username_ph: 'آیدی دقیق را وارد کنید', language: 'زبان برنامه', active_sessions: 'آی‌پی‌های متصل شما', chat_bg: 'پس‌زمینه چت (لینک عکس)', system_channel: 'کانال سیستم', private_chat: 'چت خصوصی', group: 'گروه خصوصی', channel: 'کانال عمومی' }
 };
 
 function applyLang() {
@@ -31,8 +43,30 @@ function applyLang() {
 }
 applyLang();
 function changeLang(lang) { currentLang = lang; localStorage.setItem('lang', lang); applyLang(); }
-function toggleAutoDl(state) { autoDownload = state; }
-function changeBg(url) { if(url.trim() === '') { localStorage.removeItem('chatBg'); document.getElementById('chatArea').style.backgroundImage = 'none'; } else { localStorage.setItem('chatBg', url); document.getElementById('chatArea').style.backgroundImage = `url('${url}')`; } }
+
+let autoDownload = true; function toggleAutoDl(state) { autoDownload = state; }
+function changeBg(url) { 
+    if(url.trim() === '') { localStorage.removeItem('chatBg'); document.getElementById('chatArea').style.backgroundImage = 'none'; }
+    else { localStorage.setItem('chatBg', url); document.getElementById('chatArea').style.backgroundImage = `url('${url}')`; }
+}
+
+// سیستم حفظ لاگین
+window.onload = () => {
+    const s_usr = localStorage.getItem('bc_user');
+    const s_role = localStorage.getItem('bc_role');
+    if (s_usr && s_role) {
+        currentUser = s_usr; currentRole = s_role;
+        document.getElementById('login-screen').style.display = 'none';
+        document.getElementById('app').style.display = 'flex';
+        initWebSocket(); loadInitData();
+    }
+};
+
+function doLogout() {
+    localStorage.removeItem('bc_user');
+    localStorage.removeItem('bc_role');
+    location.reload();
+}
 
 async function login() {
     const u = document.getElementById('username').value.trim(); const p = document.getElementById('password').value.trim();
@@ -42,6 +76,7 @@ async function login() {
         const data = await res.json();
         if (data.success) {
             currentUser = data.username; currentRole = data.role;
+            localStorage.setItem('bc_user', currentUser); localStorage.setItem('bc_role', currentRole);
             document.getElementById('login-screen').style.display = 'none'; document.getElementById('app').style.display = 'flex';
             initWebSocket(); loadInitData();
         } else alert("اطلاعات ورود اشتباه است");
@@ -54,13 +89,25 @@ function initWebSocket() {
     ws.onopen = () => { if (currentRoom) ws.send(JSON.stringify({action: 'get_history', room: currentRoom})); };
     ws.onmessage = async (event) => {
         const msg = JSON.parse(event.data);
-        if (msg.type === 'history') { if(msg.room === currentRoom) { document.getElementById('messages').innerHTML = ''; msg.data.forEach(m => appendMessage(m)); } } 
-        else if (msg.type === 'new_msg') { if(msg.room === currentRoom) appendMessage(msg.data); else handleNotification(msg); }
-        else if (msg.type === 'deleted') { const el = document.getElementById(`msg-${msg.msg_id}`); if(el) el.remove(); selectedMsgs = selectedMsgs.filter(id => id !== msg.msg_id); updateSelectionUI(); }
+        if (msg.type === 'history') { 
+            if(msg.room === currentRoom) { document.getElementById('messages').innerHTML = ''; msg.data.forEach(m => appendMessage(m)); }
+        } 
+        else if (msg.type === 'new_msg') { 
+            if(msg.room === currentRoom) appendMessage(msg.data); else handleNotification(msg);
+        }
+        else if (msg.type === 'deleted') { 
+            const el = document.getElementById(`msg-${msg.msg_id}`); if(el) el.remove(); 
+            selectedMsgs = selectedMsgs.filter(id => id !== msg.msg_id); updateSelectionUI();
+        }
         else if (msg.type === 'reaction_updated') { if(msg.room === currentRoom) updateReactionUI(msg.msg_id, msg.reactions); }
         else if (msg.type === 'webrtc') { handleWebRTC(msg.data); }
     };
     ws.onclose = () => { setTimeout(initWebSocket, 2000); };
+
+    // پینگ کلودفلر/اروان برای زنده نگه داشتن سوکت
+    setInterval(() => {
+        if(ws && ws.readyState === WebSocket.OPEN) { ws.send(JSON.stringify({action: 'ping'})); }
+    }, 15000);
 }
 
 let userAvatars = {};
@@ -74,22 +121,23 @@ async function loadInitData() {
     if(data.avatar) { document.getElementById('my-avatar').src = data.avatar; document.getElementById('my-avatar').style.display='block'; document.getElementById('my-initial').style.display='none'; }
 
     const list = document.getElementById('chat-list');
-    list.innerHTML = `<div class="chat-item" data-room="Announcements" onclick="openChat('Announcements', 'channel', 'Announcements')">
+    list.innerHTML = `<div class="chat-item" data-room="Announcements" onclick="openChat('Announcements', 'channel', '📢', 'Announcements')">
             <div class="avatar" style="background:var(--c-red); color:white;">📢</div><div class="chat-info"><div class="chat-name">Announcements</div><div class="chat-preview" data-i18n="system_channel">${translations[currentLang].system_channel}</div></div><span class="unread-badge" id="badge-Announcements">0</span></div>`;
     
     data.custom_rooms.forEach(r => {
+        let icon = r.type === 'group' ? '👥' : '📢';
         let sub = r.type === 'group' ? translations[currentLang].group : translations[currentLang].channel;
-        list.innerHTML += `<div class="chat-item" data-room="${r.id}" onclick="openChat('${r.id}', '${r.type}', '${r.name}')">
-                <div class="avatar" style="background:var(--c-blue); color:white;">👥</div><div class="chat-info"><div class="chat-name">${r.name}</div><div class="chat-preview">${sub}</div></div><span class="unread-badge" id="badge-${r.id}">0</span></div>`;
+        list.innerHTML += `<div class="chat-item" data-room="${r.id}" onclick="openChat('${r.id}', '${r.type}', '${icon}', '${r.name}')">
+                <div class="avatar" style="background:var(--c-blue); color:white;">${icon}</div><div class="chat-info"><div class="chat-name">${r.name}</div><div class="chat-preview">${sub}</div></div><span class="unread-badge" id="badge-${r.id}">0</span></div>`;
     });
 
     data.contacts.forEach(c => {
         let av = userAvatars[c] ? `<img src="${userAvatars[c]}">` : '👤';
-        list.innerHTML += `<div class="chat-item" data-room="${c}" onclick="openChat('${c}', 'private', '${c}', '${c}')">
+        list.innerHTML += `<div class="chat-item" data-room="${c}" onclick="openChat('${c}', 'private', \`${av}\`, '${c}', '${c}')">
                 <div class="avatar">${av}</div><div class="chat-info"><div class="chat-name">${c}</div><div class="chat-preview" data-i18n="private_chat">${translations[currentLang].private_chat}</div></div><span class="unread-badge" id="badge-dm_${c}">0</span></div>`;
     });
     
-    if(!currentRoom) openChat('Announcements', 'channel', 'Announcements');
+    if(!currentRoom) openChat('Announcements', 'channel', '📢', 'Announcements');
 }
 
 function openModal(id) { let m = document.getElementById(id); if(m) m.style.display = 'flex'; if(id === 'settingsModal') fetchIPs(); }
@@ -139,7 +187,7 @@ async function submitContact() {
     const t = document.getElementById('contactUsername').value.trim(); if(!t) return;
     const res = await fetch('/api/action', { method: 'POST', body: JSON.stringify({action:'add_contact', owner: currentUser, target: t}), headers: {'Content-Type': 'application/json'} });
     const data = await res.json();
-    if(data.success) { closeModal('createModal'); loadInitData(); openChat(data.target, 'private', data.target, data.target); } else alert(data.msg);
+    if(data.success) { closeModal('createModal'); loadInitData(); openChat(data.target, 'private', '👤', data.target, data.target); } else alert(data.msg);
 }
 
 async function submitCreation() {
@@ -147,11 +195,10 @@ async function submitCreation() {
     let members = []; document.querySelectorAll('#groupMembersList input:checked').forEach(chk => members.push(chk.value));
     const res = await fetch('/api/action', { method: 'POST', body: JSON.stringify({action:'create_room', type: t, name: n, user: currentUser, members: members}), headers: {'Content-Type': 'application/json'} });
     const data = await res.json();
-    if(data.success) { closeModal('createModal'); loadInitData(); openChat(data.room_id, t, n); }
+    if(data.success) { closeModal('createModal'); loadInitData(); openChat(data.room_id, t, t==='group'?'👥':'📢', n); }
 }
 
-// تغییر اصلی: آیکون اینجا محاسبه می‌شود نه اینکه از HTML پاس داده شود
-function openChat(roomId, type, title, targetUser = null) {
+function openChat(roomId, type, icon, title, targetUser = null) {
     document.querySelectorAll('.chat-item').forEach(c => c.classList.remove('active'));
     let activeItem = document.querySelector(`.chat-item[data-room="${roomId}"]`);
     if(activeItem) activeItem.classList.add('active');
@@ -165,13 +212,7 @@ function openChat(roomId, type, title, targetUser = null) {
     let st = type === 'channel' ? translations[currentLang].system_channel : (type === 'group' ? translations[currentLang].group : translations[currentLang].private_chat);
     if(roomId === 'Announcements') st = translations[currentLang].system_channel;
     document.getElementById('room-status').innerText = st;
-    
-    // حل باگ آیکون
-    let iconHTML = '📢';
-    if(type === 'group') iconHTML = '👥';
-    if(type === 'private') iconHTML = userAvatars[targetUser] ? `<img src="${userAvatars[targetUser]}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;">` : '👤';
-    document.getElementById('header-avatar').innerHTML = iconHTML;
-
+    document.getElementById('header-avatar').innerHTML = icon; 
     document.getElementById('messages').innerHTML = '';
     
     let badgeId = type === 'private' ? `badge-dm_${roomId}` : `badge-${roomId}`;
@@ -191,7 +232,6 @@ function openChat(roomId, type, title, targetUser = null) {
 
 function closeChat() { document.getElementById('sidebar').classList.remove('hidden'); }
 
-// Profile Shared Media
 function openProfile() {
     if(!currentRoom) return;
     document.getElementById('prof-avatar').innerHTML = document.getElementById('header-avatar').innerHTML;
@@ -223,11 +263,12 @@ function openProfile() {
     switchProfTab('media', document.querySelector('.prof-tab'));
     openModal('profileModal');
 }
+
 function switchProfTab(tab, btn) {
     document.querySelectorAll('.prof-tab').forEach(b => { b.style.color = 'var(--c-gray)'; b.style.borderBottomColor = 'transparent'; });
     btn.style.color = 'var(--c-blue)'; btn.style.borderBottomColor = 'var(--c-blue)';
     document.querySelectorAll('.prof-content').forEach(c => c.style.display = 'none');
-    document.getElementById(`tab-${tab}`).style.display = tab==='media'?'flex':'flex';
+    document.getElementById(`tab-${tab}`).style.display = 'flex';
 }
 
 function handleNotification(msg) {
@@ -250,8 +291,11 @@ function appendMessage(data) {
     if (data.msgType === 'image') media = `<img src="${data.url}">`;
     else if (data.msgType === 'video') {
         let isVideoMessage = data.url.includes('rec.webm') || data.url.includes('rec.mp4');
-        if (isVideoMessage) media = `<video class="video-msg" controls playsinline src="${data.url}"></video>`;
-        else media = `<video controls playsinline style="max-width:100%; border-radius:12px; margin-top:5px;" src="${data.url}"></video>`;
+        if (isVideoMessage) {
+            media = `<video class="video-msg" autoplay loop muted playsinline src="${data.url}" onclick="this.muted = !this.muted;"></video>`;
+        } else {
+            media = `<video controls playsinline style="max-width:100%; border-radius:12px; margin-top:5px;" src="${data.url}"></video>`;
+        }
     }
     else if (data.msgType === 'audio') media = `<audio controls preload="metadata" src="${data.url}"></audio>`;
     else if (data.msgType === 'file') {
@@ -286,12 +330,7 @@ function appendMessage(data) {
 
 function scrollToMsg(id) {
     const el = document.getElementById(id);
-    if(el) {
-        el.scrollIntoView({behavior: 'smooth', block: 'center'});
-        const bubble = el.querySelector('.bubble');
-        bubble.style.boxShadow = '0 0 20px var(--c-orange)';
-        setTimeout(()=> bubble.style.boxShadow = '0 1px 2px rgba(0,0,0,0.2)', 2000);
-    }
+    if(el) { el.scrollIntoView({behavior: 'smooth', block: 'center'}); }
 }
 
 function openMsgMenu(e, id, textEncoded, sender) {
@@ -306,34 +345,16 @@ function openMsgMenu(e, id, textEncoded, sender) {
     menu.style.left = `${x}px`; menu.style.top = `${y}px`;
 }
 
-function sendReaction(emoji) {
-    if(!contextMsgId) return;
-    ws.send(JSON.stringify({action: 'react_msg', msg_id: contextMsgId, emoji: emoji}));
-    closeContextMenu();
-}
+function sendReaction(emoji) { if(!contextMsgId) return; ws.send(JSON.stringify({action: 'react_msg', msg_id: contextMsgId, emoji: emoji})); closeContextMenu(); }
 
 function updateReactionUI(msgId, reactionsObj) {
     const bar = document.getElementById(`reacts-${msgId}`); if(!bar) return;
-    bar.innerHTML = '';
-    let counts = {}; let myReact = null;
-    for(let usr in reactionsObj) {
-        let em = reactionsObj[usr]; counts[em] = (counts[em] || 0) + 1;
-        if(usr === currentUser) myReact = em;
-    }
-    for(let em in counts) {
-        let isMine = (myReact === em) ? 'mine' : '';
-        bar.innerHTML += `<span class="react-badge ${isMine}" onclick="ws.send(JSON.stringify({action:'react_msg', msg_id:'${msgId}', emoji:'${em}'}))">${em} ${counts[em]}</span>`;
-    }
+    bar.innerHTML = ''; let counts = {}; let myReact = null;
+    for(let usr in reactionsObj) { let em = reactionsObj[usr]; counts[em] = (counts[em] || 0) + 1; if(usr === currentUser) myReact = em; }
+    for(let em in counts) { let isMine = (myReact === em) ? 'mine' : ''; bar.innerHTML += `<span class="react-badge ${isMine}" onclick="ws.send(JSON.stringify({action:'react_msg', msg_id:'${msgId}', emoji:'${em}'}))">${em} ${counts[em]}</span>`; }
 }
 
-function doReply() {
-    replyToMsg = { id: contextMsgId, text: contextMsgText, user: contextMsgSender };
-    document.getElementById('replySender').innerText = contextMsgSender;
-    document.getElementById('replyText').innerText = contextMsgText;
-    document.getElementById('replyBar').style.display = 'block';
-    document.getElementById('msgInput').focus();
-    closeContextMenu();
-}
+function doReply() { replyToMsg = { id: contextMsgId, text: contextMsgText, user: contextMsgSender }; document.getElementById('replySender').innerText = contextMsgSender; document.getElementById('replyText').innerText = contextMsgText; document.getElementById('replyBar').style.display = 'block'; document.getElementById('msgInput').focus(); closeContextMenu(); }
 function cancelReply() { replyToMsg = null; document.getElementById('replyBar').style.display = 'none'; }
 function doCopy() { navigator.clipboard.writeText(contextMsgText); closeContextMenu(); }
 function doDeleteMsg() { if(confirm("حذف پیام برای همه؟")) ws.send(JSON.stringify({action: 'delete_msg', msg_ids: [contextMsgId]})); closeContextMenu(); }
@@ -462,7 +483,7 @@ async function uploadFile() {
     if (data.url) { ws.send(JSON.stringify({action: 'send_msg', room: currentRoom, user: currentUser, targetUser: targetUserForDM, msgType: data.type, url: data.url, fileName: data.name, replyTo: replyToMsg})); cancelReply(); }
 }
 
-// --- WebRTC Voice Call (STUN/TURN Enabled) ---
+// --- WebRTC Voice Call ---
 let localStreamCall; let peerConnection; let callTarget;
 
 const servers = { 
