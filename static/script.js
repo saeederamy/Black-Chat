@@ -1,8 +1,5 @@
-// =========================================================
-// ⚙️ WebRTC STUN/TURN Config 
-// =========================================================
 const SERVER_CONFIG = {
-    turnDomain: window.location.hostname, // آی‌پی سرور شما به صورت اتوماتیک خوانده می‌شود  
+    turnDomain: window.location.hostname,   
     turnPort: "3478",                 
     turnUser: "user",            
     turnPass: "pass"         
@@ -10,6 +7,8 @@ const SERVER_CONFIG = {
 
 let currentUser = null; let currentRole = null; let currentRoom = null; let targetUserForDM = null; 
 let ws = null; let currentLang = localStorage.getItem('lang') || 'fa'; let myContacts = [];
+let contextMsgId = null; let contextMsgText = null; let contextMsgSender = null;
+let replyToMsg = null; let selectionMode = false; let selectedMsgs = [];
 let autoDownload = true; 
 
 let savedTheme = localStorage.getItem('hub_theme') || 'dark';
@@ -20,8 +19,8 @@ let savedBg = localStorage.getItem('chatBg');
 if(savedBg) document.getElementById('chatArea').style.backgroundImage = `url('${savedBg}')`;
 
 const translations = {
-    'en': { login_title: 'System Login', btn_login: 'Login', search_ph: 'Search...', type_ph: 'Message...', settings: 'Settings', add_contact: 'New Chat / Group', username_ph: 'Enter exact username', language: 'Language', active_sessions: 'Active IPs (Real IP)', chat_bg: 'Chat Wallpaper URL', system_channel: 'System Channel', private_chat: 'Private Chat', group: 'Private Group', channel: 'Public Channel' },
-    'fa': { login_title: 'ورود به سیستم', btn_login: 'ورود / تایید', search_ph: 'جستجو...', type_ph: 'پیام خود را بنویسید...', settings: 'تنظیمات سیستم', add_contact: 'چت یا گروه جدید', username_ph: 'آیدی دقیق را وارد کنید', language: 'زبان برنامه', active_sessions: 'آی‌پی‌های متصل شما', chat_bg: 'پس‌زمینه چت (لینک عکس)', system_channel: 'کانال سیستم', private_chat: 'چت خصوصی', group: 'گروه خصوصی', channel: 'کانال عمومی' }
+    'en': { login_title: 'System Login', btn_login: 'Login', search_ph: 'Search...', type_ph: 'Message...', settings: 'Settings', add_contact: 'New Chat / Group', username_ph: 'Enter exact username', language: 'Language', active_sessions: 'Active IPs (Real IP)', chat_bg: 'Chat Wallpaper URL', system_channel: 'System Channel', private_chat: 'Private Chat', group: 'Private Group' },
+    'fa': { login_title: 'ورود به سیستم', btn_login: 'ورود / تایید', search_ph: 'جستجو...', type_ph: 'پیام خود را بنویسید...', settings: 'تنظیمات سیستم', add_contact: 'چت یا گروه جدید', username_ph: 'آیدی دقیق را وارد کنید', language: 'زبان برنامه', active_sessions: 'آی‌پی‌های متصل شما', chat_bg: 'پس‌زمینه چت (لینک عکس)', system_channel: 'کانال سیستم', private_chat: 'چت خصوصی', group: 'گروه خصوصی' }
 };
 
 function applyLang() {
@@ -35,7 +34,6 @@ function changeLang(lang) { currentLang = lang; localStorage.setItem('lang', lan
 function toggleAutoDl(state) { autoDownload = state; }
 function changeBg(url) { if(url.trim() === '') { localStorage.removeItem('chatBg'); document.getElementById('chatArea').style.backgroundImage = 'none'; } else { localStorage.setItem('chatBg', url); document.getElementById('chatArea').style.backgroundImage = `url('${url}')`; } }
 
-// سیستم حفظ لاگین
 window.onload = () => {
     const s_usr = localStorage.getItem('bc_user');
     const s_role = localStorage.getItem('bc_role');
@@ -58,9 +56,7 @@ async function login() {
         if (data.success) {
             currentUser = data.username; currentRole = data.role;
             localStorage.setItem('bc_user', currentUser); localStorage.setItem('bc_role', currentRole);
-            
-            if ("Notification" in window && Notification.permission !== "granted") { Notification.requestPermission(); }
-            
+            if ("Notification" in window && Notification.permission !== "granted") Notification.requestPermission();
             document.getElementById('login-screen').style.display = 'none'; document.getElementById('app').style.display = 'flex';
             initWebSocket(); loadInitData();
         } else alert("اطلاعات ورود اشتباه است");
@@ -81,7 +77,9 @@ function initWebSocket() {
         }
         else if (msg.type === 'deleted') { 
             const el = document.getElementById(`msg-${msg.msg_id}`); if(el) el.remove(); 
+            selectedMsgs = selectedMsgs.filter(id => id !== msg.msg_id); updateSelectionUI();
         }
+        else if (msg.type === 'reaction_updated') { if(msg.room === currentRoom) updateReactionUI(msg.msg_id, msg.reactions); }
         else if (msg.type === 'webrtc') { handleWebRTC(msg.data); }
     };
     ws.onclose = () => { setTimeout(initWebSocket, 2000); };
@@ -95,22 +93,24 @@ async function loadInitData() {
     const data = await res.json();
     myContacts = data.contacts; 
     if(data.all_avatars) userAvatars = data.all_avatars;
+    
+    if(data.avatar) { document.getElementById('my-avatar').src = data.avatar; document.getElementById('my-avatar').style.display='block'; document.getElementById('my-initial').style.display='none'; }
 
     const list = document.getElementById('chat-list');
     
-    // رفع باگ کوتیشن: مقادیر خطرناک (عکس) در رویداد onclick ارسال نمی‌شوند
+    // ارسال داده‌های استرینگ به متد (بدون تگ HTML)
     list.innerHTML = `<div class="chat-item" data-room="Announcements" onclick="openChat('Announcements', 'channel', 'Announcements')">
             <div class="avatar" style="background:var(--c-red); color:white;">📢</div><div class="chat-info"><div class="chat-name">Announcements</div><div class="chat-preview" data-i18n="system_channel">${translations[currentLang].system_channel}</div></div><span class="unread-badge" id="badge-Announcements">0</span></div>`;
     
     data.custom_rooms.forEach(r => {
         let sub = translations[currentLang].group;
-        list.innerHTML += `<div class="chat-item" data-room="${r.id}" onclick="openChat('${r.id}', 'group', '${r.name}')">
+        // بدون تداخل کوتیشن 
+        list.innerHTML += `<div class="chat-item" data-room="${r.id}" onclick="openChat('${r.id}', 'group', '${r.name.replace(/'/g, "\\'")}')">
                 <div class="avatar" style="background:var(--c-blue); color:white;">👥</div><div class="chat-info"><div class="chat-name">${r.name}</div><div class="chat-preview">${sub}</div></div><span class="unread-badge" id="badge-${r.id}">0</span></div>`;
     });
 
     data.contacts.forEach(c => {
         let avHTML = userAvatars[c] ? `<img src="${userAvatars[c]}">` : '👤';
-        // فقط مقادیر متنی و ایمن ارسال می‌شود
         list.innerHTML += `<div class="chat-item" data-room="${c}" onclick="openChat('${c}', 'private', '${c}', '${c}')">
                 <div class="avatar">${avHTML}</div><div class="chat-info"><div class="chat-name">${c}</div><div class="chat-preview" data-i18n="private_chat">${translations[currentLang].private_chat}</div></div><span class="unread-badge" id="badge-dm_${c}">0</span></div>`;
     });
@@ -120,11 +120,12 @@ async function loadInitData() {
 
 function openModal(id) { let m = document.getElementById(id); if(m) m.style.display = 'flex'; if(id === 'settingsModal') fetchIPs(); }
 function closeModal(id) { let m = document.getElementById(id); if(m) m.style.display = 'none'; }
+function closeContextMenu() { document.getElementById('msgContextMenu').style.display = 'none'; }
 
 function openCreateModal() {
     let html = '';
     myContacts.forEach(c => { 
-        html += `<label class="contact-check" style="display:flex; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid var(--border); cursor:pointer;"><input type="checkbox" value="${c}" style="width:18px;height:18px;cursor:pointer;accent-color:var(--c-blue);"> <span>${c}</span></label>`; 
+        html += `<label class="contact-check"><input type="checkbox" value="${c}"> <span>${c}</span></label>`; 
     });
     document.getElementById('groupMembersList').innerHTML = html || '<p style="font-size:12px; color:var(--c-gray);">مخاطبی یافت نشد.</p>';
     switchCreateTab('private');
@@ -154,6 +155,14 @@ async function fetchIPs() {
     document.getElementById('ipList').innerHTML = data.ips.map(i => `<div style="border-bottom:1px solid var(--border); padding:5px 0;">🌐 ${i.ip} <br><span style="color:var(--c-gray);">${i.date}</span></div>`).join('');
 }
 
+async function uploadAvatar() {
+    const file = document.getElementById('avatarInput').files[0]; if (!file) return;
+    const fd = new FormData(); fd.append('file', file); fd.append('username', currentUser);
+    const res = await fetch('/api/upload_avatar', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (data.success) { document.getElementById('my-avatar').src = data.url; document.getElementById('my-avatar').style.display = 'block'; document.getElementById('my-initial').style.display = 'none'; }
+}
+
 async function submitContact() {
     const t = document.getElementById('contactUsername').value.trim(); if(!t) return;
     const res = await fetch('/api/action', { method: 'POST', body: JSON.stringify({action:'add_contact', owner: currentUser, target: t}), headers: {'Content-Type': 'application/json'} });
@@ -162,20 +171,20 @@ async function submitContact() {
 }
 
 async function submitCreation() {
-    const n = document.getElementById('creationName').value.trim(); if(!n) return;
+    const n = document.getElementById('creationName').value.trim(); const t = document.getElementById('creationType').value; if(!n) return;
     let members = []; document.querySelectorAll('#groupMembersList input:checked').forEach(chk => members.push(chk.value));
-    const res = await fetch('/api/action', { method: 'POST', body: JSON.stringify({action:'create_room', type: 'group', name: n, user: currentUser, members: members}), headers: {'Content-Type': 'application/json'} });
+    const res = await fetch('/api/action', { method: 'POST', body: JSON.stringify({action:'create_room', type: t, name: n, user: currentUser, members: members}), headers: {'Content-Type': 'application/json'} });
     const data = await res.json();
-    if(data.success) { closeModal('createModal'); loadInitData(); openChat(data.room_id, 'group', n); }
+    if(data.success) { closeModal('createModal'); loadInitData(); openChat(data.room_id, t, n); }
 }
 
-// این تابع ایزوله و ضدضربه است
+// این متد برای جلوگیری از باگ تگ HTML درون کلیک، آیکون را خودش بر اساس دیتای موجود میسازد
 function openChat(roomId, type, title, targetUser = null) {
     document.querySelectorAll('.chat-item').forEach(c => c.classList.remove('active'));
     let activeItem = document.querySelector(`.chat-item[data-room="${roomId}"]`);
     if(activeItem) activeItem.classList.add('active');
 
-    targetUserForDM = targetUser; 
+    targetUserForDM = targetUser; cancelSelection(); cancelReply();
     let realRoomId = roomId;
     if (type === 'private') { const users = [currentUser, roomId].sort(); realRoomId = `dm_${users.join('-')}`; }
     currentRoom = realRoomId;
@@ -185,7 +194,6 @@ function openChat(roomId, type, title, targetUser = null) {
     if(roomId === 'Announcements') st = translations[currentLang].system_channel;
     document.getElementById('room-status').innerText = st;
     
-    // پردازش آیکون کاملاً داخل محیط امن JS انجام می‌شود (بدون باگ کوتیشن)
     let headerAv = '📢';
     if (type === 'group') headerAv = '👥';
     if (type === 'private') headerAv = (targetUser && userAvatars[targetUser]) ? `<img src="${userAvatars[targetUser]}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;">` : '👤';
@@ -210,6 +218,43 @@ function openChat(roomId, type, title, targetUser = null) {
 
 function closeChat() { document.getElementById('sidebar').classList.remove('hidden'); }
 
+function openProfile() {
+    if(!currentRoom) return;
+    document.getElementById('prof-avatar').innerHTML = document.getElementById('header-avatar').innerHTML;
+    document.getElementById('prof-name').innerText = document.getElementById('room-title').innerText;
+    
+    let mediaH = '', filesH = '', audioH = '', linksH = '';
+    document.querySelectorAll('.bubble').forEach(b => {
+        let img = b.querySelector('img'); let vid = b.querySelector('video');
+        if(img) mediaH += `<img src="${img.src}" style="width:30%; height:80px; object-fit:cover; border-radius:8px; border:1px solid var(--border);">`;
+        if(vid) mediaH += `<video src="${vid.src}" style="width:30%; height:80px; object-fit:cover; border-radius:8px; border:1px solid var(--border);"></video>`;
+        
+        let aud = b.querySelector('audio'); 
+        if(aud) audioH += `<audio controls src="${aud.src}" style="width:100%; height:40px; margin-bottom:5px; border-radius:20px;"></audio>`;
+
+        let link = b.querySelector('.file-link');
+        if(link) filesH += `<a href="${link.href}" class="file-link" download>${link.innerHTML}</a>`;
+        
+        let txt = b.innerText;
+        let urls = txt.match(/https?:\/\/[^\s]+/g);
+        if(urls) urls.forEach(u => linksH += `<a href="${u}" target="_blank" style="color:var(--c-blue); padding:10px; border-bottom:1px solid var(--border); display:block;">${u}</a>`);
+    });
+    
+    document.getElementById('tab-media').innerHTML = mediaH || '<p style="padding:20px; color:var(--c-gray);">محتوایی یافت نشد.</p>';
+    document.getElementById('tab-files').innerHTML = filesH || '<p style="padding:20px; color:var(--c-gray);">فایلی یافت نشد.</p>';
+    document.getElementById('tab-audio').innerHTML = audioH || '<p style="padding:20px; color:var(--c-gray);">ویس/ویدیویی یافت نشد.</p>';
+    document.getElementById('tab-links').innerHTML = linksH || '<p style="padding:20px; color:var(--c-gray);">لینکی یافت نشد.</p>';
+    
+    switchProfTab('media', document.querySelector('.prof-tab'));
+    openModal('profileModal');
+}
+function switchProfTab(tab, btn) {
+    document.querySelectorAll('.prof-tab').forEach(b => { b.style.color = 'var(--c-gray)'; b.style.borderBottomColor = 'transparent'; });
+    btn.style.color = 'var(--c-blue)'; btn.style.borderBottomColor = 'var(--c-blue)';
+    document.querySelectorAll('.prof-content').forEach(c => c.style.display = 'none');
+    document.getElementById(`tab-${tab}`).style.display = tab==='media'?'flex':'flex';
+}
+
 function handleNotification(msg) {
     let isDM = msg.room.startsWith('dm_');
     if (isDM && !msg.room.includes(currentUser)) return;
@@ -226,12 +271,19 @@ function handleNotification(msg) {
     }
 }
 
+// سیستم تشخیص کلیک طولانی (Long Press) برای موبایل
+let pressTimer;
+function startPress(e, id, text, sender) {
+    pressTimer = window.setTimeout(() => { openMsgMenu(e, id, text, sender); }, 600); // 600ms long press
+}
+function cancelPress() { clearTimeout(pressTimer); }
+
 function appendMessage(data) {
     const isSelf = data.user === currentUser;
     const msgBox = document.getElementById('messages');
     
     let media = '';
-    // ویدیو مسیج مربعی و استاندارد 
+    // ویدیو مسیج مربعی و استاندارد بدون دکمه‌های آزاردهنده
     if (data.msgType === 'image') media = `<img src="${data.url}">`;
     else if (data.msgType === 'video') {
         media = `<video controls playsinline style="max-width:100%; border-radius:12px; margin-top:5px; border:1px solid var(--border);" src="${data.url}"></video>`;
@@ -243,27 +295,101 @@ function appendMessage(data) {
     }
 
     let textContent = data.text || '';
-    let delBtn = (isSelf || currentRole === 'admin') ? `<button class="delete-btn" onclick="deleteMsg('${data.id}')"><svg style="width:20px; fill:currentColor;"><use href="#icon-trash"></use></svg></button>` : '';
+    let replyHtml = '';
+    if (data.replyTo && data.replyTo.id) {
+        replyHtml = `<div class="reply-preview" onclick="scrollToMsg('msg-${data.replyTo.id}')"><div style="color:var(--c-blue); font-weight:bold; font-size:12px;">${data.replyTo.user}</div><div style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${data.replyTo.text}</div></div>`;
+    }
 
-    // حذف کدهای تداخلی
+    let safeText = encodeURIComponent(textContent);
+
     const html = `
         <div class="msg-row ${isSelf ? 'out' : 'in'}" id="msg-${data.id}">
-            ${isSelf ? delBtn : ''}
-            <div class="bubble" dir="auto">
+            <div class="bubble" dir="auto" 
+                oncontextmenu="openMsgMenu(event, '${data.id}', '${safeText}', '${data.user}')"
+                ontouchstart="startPress(event, '${data.id}', '${safeText}', '${data.user}')" 
+                ontouchend="cancelPress()" 
+                ontouchmove="cancelPress()"
+                onclick="toggleMsgSelection('${data.id}')">
+                
                 <span class="sender-name">${data.user}</span>
+                ${replyHtml}
                 ${textContent}
                 ${media}
+                <div class="reactions-bar" id="reacts-${data.id}"></div>
             </div>
-            ${!isSelf ? delBtn : ''}
         </div>`;
     
     msgBox.insertAdjacentHTML('beforeend', html);
+    if(data.reactions) updateReactionUI(data.id, data.reactions);
     msgBox.scrollTop = msgBox.scrollHeight;
 }
 
-function deleteMsg(id) { if(confirm("حذف پیام برای همه؟")) ws.send(JSON.stringify({action: 'delete_msg', msg_ids: [id]})); }
+function scrollToMsg(id) {
+    const el = document.getElementById(id);
+    if(el) {
+        el.scrollIntoView({behavior: 'smooth', block: 'center'});
+        const bubble = el.querySelector('.bubble');
+        bubble.style.boxShadow = '0 0 20px var(--c-orange)';
+        setTimeout(()=> bubble.style.boxShadow = '0 1px 2px rgba(0,0,0,0.2)', 2000);
+    }
+}
 
-// --- Inputs & Recording ---
+function openMsgMenu(e, id, textEncoded, sender) {
+    if(e && e.preventDefault) e.preventDefault();
+    if(selectionMode) { toggleMsgSelection(id); return; }
+    contextMsgId = id; contextMsgText = decodeURIComponent(textEncoded) || 'Media'; contextMsgSender = sender;
+    const menu = document.getElementById('msgContextMenu');
+    menu.style.display = 'flex';
+    
+    // تشخیص کلیک ماوس یا تاچ موبایل
+    let x = window.innerWidth / 2; let y = window.innerHeight / 2;
+    if(e) {
+        x = e.clientX || (e.touches && e.touches[0].clientX) || x;
+        y = e.clientY || (e.touches && e.touches[0].clientY) || y;
+    }
+    
+    if(x + 220 > window.innerWidth) x = window.innerWidth - 230;
+    if(y + 250 > window.innerHeight) y = window.innerHeight - 260;
+    menu.style.left = `${x}px`; menu.style.top = `${y}px`;
+}
+
+function sendReaction(emoji) { if(!contextMsgId) return; ws.send(JSON.stringify({action: 'react_msg', msg_id: contextMsgId, emoji: emoji})); closeContextMenu(); }
+
+function updateReactionUI(msgId, reactionsObj) {
+    const bar = document.getElementById(`reacts-${msgId}`); if(!bar) return;
+    bar.innerHTML = ''; let counts = {}; let myReact = null;
+    for(let usr in reactionsObj) { let em = reactionsObj[usr]; counts[em] = (counts[em] || 0) + 1; if(usr === currentUser) myReact = em; }
+    for(let em in counts) { let isMine = (myReact === em) ? 'mine' : ''; bar.innerHTML += `<span class="react-badge ${isMine}" onclick="ws.send(JSON.stringify({action:'react_msg', msg_id:'${msgId}', emoji:'${em}'})); event.stopPropagation();">${em} ${counts[em]}</span>`; }
+}
+
+function doReply() { replyToMsg = { id: contextMsgId, text: contextMsgText, user: contextMsgSender }; document.getElementById('replySender').innerText = contextMsgSender; document.getElementById('replyText').innerText = contextMsgText; document.getElementById('replyBar').style.display = 'block'; document.getElementById('msgInput').focus(); closeContextMenu(); }
+function cancelReply() { replyToMsg = null; document.getElementById('replyBar').style.display = 'none'; }
+function doCopy() { navigator.clipboard.writeText(contextMsgText); closeContextMenu(); }
+function doDeleteMsg() { if(confirm("حذف پیام برای همه؟")) ws.send(JSON.stringify({action: 'delete_msg', msg_ids: [contextMsgId]})); closeContextMenu(); }
+
+function doSelect() { selectionMode = true; closeContextMenu(); toggleMsgSelection(contextMsgId); }
+function toggleMsgSelection(id) {
+    if(!selectionMode) return;
+    const bubble = document.querySelector(`#msg-${id} .bubble`);
+    if(!bubble) return;
+    if(selectedMsgs.includes(id)) { selectedMsgs = selectedMsgs.filter(m => m !== id); bubble.classList.remove('selected-msg'); } 
+    else { selectedMsgs.push(id); bubble.classList.add('selected-msg'); }
+    updateSelectionUI();
+}
+function updateSelectionUI() {
+    const bar = document.getElementById('multiSelectBar');
+    if(selectedMsgs.length > 0) { bar.style.display = 'flex'; document.getElementById('selectCount').innerText = `${selectedMsgs.length} پیام`; } 
+    else { cancelSelection(); }
+}
+function cancelSelection() {
+    selectionMode = false; selectedMsgs = [];
+    document.querySelectorAll('.bubble.selected-msg').forEach(b => b.classList.remove('selected-msg'));
+    document.getElementById('multiSelectBar').style.display = 'none';
+}
+function deleteSelected() { if(confirm(`حذف ${selectedMsgs.length} پیام برای همه؟`)) { ws.send(JSON.stringify({action: 'delete_msg', msg_ids: selectedMsgs})); cancelSelection(); } }
+function forwardSelected() { alert("امکان هدایت به زودی..."); cancelSelection(); }
+
+// --- Inputs & Recording (خالی شدن حافظه در هر بار) ---
 let mediaRecorder; let audioChunks = []; let isRecording = false; let isPaused = false;
 let recTimerInterval; let recSeconds = 0;
 
@@ -272,7 +398,6 @@ function checkInput() {
     const btnSend = document.getElementById('actionSendBtn');
     const btnMic = document.getElementById('actionMicBtn');
     const btnVid = document.getElementById('actionVideoBtn');
-    
     if (input.value.trim() !== '') { 
         btnSend.style.display = 'flex'; btnMic.style.display = 'none'; btnVid.style.display = 'none';
     } else { 
@@ -283,8 +408,8 @@ function checkInput() {
 function handleSendText() {
     const input = document.getElementById('msgInput');
     if (input.value.trim() !== '') { 
-        ws.send(JSON.stringify({action: 'send_msg', room: currentRoom, user: currentUser, targetUser: targetUserForDM, msgType: 'text', text: input.value})); 
-        input.value = ''; checkInput(); 
+        ws.send(JSON.stringify({action: 'send_msg', room: currentRoom, user: currentUser, targetUser: targetUserForDM, msgType: 'text', text: input.value, replyTo: replyToMsg})); 
+        input.value = ''; cancelReply(); checkInput(); 
     }
 }
 document.getElementById('msgInput')?.addEventListener('keypress', (e) => { if(e.key === 'Enter') handleSendText(); });
@@ -296,9 +421,10 @@ function updateTimer() {
 async function startRecord(type, btn) {
     if (!isRecording) {
         try {
+            audioChunks = []; // اطمینان از پاک شدن مخزن صدای قبلی
             const constraints = type === 'video' ? { audio: true, video: { facingMode: "user" } } : { audio: true };
             const stream = await navigator.mediaDevices.getUserMedia(constraints);
-
+            
             mediaRecorder = new MediaRecorder(stream);
             mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
             mediaRecorder.onstop = async () => {
@@ -306,10 +432,11 @@ async function startRecord(type, btn) {
                 if(audioChunks.length > 0) {
                     const mime = type === 'video' ? 'video/webm' : 'audio/webm';
                     const fd = new FormData(); fd.append('file', new File([new Blob(audioChunks, { type: mime })], `rec.${type==='video'?'mp4':'webm'}`, { type: mime }));
-                    audioChunks = [];
+                    audioChunks = []; // خالی کردن مجدد
                     const res = await fetch('/api/upload', { method: 'POST', body: fd });
                     const data = await res.json();
-                    if(data.url) ws.send(JSON.stringify({action: 'send_msg', room: currentRoom, user: currentUser, targetUser: targetUserForDM, msgType: type, url: data.url}));
+                    if(data.url) ws.send(JSON.stringify({action: 'send_msg', room: currentRoom, user: currentUser, targetUser: targetUserForDM, msgType: type, url: data.url, replyTo: replyToMsg}));
+                    cancelReply();
                 }
             };
             mediaRecorder.start(); isRecording = true; isPaused = false;
@@ -322,7 +449,7 @@ async function startRecord(type, btn) {
             document.getElementById('recControls').style.display = 'flex';
             let sendBtn = document.getElementById('actionSendBtn');
             sendBtn.style.display = 'flex'; sendBtn.classList.add('rec'); sendBtn.classList.remove('send');
-            sendBtn.onclick = () => { mediaRecorder.stop(); resetRecordUI(); };
+            sendBtn.onclick = stopAndSendRecord; 
 
             recSeconds = 0; document.getElementById('recTimer').innerText = "00:00";
             recTimerInterval = setInterval(updateTimer, 1000);
@@ -338,6 +465,7 @@ function pauseResumeRecord() {
 }
 
 function cancelRecord() { audioChunks = []; mediaRecorder.stop(); resetRecordUI(); }
+function stopAndSendRecord() { mediaRecorder.stop(); resetRecordUI(); }
 
 function resetRecordUI() {
     isRecording = false; clearInterval(recTimerInterval);
@@ -356,7 +484,7 @@ async function uploadFile() {
     const fd = new FormData(); fd.append('file', file);
     const res = await fetch('/api/upload', { method: 'POST', body: fd });
     const data = await res.json();
-    if (data.url) { ws.send(JSON.stringify({action: 'send_msg', room: currentRoom, user: currentUser, targetUser: targetUserForDM, msgType: data.type, url: data.url, fileName: data.name})); }
+    if (data.url) { ws.send(JSON.stringify({action: 'send_msg', room: currentRoom, user: currentUser, targetUser: targetUserForDM, msgType: data.type, url: data.url, fileName: data.name, replyTo: replyToMsg})); cancelReply(); }
 }
 
 // --- WebRTC Voice Call ---
