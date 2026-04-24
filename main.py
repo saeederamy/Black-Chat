@@ -7,6 +7,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from typing import List
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -22,11 +23,13 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(TPL_DIR, exist_ok=True)
 
 def init_db():
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, check_same_thread=False)
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS messages (msg_id TEXT PRIMARY KEY, room TEXT, user TEXT, msg_type TEXT, content TEXT, file_name TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_room ON messages(room)')
     c.execute('''CREATE TABLE IF NOT EXISTS contacts (id INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT, contact TEXT, UNIQUE(owner, contact))''')
     c.execute('''CREATE TABLE IF NOT EXISTS active_ips (user TEXT, ip TEXT, last_seen DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE(user, ip))''')
+    c.execute('''CREATE TABLE IF NOT EXISTS profiles (user TEXT PRIMARY KEY, avatar TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS custom_rooms (room_id TEXT PRIMARY KEY, type TEXT, name TEXT, owner TEXT)''')
     conn.commit()
     conn.close()
@@ -35,7 +38,7 @@ init_db()
 
 class ConnectionManager:
     def __init__(self):
-        self.active_connections = []
+        self.active_connections: List[WebSocket] = []
 
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
@@ -81,13 +84,14 @@ async def login_api(request: Request):
     user, pwd = data.get("username"), data.get("password")
     role = check_login(user, pwd)
     if role:
+        ip = request.client.host
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
-        c.execute("INSERT OR REPLACE INTO active_ips (user, ip) VALUES (?, ?)", (user, request.client.host))
+        c.execute("INSERT OR REPLACE INTO active_ips (user, ip, last_seen) VALUES (?, ?, CURRENT_TIMESTAMP)", (user, ip))
         conn.commit()
         conn.close()
         return {"success": True, "role": role, "username": user}
-    return {"success": False, "message": "Invalid"}
+    return {"success": False, "message": "Invalid Credentials"}
 
 @app.post("/api/upload")
 async def upload_file(file: UploadFile = File(...)):
@@ -103,6 +107,22 @@ async def upload_file(file: UploadFile = File(...)):
     
     return {"url": f"/static/uploads/{file.filename}", "type": msg_type, "name": file.filename}
 
+@app.post("/api/upload_avatar")
+async def upload_avatar(username: str = Form(...), file: UploadFile = File(...)):
+    ext = file.filename.split('.')[-1]
+    avatar_name = f"avatar_{username}_{uuid.uuid4().hex[:6]}.{ext}"
+    file_location = os.path.join(UPLOAD_DIR, avatar_name)
+    async with aiofiles.open(file_location, 'wb') as out_file:
+        await out_file.write(await file.read())
+    
+    url = f"/static/uploads/{avatar_name}"
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO profiles (user, avatar) VALUES (?, ?)", (username, url))
+    conn.commit()
+    conn.close()
+    return {"success": True, "url": url}
+
 @app.post("/api/action")
 async def api_action(request: Request):
     data = await request.json()
@@ -111,22 +131,25 @@ async def api_action(request: Request):
     c = conn.cursor()
     res = {"success": True}
     
-    if act == "get_init_data":
-        u = data.get("user")
-        c.execute("SELECT contact FROM contacts WHERE owner=?", (u,))
-        res["contacts"] = [r[0] for r in c.fetchall()]
-        c.execute("SELECT room_id, type, name FROM custom_rooms")
-        res["custom_rooms"] = [{"id": r[0], "type": r[1], "name": r[2]} for r in c.fetchall()]
-    elif act == "get_ips":
+    if act == "get_ips":
         c.execute("SELECT ip, last_seen FROM active_ips WHERE user=?", (data.get("user"),))
         res["ips"] = [{"ip": r[0], "date": r[1]} for r in c.fetchall()]
     elif act == "create_room":
         room_id = "rm_" + uuid.uuid4().hex[:8]
         c.execute("INSERT INTO custom_rooms (room_id, type, name, owner) VALUES (?, ?, ?, ?)", (room_id, data.get("type"), data.get("name"), data.get("user")))
         res["room_id"] = room_id
+    elif act == "get_init_data":
+        u = data.get("user")
+        c.execute("SELECT contact FROM contacts WHERE owner=?", (u,))
+        res["contacts"] = [r[0] for r in c.fetchall()]
+        c.execute("SELECT room_id, type, name FROM custom_rooms")
+        res["custom_rooms"] = [{"id": r[0], "type": r[1], "name": r[2]} for r in c.fetchall()]
+        c.execute("SELECT avatar FROM profiles WHERE user=?", (u,))
+        av = c.fetchone()
+        res["avatar"] = av[0] if av else ""
     elif act == "add_contact":
         owner, target = data.get("owner"), data.get("target")
-        if target not in get_all_users():
+        if target not in get_all_users(): 
             res = {"success": False, "msg": "User not found"}
         else:
             c.execute("INSERT OR IGNORE INTO contacts (owner, contact) VALUES (?, ?)", (owner, target))
@@ -169,7 +192,10 @@ async def websocket_endpoint(websocket: WebSocket, username: str, role: str):
                 
                 if room == "Announcements" and role != "admin": continue
                 
-                # ثبت دقیق کانتکت‌ها بدون هیچگونه دستکاری رشته‌ای (حل مشکل اصلی پیام ندادن)
+                c.execute("SELECT type, owner FROM custom_rooms WHERE room_id=?", (room,))
+                r_data = c.fetchone()
+                if r_data and r_data[0] == 'channel' and role != 'admin' and r_data[1] != username: continue
+                
                 if target_user:
                     c.execute("INSERT OR IGNORE INTO contacts (owner, contact) VALUES (?, ?)", (username, target_user))
                     c.execute("INSERT OR IGNORE INTO contacts (owner, contact) VALUES (?, ?)", (target_user, username))
