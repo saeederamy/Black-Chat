@@ -27,18 +27,23 @@ def init_db():
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS messages (msg_id TEXT PRIMARY KEY, room TEXT, user TEXT, msg_type TEXT, content TEXT, file_name TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
     c.execute('CREATE INDEX IF NOT EXISTS idx_room ON messages(room)')
+    
+    # آپدیت هوشمند دیتابیس برای ریپلای و ری‌اکشن بدون پاک شدن پیام‌های قبلی
+    try: c.execute("ALTER TABLE messages ADD COLUMN reply_to TEXT DEFAULT '{}'")
+    except: pass
+    try: c.execute("ALTER TABLE messages ADD COLUMN reactions TEXT DEFAULT '{}'")
+    except: pass
+
     c.execute('''CREATE TABLE IF NOT EXISTS contacts (id INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT, contact TEXT, UNIQUE(owner, contact))''')
     c.execute('''CREATE TABLE IF NOT EXISTS active_ips (user TEXT, ip TEXT, last_seen DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE(user, ip))''')
     c.execute('''CREATE TABLE IF NOT EXISTS profiles (user TEXT PRIMARY KEY, avatar TEXT)''')
-    # جدول گروه‌های خصوصی
-    c.execute('''CREATE TABLE IF NOT EXISTS custom_rooms (room_id TEXT PRIMARY KEY, name TEXT, owner TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS custom_rooms (room_id TEXT PRIMARY KEY, type TEXT, name TEXT, owner TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS room_members (room_id TEXT, user TEXT, UNIQUE(room_id, user))''')
     conn.commit()
     conn.close()
 
 init_db()
 
-# تابع استخراج آی‌پی واقعی از پشت Nginx
 def get_real_ip(request: Request):
     real_ip = request.headers.get("X-Real-IP")
     forwarded = request.headers.get("X-Forwarded-For")
@@ -115,6 +120,22 @@ async def upload_file(file: UploadFile = File(...)):
     
     return {"url": f"/static/uploads/{file.filename}", "type": msg_type, "name": file.filename}
 
+@app.post("/api/upload_avatar")
+async def upload_avatar(username: str = Form(...), file: UploadFile = File(...)):
+    ext = file.filename.split('.')[-1]
+    avatar_name = f"avatar_{username}_{uuid.uuid4().hex[:6]}.{ext}"
+    file_location = os.path.join(UPLOAD_DIR, avatar_name)
+    async with aiofiles.open(file_location, 'wb') as out_file:
+        await out_file.write(await file.read())
+    
+    url = f"/static/uploads/{avatar_name}"
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO profiles (user, avatar) VALUES (?, ?)", (username, url))
+    conn.commit()
+    conn.close()
+    return {"success": True, "url": url}
+
 @app.post("/api/action")
 async def api_action(request: Request):
     data = await request.json()
@@ -128,13 +149,7 @@ async def api_action(request: Request):
         c.execute("SELECT contact FROM contacts WHERE owner=?", (u,))
         res["contacts"] = [r[0] for r in c.fetchall()]
         
-        # واکشی گروه‌هایی که کاربر عضو آن‌هاست
-        c.execute("""
-            SELECT r.room_id, r.name 
-            FROM custom_rooms r
-            JOIN room_members m ON r.room_id = m.room_id
-            WHERE m.user = ?
-        """, (u,))
+        c.execute("SELECT r.room_id, r.name FROM custom_rooms r JOIN room_members m ON r.room_id = m.room_id WHERE m.user = ?", (u,))
         res["custom_rooms"] = [{"id": r[0], "type": "group", "name": r[1]} for r in c.fetchall()]
         
     elif act == "get_ips":
@@ -151,7 +166,6 @@ async def api_action(request: Request):
         c.execute("INSERT INTO room_members (room_id, user) VALUES (?, ?)", (room_id, owner))
         for m in members:
             c.execute("INSERT OR IGNORE INTO room_members (room_id, user) VALUES (?, ?)", (room_id, m))
-            
         res["room_id"] = room_id
         
     elif act == "add_contact":
@@ -181,25 +195,37 @@ async def websocket_endpoint(websocket: WebSocket, username: str, role: str):
             
             if action == "get_history":
                 room = msg.get("room")
-                c.execute("SELECT msg_id, user, msg_type, content, file_name FROM messages WHERE room=? ORDER BY timestamp ASC", (room,))
-                history = [{"id": m[0], "user": m[1], "msgType": m[2], "text": m[3] if m[2]=='text' else '', "url": m[3] if m[2]!='text' else '', "fileName": m[4]} for m in c.fetchall()]
+                c.execute("SELECT msg_id, user, msg_type, content, file_name, reply_to, reactions FROM messages WHERE room=? ORDER BY timestamp ASC", (room,))
+                history = [{"id": m[0], "user": m[1], "msgType": m[2], "text": m[3] if m[2]=='text' else '', "url": m[3] if m[2]!='text' else '', "fileName": m[4], "replyTo": json.loads(m[5]) if m[5] else None, "reactions": json.loads(m[6]) if m[6] else {}} for m in c.fetchall()]
                 await websocket.send_json({"type": "history", "room": room, "data": history})
 
             elif action == "delete_msg":
-                msg_id = msg.get("msg_id")
-                c.execute("SELECT user, room FROM messages WHERE msg_id=?", (msg_id,))
+                msg_ids = msg.get("msg_ids", []) # پشتیبانی از حذف چندتایی
+                for msg_id in msg_ids:
+                    c.execute("SELECT user, room FROM messages WHERE msg_id=?", (msg_id,))
+                    row = c.fetchone()
+                    if row and (row[0] == username or role == 'admin'):
+                        c.execute("DELETE FROM messages WHERE msg_id=?", (msg_id,))
+                        await manager.broadcast({"type": "deleted", "room": row[1], "msg_id": msg_id})
+                        
+            elif action == "react_msg":
+                msg_id, emoji = msg.get("msg_id"), msg.get("emoji")
+                c.execute("SELECT reactions, room FROM messages WHERE msg_id=?", (msg_id,))
                 row = c.fetchone()
-                if row and (row[0] == username or role == 'admin'):
-                    c.execute("DELETE FROM messages WHERE msg_id=?", (msg_id,))
-                    await manager.broadcast({"type": "deleted", "room": row[1], "msg_id": msg_id})
-                    
+                if row:
+                    reacts = json.loads(row[0]) if row[0] else {}
+                    if username in reacts and reacts[username] == emoji:
+                        del reacts[username]
+                    else:
+                        reacts[username] = emoji
+                    c.execute("UPDATE messages SET reactions=? WHERE msg_id=?", (json.dumps(reacts), msg_id))
+                    await manager.broadcast({"type": "reaction_updated", "room": row[1], "msg_id": msg_id, "reactions": reacts})
+
             elif action == "send_msg":
                 room = msg.get("room")
                 target_user = msg.get("targetUser")
-                
                 if room == "Announcements" and role != "admin": continue
                 
-                # دریافت اعضای گروه برای ارسال نوتیفیکیشن صحیح
                 room_members = []
                 if room.startswith('rm_'):
                     c.execute("SELECT user FROM room_members WHERE room_id=?", (room,))
@@ -210,14 +236,17 @@ async def websocket_endpoint(websocket: WebSocket, username: str, role: str):
                     c.execute("INSERT OR IGNORE INTO contacts (owner, contact) VALUES (?, ?)", (target_user, username))
 
                 msg_id = str(uuid.uuid4())
+                reply_to = json.dumps(msg.get('replyTo', {}))
+                
                 msg_payload = {
                     "id": msg_id, "user": msg['user'], "msgType": msg['msgType'], 
                     "text": msg.get('text',''), "url": msg.get('url',''), 
-                    "fileName": msg.get('fileName',''), "roomMembers": room_members
+                    "fileName": msg.get('fileName',''), "roomMembers": room_members,
+                    "replyTo": msg.get('replyTo', None), "reactions": {}
                 }
                 
-                c.execute("INSERT INTO messages (msg_id, room, user, msg_type, content, file_name) VALUES (?, ?, ?, ?, ?, ?)", 
-                          (msg_id, room, msg['user'], msg['msgType'], msg.get('text', msg.get('url', '')), msg.get('fileName', '')))
+                c.execute("INSERT INTO messages (msg_id, room, user, msg_type, content, file_name, reply_to, reactions) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", 
+                          (msg_id, room, msg['user'], msg['msgType'], msg.get('text', msg.get('url', '')), msg.get('fileName', ''), reply_to, '{}'))
                 
                 await manager.broadcast({"type": "new_msg", "room": room, "data": msg_payload})
                 
