@@ -28,7 +28,7 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS messages (msg_id TEXT PRIMARY KEY, room TEXT, user TEXT, msg_type TEXT, content TEXT, file_name TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
     c.execute('CREATE INDEX IF NOT EXISTS idx_room ON messages(room)')
     
-    # آپدیت هوشمند دیتابیس برای ریپلای و ری‌اکشن بدون پاک شدن پیام‌های قبلی
+    # آپدیت‌های هوشمند دیتابیس
     try: c.execute("ALTER TABLE messages ADD COLUMN reply_to TEXT DEFAULT '{}'")
     except: pass
     try: c.execute("ALTER TABLE messages ADD COLUMN reactions TEXT DEFAULT '{}'")
@@ -46,8 +46,8 @@ init_db()
 
 def get_real_ip(request: Request):
     real_ip = request.headers.get("X-Real-IP")
-    forwarded = request.headers.get("X-Forwarded-For")
     if real_ip: return real_ip
+    forwarded = request.headers.get("X-Forwarded-For")
     if forwarded: return forwarded.split(",")[0].strip()
     return request.client.host
 
@@ -152,6 +152,13 @@ async def api_action(request: Request):
         c.execute("SELECT r.room_id, r.name FROM custom_rooms r JOIN room_members m ON r.room_id = m.room_id WHERE m.user = ?", (u,))
         res["custom_rooms"] = [{"id": r[0], "type": "group", "name": r[1]} for r in c.fetchall()]
         
+        c.execute("SELECT avatar FROM profiles WHERE user=?", (u,))
+        av = c.fetchone()
+        res["avatar"] = av[0] if av else ""
+        
+        c.execute("SELECT user, avatar FROM profiles")
+        res["all_avatars"] = {r[0]: r[1] for r in c.fetchall()}
+
     elif act == "get_ips":
         c.execute("SELECT ip, last_seen FROM active_ips WHERE user=?", (data.get("user"),))
         res["ips"] = [{"ip": r[0], "date": r[1]} for r in c.fetchall()]
@@ -190,6 +197,9 @@ async def websocket_endpoint(websocket: WebSocket, username: str, role: str):
             msg = json.loads(data)
             action = msg.get("action")
             
+            if action == "ping":
+                continue 
+            
             conn = sqlite3.connect(DB_FILE)
             c = conn.cursor()
             
@@ -200,13 +210,21 @@ async def websocket_endpoint(websocket: WebSocket, username: str, role: str):
                 await websocket.send_json({"type": "history", "room": room, "data": history})
 
             elif action == "delete_msg":
-                msg_ids = msg.get("msg_ids", []) # پشتیبانی از حذف چندتایی
+                msg_ids = msg.get("msg_ids", []) 
                 for msg_id in msg_ids:
                     c.execute("SELECT user, room FROM messages WHERE msg_id=?", (msg_id,))
                     row = c.fetchone()
                     if row and (row[0] == username or role == 'admin'):
                         c.execute("DELETE FROM messages WHERE msg_id=?", (msg_id,))
                         await manager.broadcast({"type": "deleted", "room": row[1], "msg_id": msg_id})
+                        
+            elif action == "edit_msg":
+                msg_id, new_text = msg.get("msg_id"), msg.get("text")
+                c.execute("SELECT user, room FROM messages WHERE msg_id=?", (msg_id,))
+                row = c.fetchone()
+                if row and (row[0] == username or role == 'admin'):
+                    c.execute("UPDATE messages SET content=? WHERE msg_id=?", (new_text, msg_id))
+                    await manager.broadcast({"type": "edited", "room": row[1], "msg_id": msg_id, "new_text": new_text})
                         
             elif action == "react_msg":
                 msg_id, emoji = msg.get("msg_id"), msg.get("emoji")
@@ -224,6 +242,7 @@ async def websocket_endpoint(websocket: WebSocket, username: str, role: str):
             elif action == "send_msg":
                 room = msg.get("room")
                 target_user = msg.get("targetUser")
+                
                 if room == "Announcements" and role != "admin": continue
                 
                 room_members = []
