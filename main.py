@@ -36,22 +36,25 @@ def init_db():
 
 init_db()
 
+# مدیریت کانکشن سراسری (Global Connection)
 class ConnectionManager:
     def __init__(self):
-        self.active_connections: Dict[str, List[WebSocket]] = {}
+        self.active_connections: List[WebSocket] = []
 
-    async def connect(self, websocket: WebSocket, room: str):
+    async def connect(self, websocket: WebSocket):
         await websocket.accept()
-        if room not in self.active_connections: self.active_connections[room] = []
-        self.active_connections[room].append(websocket)
+        self.active_connections.append(websocket)
 
-    def disconnect(self, websocket: WebSocket, room: str):
-        if room in self.active_connections: self.active_connections[room].remove(websocket)
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
 
-    async def broadcast(self, message: dict, room: str):
-        if room in self.active_connections:
-            for connection in self.active_connections[room]:
+    async def broadcast(self, message: dict):
+        for connection in self.active_connections:
+            try:
                 await connection.send_json(message)
+            except:
+                pass
 
 manager = ConnectionManager()
 
@@ -160,49 +163,57 @@ async def api_action(request: Request):
     conn.close()
     return res
 
-@app.websocket("/ws/{room}/{username}/{role}")
-async def websocket_endpoint(websocket: WebSocket, room: str, username: str, role: str):
-    await manager.connect(websocket, room)
-    
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT msg_id, user, msg_type, content, file_name FROM messages WHERE room=? ORDER BY timestamp ASC", (room,))
-    history = [{"id": m[0], "user": m[1], "msgType": m[2], "text": m[3] if m[2]=='text' else '', "url": m[3] if m[2]!='text' else '', "fileName": m[4]} for m in c.fetchall()]
-    conn.close()
-    await websocket.send_json({"type": "history", "data": history})
-
+# اتصال گلوبال سوکت
+@app.websocket("/ws/{username}/{role}")
+async def websocket_endpoint(websocket: WebSocket, username: str, role: str):
+    await manager.connect(websocket)
     try:
         while True:
             data = await websocket.receive_text()
             msg = json.loads(data)
+            action = msg.get("action")
             
             conn = sqlite3.connect(DB_FILE)
             c = conn.cursor()
             
-            if msg.get("action") == "delete":
+            if action == "get_history":
+                room = msg.get("room")
+                c.execute("SELECT msg_id, user, msg_type, content, file_name FROM messages WHERE room=? ORDER BY timestamp ASC", (room,))
+                history = [{"id": m[0], "user": m[1], "msgType": m[2], "text": m[3] if m[2]=='text' else '', "url": m[3] if m[2]!='text' else '', "fileName": m[4]} for m in c.fetchall()]
+                await websocket.send_json({"type": "history", "room": room, "data": history})
+
+            elif action == "delete_msg":
                 msg_id = msg.get("msg_id")
-                # چک کردن دسترسی ادمین یا سازنده پیام
-                c.execute("SELECT user FROM messages WHERE msg_id=?", (msg_id,))
+                c.execute("SELECT user, room FROM messages WHERE msg_id=?", (msg_id,))
                 row = c.fetchone()
                 if row and (row[0] == username or role == 'admin'):
                     c.execute("DELETE FROM messages WHERE msg_id=?", (msg_id,))
-                    await manager.broadcast({"type": "deleted", "msg_id": msg_id}, room)
-            else:
+                    await manager.broadcast({"type": "deleted", "room": row[1], "msg_id": msg_id})
+                    
+            elif action == "send_msg":
+                room = msg.get("room")
                 if room == "Announcements" and role != "admin": continue
-                # اگر اتاق کانال کاستوم باشد چک شود مالک است یا ادمین
+                
                 c.execute("SELECT type, owner FROM custom_rooms WHERE room_id=?", (room,))
                 r_data = c.fetchone()
-                if r_data and r_data[0] == 'channel' and role != 'admin' and r_data[1] != username:
-                    continue
+                if r_data and r_data[0] == 'channel' and role != 'admin' and r_data[1] != username: continue
                 
+                # اطمینان از افزودن خودکار مخاطب در چت خصوصی
+                if room.startswith('dm_'):
+                    target = room.replace('dm_', '').replace(username, '').replace('_', '')
+                    c.execute("INSERT OR IGNORE INTO contacts (owner, contact) VALUES (?, ?)", (username, target))
+                    c.execute("INSERT OR IGNORE INTO contacts (owner, contact) VALUES (?, ?)", (target, username))
+
                 msg_id = str(uuid.uuid4())
-                msg["id"] = msg_id
+                msg_payload = {"id": msg_id, "user": msg['user'], "msgType": msg['msgType'], "text": msg.get('text',''), "url": msg.get('url',''), "fileName": msg.get('fileName','')}
+                
                 c.execute("INSERT INTO messages (msg_id, room, user, msg_type, content, file_name) VALUES (?, ?, ?, ?, ?, ?)", 
                           (msg_id, room, msg['user'], msg['msgType'], msg.get('text', msg.get('url', '')), msg.get('fileName', '')))
-                await manager.broadcast({"type": "message", "data": msg}, room)
+                
+                await manager.broadcast({"type": "new_msg", "room": room, "data": msg_payload})
                 
             conn.commit()
             conn.close()
             
     except WebSocketDisconnect:
-        manager.disconnect(websocket, room)
+        manager.disconnect(websocket)
