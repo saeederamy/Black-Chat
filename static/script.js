@@ -6,7 +6,6 @@ let ws = null;
 let autoDownload = true;
 let currentLang = localStorage.getItem('lang') || 'fa';
 
-// اعمال بک‌گراند
 let savedBg = localStorage.getItem('chatBg');
 if(savedBg) document.getElementById('chatArea').style.backgroundImage = `url('${savedBg}')`;
 
@@ -62,7 +61,7 @@ async function login() {
             alert("اطلاعات ورود اشتباه است / Invalid Login");
         }
     } catch(e) {
-        alert("خطا در اتصال به سرور / Server Connection Error");
+        alert("خطا در اتصال به سرور");
     }
 }
 
@@ -70,6 +69,13 @@ function initWebSocket() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     ws = new WebSocket(`${protocol}//${window.location.host}/ws/${currentUser}/${currentRole}`);
     
+    // رفع باگ اصلی: وقتی سوکت وصل شد، بلافاصله تاریخچه را بگیرد
+    ws.onopen = function() {
+        if (currentRoom) {
+            ws.send(JSON.stringify({action: 'get_history', room: currentRoom}));
+        }
+    };
+
     ws.onmessage = function(event) {
         const msg = JSON.parse(event.data);
         if (msg.type === 'history') { 
@@ -79,14 +85,17 @@ function initWebSocket() {
             }
         } 
         else if (msg.type === 'new_msg') { 
-            if(msg.room === currentRoom) appendMessage(msg.data);
-            else handleNotification(msg);
+            if(msg.room === currentRoom) {
+                appendMessage(msg.data);
+            } else {
+                handleNotification(msg);
+            }
         }
         else if (msg.type === 'deleted') { 
             if(msg.room === currentRoom) { const el = document.getElementById(`msg-${msg.msg_id}`); if(el) el.remove(); }
         }
     };
-    ws.onclose = () => { setTimeout(initWebSocket, 3000); };
+    ws.onclose = () => { setTimeout(initWebSocket, 2000); };
 }
 
 async function loadInitData() {
@@ -114,7 +123,7 @@ async function loadInitData() {
 
 function openModal(id) { 
     let m = document.getElementById(id);
-    if(m) { m.style.display = 'flex'; }
+    if(m) m.style.display = 'flex'; 
     if(id === 'settingsModal') fetchIPs(); 
 }
 function closeModal(id) { 
@@ -188,7 +197,9 @@ function openChat(roomId, type, icon, title, targetUser = null) {
     if ((roomId === 'Announcements' || type === 'channel') && currentRole !== 'admin') inputArea.style.display = 'none';
     else inputArea.style.display = 'flex';
 
-    if (window.innerWidth <= 768) document.getElementById('sidebar').classList.add('hidden');
+    if (window.innerWidth <= 768) {
+        document.getElementById('sidebar').classList.add('hidden');
+    }
 
     if(ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({action: 'get_history', room: currentRoom}));
@@ -209,7 +220,11 @@ function handleNotification(msg) {
     let badge = document.getElementById(`badge-${isDM ? 'dm_'+targetId : targetId}`);
     if(badge) { badge.style.display = 'inline-block'; badge.innerText = parseInt(badge.innerText) + 1; }
     
-    try { document.getElementById('notif-sound').play(); } catch(e){}
+    try { 
+        // در صورت عدم اجازه مرورگر به پخش صدا ارور نمیدهد
+        let audio = new Audio("data:audio/mp3;base64,//NExAAAAANIAAAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq");
+        audio.play().catch(e=>{}); 
+    } catch(e){}
 }
 
 function appendMessage(data) {
@@ -306,7 +321,7 @@ async function startRecord(type, btn) {
             if(type === 'video') document.getElementById('actionBtn').style.display = 'none';
             else document.getElementById('actionVideoBtn').style.display = 'none';
             
-        } catch (err) { alert("لطفا دسترسی دوربین/میکروفون را تایید کنید"); }
+        } catch (err) { alert("لطفا دسترسی دوربین/میکروفون را در مرورگر تایید کنید"); }
     } else {
         mediaRecorder.stop(); isRecording = false; btn.classList.remove('rec');
         clearInterval(recTimerInterval);
