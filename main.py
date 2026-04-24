@@ -28,6 +28,7 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS messages (msg_id TEXT PRIMARY KEY, room TEXT, user TEXT, msg_type TEXT, content TEXT, file_name TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
     c.execute('CREATE INDEX IF NOT EXISTS idx_room ON messages(room)')
     
+    # آپدیت هوشمند دیتابیس برای ریپلای و ری‌اکشن بدون پاک شدن پیام‌های قبلی
     try: c.execute("ALTER TABLE messages ADD COLUMN reply_to TEXT DEFAULT '{}'")
     except: pass
     try: c.execute("ALTER TABLE messages ADD COLUMN reactions TEXT DEFAULT '{}'")
@@ -151,14 +152,6 @@ async def api_action(request: Request):
         c.execute("SELECT r.room_id, r.name FROM custom_rooms r JOIN room_members m ON r.room_id = m.room_id WHERE m.user = ?", (u,))
         res["custom_rooms"] = [{"id": r[0], "type": "group", "name": r[1]} for r in c.fetchall()]
         
-        c.execute("SELECT avatar FROM profiles WHERE user=?", (u,))
-        av = c.fetchone()
-        res["avatar"] = av[0] if av else ""
-        
-        # گرفتن پروفایل بقیه برای لود شدن سریع
-        c.execute("SELECT user, avatar FROM profiles")
-        res["all_avatars"] = {r[0]: r[1] for r in c.fetchall()}
-
     elif act == "get_ips":
         c.execute("SELECT ip, last_seen FROM active_ips WHERE user=?", (data.get("user"),))
         res["ips"] = [{"ip": r[0], "date": r[1]} for r in c.fetchall()]
@@ -207,7 +200,7 @@ async def websocket_endpoint(websocket: WebSocket, username: str, role: str):
                 await websocket.send_json({"type": "history", "room": room, "data": history})
 
             elif action == "delete_msg":
-                msg_ids = msg.get("msg_ids", []) 
+                msg_ids = msg.get("msg_ids", []) # پشتیبانی از حذف چندتایی
                 for msg_id in msg_ids:
                     c.execute("SELECT user, room FROM messages WHERE msg_id=?", (msg_id,))
                     row = c.fetchone()
@@ -256,10 +249,6 @@ async def websocket_endpoint(websocket: WebSocket, username: str, role: str):
                           (msg_id, room, msg['user'], msg['msgType'], msg.get('text', msg.get('url', '')), msg.get('fileName', ''), reply_to, '{}'))
                 
                 await manager.broadcast({"type": "new_msg", "room": room, "data": msg_payload})
-                
-            # WebRTC Signaling Route
-            elif action == "webrtc":
-                await manager.broadcast({"type": "webrtc", "data": msg})
                 
             conn.commit()
             conn.close()
