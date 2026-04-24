@@ -1,141 +1,179 @@
 <!DOCTYPE html>
-<html lang="fa" dir="rtl">
+<html lang="fa" dir="rtl" data-theme="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <meta name="theme-color" content="#141414">
-    <title>Black Chat | X-UI Edition</title>
+    <meta name="theme-color" content="#14151a">
+    <title>Black Chat | V 1.0.0</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
     <style>
-        /* X-UI Sanaei Style Theme */
+        /* X-UI Sanaei Exact Theme Variables */
         :root {
-            --bg-base: #141414;       
-            --bg-panel: #1e1e24;      
-            --bg-input: #282a32;      
-            --border: #333640;
+            --bg-base: #14151a;       
+            --bg-panel: #1e2029;      
+            --bg-input: #282a36;      
+            --border: #313238;
             
+            --c-blue: #1890ff;        
+            --c-blue-hover: #40a9ff;
+            --c-red: #f5222d;         
+            --c-orange: #fa8c16;      
             --c-white: #ffffff;
-            --c-gray: #a1a1aa;
-            --c-red: #ef4444;         
-            --c-red-hover: #dc2626;
-            --c-blue: #3b82f6;        
+            --c-gray: #a3a6ad;
             
-            --bubble-me: #282a32;
-            --bubble-other: #1e1e24;
+            --bubble-me: #1890ff;
+            --bubble-other: #282a36;
         }
 
-        * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; outline: none; -webkit-tap-highlight-color: transparent;}
-        body { display: flex; height: 100dvh; background: var(--bg-base); color: var(--c-white); overflow: hidden; }
+        /* Light Mode Variables */
+        [data-theme="light"] {
+            --bg-base: #f0f2f5;       
+            --bg-panel: #ffffff;      
+            --bg-input: #f4f4f5;      
+            --border: #e4e4e7;
+            
+            --c-white: #18181b; /* متن در لایت مود تیره می‌شود */
+            --c-gray: #71717a;
+            
+            --bubble-me: #1890ff;
+            --bubble-other: #f4f4f5;
+        }
 
-        /* Login Screen */
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, sans-serif; outline: none; -webkit-tap-highlight-color: transparent;}
+        body { display: flex; height: 100dvh; background: var(--bg-base); color: var(--c-white); overflow: hidden; transition: background 0.3s, color 0.3s; }
+
+        /* --- Login Screen --- */
         #login-screen { position: fixed; top:0; left:0; width:100%; height:100%; background: var(--bg-base); display:flex; justify-content:center; align-items:center; flex-direction: column; z-index: 9999; }
-        .login-box { background: var(--bg-panel); border: 1px solid var(--border); padding: 40px; border-radius: 12px; text-align: center; width: 90%; max-width: 350px; box-shadow: 0 10px 30px rgba(0,0,0,0.8); }
-        .login-box h2 { margin-bottom: 25px; color: var(--c-white); font-weight: 600; }
-        .login-box input { width: 100%; padding: 14px; margin-bottom: 15px; background: var(--bg-input); border: 1px solid var(--border); color: white; border-radius: 8px; font-size: 15px; text-align: center; transition: 0.2s;}
-        .login-box input:focus { border-color: var(--c-white); }
-        .login-box button { width: 100%; padding: 14px; background: var(--c-white); color: #000; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; transition: 0.2s; font-size: 16px;}
-        .login-box button:hover { background: #e5e5e5; transform: translateY(-2px); }
-        .dev-credit { margin-top: 25px; color: var(--c-gray); font-size: 12px; letter-spacing: 1px; }
+        .login-box { background: var(--bg-panel); border: 1px solid var(--border); padding: 40px; border-radius: 12px; text-align: center; width: 90%; max-width: 360px; box-shadow: 0 10px 40px rgba(0,0,0,0.2); }
+        .login-box h2 { margin-bottom: 25px; color: var(--c-white); font-weight: 700; }
+        .login-box input { width: 100%; padding: 14px; margin-bottom: 15px; background: var(--bg-input); border: 1px solid var(--border); color: var(--c-white); border-radius: 8px; font-size: 15px; text-align: center; transition: 0.3s;}
+        .login-box input:focus { border-color: var(--c-blue); }
+        .login-box button { width: 100%; padding: 14px; background: var(--c-blue); color: #fff; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; transition: 0.2s; font-size: 16px;}
+        .login-box button:hover { background: var(--c-blue-hover); transform: translateY(-2px); }
+        .dev-credit { margin-top: 30px; color: var(--c-gray); font-size: 13px; font-weight: bold; letter-spacing: 1px; text-transform: uppercase; }
 
         #app { display: none; width: 100%; height: 100%; }
 
-        /* Sidebar */
-        .sidebar { width: 320px; background: var(--bg-panel); border-left: 1px solid var(--border); display: flex; flex-direction: column; z-index: 100; transition: transform 0.3s; flex-shrink: 0; }
-        .sidebar-header { display: flex; align-items: center; padding: 10px 15px; gap: 10px; height: 65px; border-bottom: 1px solid var(--border); flex-shrink: 0;}
+        /* --- Sidebar --- */
+        .sidebar { width: 340px; background: var(--bg-panel); border-left: 1px solid var(--border); display: flex; flex-direction: column; z-index: 100; transition: transform 0.3s; flex-shrink: 0; }
         
-        .icon-btn { width: 40px; height: 40px; border-radius: 8px; background: transparent; border: 1px solid transparent; color: var(--c-gray); cursor: pointer; display: flex; justify-content: center; align-items: center; transition: 0.2s; flex-shrink: 0;}
-        .icon-btn:hover { background: var(--bg-input); color: var(--c-white); border-color: var(--border); }
-        .icon-btn.primary { background: var(--c-white); color: #000; }
-        .icon-btn.primary:hover { background: #e5e5e5; transform: scale(1.05); }
+        .sidebar-header { display: flex; align-items: center; padding: 15px 15px; gap: 10px; border-bottom: 1px solid var(--border); flex-shrink: 0;}
+        .icon-btn { width: 40px; height: 40px; border-radius: 8px; background: transparent; border: none; color: var(--c-gray); cursor: pointer; display: flex; justify-content: center; align-items: center; font-size: 20px; transition: 0.2s; flex-shrink: 0;}
+        .icon-btn:hover { background: var(--bg-input); color: var(--c-blue); }
+        
+        .new-chat-btn { background: var(--c-blue); color: white; border: none; border-radius: 8px; width: 40px; height: 40px; display: flex; justify-content: center; align-items: center; cursor: pointer; flex-shrink: 0; font-size: 22px; transition: 0.2s;}
+        .new-chat-btn:hover { background: var(--c-blue-hover); transform: scale(1.05); }
 
-        .search-box { flex: 1; background: var(--bg-input); border-radius: 8px; display: flex; align-items: center; padding: 0 10px; height: 40px; border: 1px solid var(--border); }
-        .search-box input { flex: 1; background: transparent; border: none; color: white; font-size: 14px; padding: 0 5px;}
+        .search-box { flex: 1; background: var(--bg-input); border-radius: 8px; display: flex; align-items: center; padding: 0 10px; height: 40px; min-width: 0; border: 1px solid var(--border);}
+        .search-box input { flex: 1; background: transparent; border: none; color: var(--c-white); font-size: 14px; padding: 0 5px; min-width: 0;}
 
-        .chat-list { flex: 1; overflow-y: auto; padding: 10px; }
-        .chat-item { display: flex; align-items: center; padding: 12px; cursor: pointer; gap: 15px; border-radius: 8px; margin-bottom: 5px; position: relative; border: 1px solid transparent;}
+        .chat-list { flex: 1; overflow-y: auto; padding: 10px 5px; }
+        .chat-item { display: flex; align-items: center; padding: 12px 10px; cursor: pointer; gap: 12px; border-radius: 8px; margin-bottom: 2px; position: relative; border: 1px solid transparent;}
         .chat-item:hover { background: var(--bg-input); border-color: var(--border); }
-        .chat-item.active { background: var(--bg-input); border-color: var(--c-red); }
+        .chat-item.active { background: var(--bg-input); border-color: var(--c-blue); }
         
-        .avatar { width: 44px; height: 44px; border-radius: 8px; background: var(--bg-base); display: flex; justify-content: center; align-items: center; font-size: 20px; border: 1px solid var(--border); flex-shrink: 0;}
-        .chat-info { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+        .avatar { width: 48px; height: 48px; border-radius: 50%; background: var(--c-blue); color: #fff; display: flex; justify-content: center; align-items: center; font-size: 20px; flex-shrink: 0;}
+        .chat-info { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center;}
         .chat-name { font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--c-white); }
         .chat-preview { font-size: 13px; color: var(--c-gray); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         
-        .unread-badge { background: var(--c-red); color: white; font-size: 12px; font-weight: bold; padding: 2px 8px; border-radius: 6px; display: none; margin-right: auto;}
+        .unread-badge { background: var(--c-red); color: white; font-size: 12px; font-weight: bold; padding: 2px 8px; border-radius: 12px; display: none; margin-right: auto;}
 
-        /* Chat Area */
-        .chat-area { flex: 1; display: flex; flex-direction: column; background: var(--bg-base); min-width: 0; position: relative; background-size: cover; background-position: center;}
+        /* --- Chat Area --- */
+        .chat-area { flex: 1; display: flex; flex-direction: column; background: var(--bg-base); min-width: 0; min-height: 0; position: relative; background-size: cover; background-position: center;}
         
         .chat-header { height: 65px; background: var(--bg-panel); display: flex; align-items: center; padding: 0 15px; gap: 15px; border-bottom: 1px solid var(--border); z-index: 10; flex-shrink: 0;}
-        .back-btn { display: none; }
+        .back-btn { display: none; font-weight: bold;}
         [dir="rtl"] .back-btn { transform: scaleX(-1); }
 
-        .messages { flex: 1; padding: 20px 5%; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; scroll-behavior: smooth;}
+        .messages { flex: 1; padding: 20px 5%; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; scroll-behavior: smooth; min-height: 0;}
         .msg-row { display: flex; width: 100%; position: relative; }
         .msg-row.out { justify-content: flex-start; } 
         .msg-row.in { justify-content: flex-end; }
         
-        .bubble { max-width: 80%; padding: 10px 14px; border-radius: 8px; font-size: 15px; line-height: 1.5; position: relative; word-break: break-word; border: 1px solid var(--border); display: flex; flex-direction: column;}
-        .msg-row.out .bubble { background: var(--bubble-me); color: white;}
-        .msg-row.in .bubble { background: var(--bubble-other); color: white;}
+        .bubble { max-width: 80%; padding: 10px 14px; border-radius: 12px; font-size: 15px; line-height: 1.5; position: relative; word-break: break-word; box-shadow: 0 1px 2px rgba(0,0,0,0.1); display: flex; flex-direction: column; border: 1px solid var(--border);}
+        .msg-row.out .bubble { background: var(--bubble-me); color: #fff; border-bottom-right-radius: 4px; border-color: var(--c-blue); }
+        .msg-row.in .bubble { background: var(--bubble-other); color: var(--c-white); border-bottom-left-radius: 4px;}
         
         .sender-name { font-size: 12px; color: var(--c-red); font-weight: bold; margin-bottom: 5px; display: block; }
         .msg-row.out .sender-name { display: none; }
         
-        .delete-btn { position: absolute; top: 50%; transform: translateY(-50%); background: transparent; border: none; color: var(--c-red); cursor: pointer; opacity: 0; transition: 0.2s; padding: 5px;}
+        .delete-btn { position: absolute; top: 50%; transform: translateY(-50%); background: transparent; border: none; color: var(--c-red); font-size: 20px; cursor: pointer; opacity: 0; transition: 0.2s; padding: 5px;}
         .msg-row.out .delete-btn { left: calc(100% + 5px); }
         .msg-row:hover .delete-btn { opacity: 1; }
 
-        .bubble img, .bubble video { max-width: 100%; border-radius: 4px; margin-top: 5px; cursor: pointer; }
-        .bubble audio { width: 240px; height: 40px; margin-top: 5px; outline: none; }
-        .file-link { display: flex; align-items: center; gap: 10px; background: rgba(0,0,0,0.3); padding: 10px; border-radius: 6px; color: white; text-decoration: none; margin-top:5px; border: 1px solid var(--border);}
+        /* Media in chat */
+        .bubble img { max-width: 100%; border-radius: 8px; margin-top: 5px; cursor: pointer; border: 1px solid rgba(255,255,255,0.1); }
+        .bubble audio { width: 240px; height: 40px; margin-top: 5px; outline: none; border-radius: 20px;}
         
-        /* Video Message Preview (Circle) */
-        #videoPreview { display: none; position: absolute; bottom: 80px; right: 20px; width: 140px; height: 140px; border-radius: 50%; object-fit: cover; border: 3px solid var(--c-red); box-shadow: 0 4px 20px rgba(0,0,0,0.8); z-index: 100; transform: scaleX(-1); background: #000;}
+        /* Telegram Style File Links */
+        .file-link { display: flex; align-items: center; gap: 12px; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 8px; color: var(--c-white); text-decoration: none; margin-top:5px; border: 1px solid var(--border); transition: 0.2s;}
+        .file-link:hover { background: var(--bg-input); }
+        .file-icon { width: 44px; height: 44px; border-radius: 50%; background: var(--c-blue); display: flex; justify-content: center; align-items: center; color: white; flex-shrink: 0;}
+        .file-info-dl { display: flex; flex-direction: column; overflow: hidden; }
+        .file-name-dl { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+        /* Telegram Video Message Bubble */
+        .video-msg { width: 220px; height: 220px; border-radius: 50%; object-fit: cover; border: 3px solid var(--c-blue); margin-top: 5px; }
+
+        /* Video Preview Circle */
+        #videoPreview { display: none; position: absolute; bottom: 80px; right: 20px; width: 220px; height: 220px; border-radius: 50%; object-fit: cover; border: 4px solid var(--c-red); box-shadow: 0 10px 30px rgba(0,0,0,0.5); z-index: 100; transform: scaleX(-1); background: #000;}
         [dir="rtl"] #videoPreview { right: auto; left: 20px; }
 
-        /* Input Area */
-        .input-area { padding: 10px 15px; padding-bottom: max(10px, env(safe-area-inset-bottom)); background: var(--bg-panel); display: flex; align-items: flex-end; gap: 10px; border-top: 1px solid var(--border); z-index: 10; flex-shrink: 0;}
-        .input-box { flex: 1; background: var(--bg-input); border-radius: 8px; border: 1px solid var(--border); display: flex; align-items: center; padding: 0 5px; min-height: 45px;}
-        .input-box input { flex: 1; background: transparent; border: none; color: white; font-size: 15px; padding: 10px; min-width: 0;}
+        /* --- Input Area Mobile Fix --- */
+        .input-area { 
+            padding: 10px 15px; 
+            padding-bottom: max(10px, env(safe-area-inset-bottom)); 
+            background: var(--bg-panel); 
+            display: flex; 
+            align-items: center; /* مرکزچین عمودی برای جلوگیری از گیر کردن */
+            gap: 10px; 
+            border-top: 1px solid var(--border); 
+            z-index: 10; 
+            flex-shrink: 0;
+            width: 100%;
+        }
+        .input-box { flex: 1; background: var(--bg-input); border-radius: 12px; display: flex; align-items: center; padding: 0 5px; min-height: 48px; border: 1px solid var(--border); min-width: 0;}
+        .input-box input { flex: 1; background: transparent; border: none; color: var(--c-white); font-size: 15px; padding: 10px; min-width: 0;}
         
-        .action-btn { width: 42px; height: 42px; border-radius: 8px; background: transparent; border: 1px solid transparent; color: var(--c-gray); display: flex; justify-content: center; align-items: center; cursor: pointer; transition: 0.2s; flex-shrink: 0;}
-        .action-btn:hover { color: var(--c-white); background: var(--bg-input); border-color: var(--border);}
-        .action-btn.send { background: var(--c-white); color: #000; }
-        .action-btn.rec { background: var(--c-red); color: white; border-color: var(--c-red); animation: pulse 1s infinite; }
+        .action-btn { width: 44px; height: 44px; border-radius: 50%; background: transparent; border: none; color: var(--c-gray); font-size: 20px; display: flex; justify-content: center; align-items: center; cursor: pointer; transition: 0.2s; flex-shrink: 0;}
+        .action-btn:hover { color: var(--c-white); background: var(--bg-input); }
+        .action-btn.send { background: var(--c-blue); color: white; }
+        .action-btn.rec { background: var(--c-red); color: white; animation: pulse 1s infinite; }
         
         .rec-timer { display: none; color: var(--c-red); font-weight: bold; font-family: monospace; font-size: 16px; padding: 0 10px; }
 
-        @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.05); } 100% { transform: scale(1); } }
+        @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.1); } 100% { transform: scale(1); } }
 
-        /* Modals */
+        /* --- Modals --- */
         .modal-overlay { position: fixed; top:0; left:0; width:100%; height:100%; background: rgba(0,0,0,0.7); z-index: 2000; display: none; justify-content: center; align-items: center; }
         .modal-box { background: var(--bg-panel); border: 1px solid var(--border); padding: 25px; border-radius: 12px; width: 90%; max-width: 380px; box-shadow: 0 15px 50px rgba(0,0,0,0.9); display: flex; flex-direction: column; gap: 15px;}
         .modal-box h3 { color: var(--c-white); font-weight: 600;}
-        .modal-box input, .modal-box select { width: 100%; padding: 12px; background: var(--bg-input); border: 1px solid var(--border); color: white; border-radius: 8px; font-size: 14px;}
+        .modal-box input, .modal-box select { width: 100%; padding: 12px; background: var(--bg-input); border: 1px solid var(--border); color: var(--c-white); border-radius: 8px; font-size: 14px;}
         
         .contact-list-box { max-height: 150px; overflow-y: auto; background: var(--bg-input); border: 1px solid var(--border); border-radius: 8px; padding: 10px;}
-        .contact-check { display: flex; align-items: center; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--border); cursor: pointer;}
+        .contact-check { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); cursor: pointer; color: var(--c-white);}
         .contact-check:last-child { border-bottom: none; }
         
         .modal-actions { display: flex; gap: 10px; margin-top: 10px; }
         .modal-actions button { flex: 1; padding: 12px; border-radius: 8px; border: none; font-weight: bold; cursor: pointer;}
-        .btn-cancel { background: var(--bg-input); color: white; border: 1px solid var(--border);}
-        .btn-confirm { background: var(--c-white); color: #000; }
+        .btn-cancel { background: var(--bg-input); color: var(--c-white); border: 1px solid var(--border);}
+        .btn-cancel:hover { background: var(--border); }
+        .btn-confirm { background: var(--c-blue); color: #fff; }
+        .btn-confirm:hover { background: var(--c-blue-hover); }
         
         .toggle-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border);}
-        .ip-list { max-height: 120px; overflow-y: auto; background: var(--bg-input); border-radius: 8px; padding: 10px; font-size: 12px; font-family: monospace; color: var(--c-red); direction: ltr; text-align: left; border: 1px solid var(--border);}
+        .ip-list { max-height: 120px; overflow-y: auto; background: var(--bg-input); border-radius: 8px; padding: 10px; font-size: 12px; font-family: monospace; color: var(--c-orange); direction: ltr; text-align: left; border: 1px solid var(--border);}
 
-        /* SVG Icons Customization */
-        svg { width: 22px; height: 22px; fill: currentColor; }
-
+        /* Mobile Adjustments */
         @media (max-width: 768px) {
             .sidebar { position: absolute; top:0; right:0; width: 100%; height: 100%; z-index: 50; }
             .sidebar.hidden { transform: translateX(100%); }
-            .back-btn { display: flex; }
-            .messages { padding: 20px 5%; }
-            .bubble { max-width: 90%; }
+            .back-btn { display: flex !important; }
+            .messages { padding: 15px; }
+            .bubble { max-width: 92%; }
             .msg-row.out .delete-btn { left: 0; top: -15px; transform: none; font-size:16px;}
-            #videoPreview { width: 100px; height: 100px; bottom: 70px; right: 10px;}
+            #videoPreview { width: 150px; height: 150px; bottom: 70px; right: 10px;}
             [dir="rtl"] #videoPreview { left: 10px; }
         }
     </style>
@@ -143,15 +181,12 @@
 <body>
 
     <svg style="display:none;">
-        <symbol id="icon-search" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></symbol>
         <symbol id="icon-back" viewBox="0 0 24 24"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></symbol>
         <symbol id="icon-attach" viewBox="0 0 24 24"><path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z"/></symbol>
         <symbol id="icon-mic" viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/><path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></symbol>
         <symbol id="icon-cam" viewBox="0 0 24 24"><path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/></symbol>
         <symbol id="icon-send" viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></symbol>
-        <symbol id="icon-settings" viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.06-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.56-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.73 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.06.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .43-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.49-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></symbol>
-        <symbol id="icon-add" viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></symbol>
-        <symbol id="icon-trash" viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></symbol>
+        <symbol id="icon-doc" viewBox="0 0 24 24"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></symbol>
     </svg>
 
     <div id="login-screen">
@@ -167,23 +202,23 @@
     <div id="app">
         <div class="sidebar" id="sidebar">
             <div class="sidebar-header">
-                <button class="icon-btn" onclick="openModal('settingsModal')" title="تنظیمات"><svg><use href="#icon-settings"></use></svg></button>
+                <button class="icon-btn" onclick="openModal('settingsModal')" title="تنظیمات">⚙️</button>
+                <button class="icon-btn" onclick="toggleTheme()" title="تغییر تم (لایت/دارک)">🌓</button>
                 <div class="search-box">
-                    <svg style="width:16px; fill:var(--c-gray);"><use href="#icon-search"></use></svg>
                     <input type="text" id="searchInput" data-i18n-ph="search_ph" placeholder="جستجو..." onkeyup="searchChat()">
                 </div>
-                <button class="icon-btn primary" onclick="openContactModal()" title="چت جدید"><svg><use href="#icon-add"></use></svg></button>
+                <button class="new-chat-btn" onclick="openContactModal()" title="چت یا گروه جدید">➕</button>
             </div>
             <div class="chat-list" id="chat-list"></div>
         </div>
 
         <div class="chat-area" id="chatArea">
             <div class="chat-header">
-                <button class="icon-btn back-btn" onclick="closeChat()"><svg><use href="#icon-back"></use></svg></button>
-                <div class="avatar" id="header-avatar" style="width:40px;height:40px;border-radius:8px;">📢</div>
+                <button class="icon-btn back-btn" onclick="closeChat()"><svg style="width:24px;fill:currentColor;"><use href="#icon-back"></use></svg></button>
+                <div class="avatar" id="header-avatar" style="width:42px;height:42px;">📢</div>
                 <div style="display:flex; flex-direction:column; justify-content:center;">
                     <h3 id="room-title" style="font-size:16px; font-weight:600;"></h3>
-                    <span id="room-status" style="font-size:12px; color:var(--c-gray);"></span>
+                    <span id="room-status" style="font-size:12px; color:var(--c-blue);"></span>
                 </div>
             </div>
             
@@ -192,21 +227,21 @@
             <video id="videoPreview" autoplay muted playsinline></video>
 
             <div class="input-area" id="input-area">
-                <input type="file" id="fileInput" style="display:none" onchange="uploadFile()">
                 <button class="action-btn" onclick="document.getElementById('fileInput').click()">
-                    <svg><use href="#icon-attach"></use></svg>
+                    <svg style="width:24px;fill:currentColor;"><use href="#icon-attach"></use></svg>
                 </button>
+                <input type="file" id="fileInput" style="display:none" onchange="uploadFile()">
                 
                 <div class="input-box">
                     <span class="rec-timer" id="recTimer" dir="ltr">00:00</span>
                     <input type="text" id="msgInput" data-i18n-ph="type_ph" placeholder="پیام خود را بنویسید..." autocomplete="off" oninput="checkInput()">
                 </div>
                 
-                <button class="action-btn" id="actionVideoBtn" onclick="startRecord('video', this)" title="ویدیو">
-                    <svg><use href="#icon-cam"></use></svg>
+                <button class="action-btn" id="actionVideoBtn" onclick="startRecord('video', this)" title="ویدیو مسیج">
+                    <svg style="width:24px;fill:currentColor;"><use href="#icon-cam"></use></svg>
                 </button>
                 <button class="action-btn" id="actionBtn" onclick="handleAction()" title="صدا / ارسال">
-                    <svg><use href="#icon-mic"></use></svg>
+                    <svg style="width:24px;fill:currentColor;"><use href="#icon-mic"></use></svg>
                 </button>
             </div>
         </div>
@@ -220,15 +255,15 @@
             
             <hr style="border:0; border-top:1px solid var(--border); margin: 15px 0;">
             
-            <h3 style="color:var(--c-red);">گروه خصوصی جدید</h3>
+            <h3 style="color:var(--c-blue);">گروه خصوصی جدید</h3>
             <input type="text" id="creationName" placeholder="نام گروه خصوصی">
-            <div style="font-size:13px; margin-bottom:5px; color:var(--c-gray);">انتخاب اعضا:</div>
+            <div style="font-size:13px; margin-bottom:5px; color:var(--c-gray);">انتخاب اعضا (از مخاطبین شما):</div>
             <div class="contact-list-box" id="groupMembersList">
                 </div>
             
             <div class="modal-actions">
                 <button class="btn-cancel" onclick="closeModal('contactModal')">لغو</button>
-                <button class="btn-confirm" onclick="submitCreation()" style="background:var(--c-red);">ساخت گروه</button>
+                <button class="btn-confirm" onclick="submitCreation()">ساخت گروه</button>
             </div>
         </div>
     </div>
@@ -243,11 +278,6 @@
                     <option value="fa">فارسی</option>
                     <option value="en">English</option>
                 </select>
-            </div>
-            
-            <div class="toggle-row">
-                <span data-i18n="auto_dl">دانلود خودکار مدیا</span>
-                <input type="checkbox" id="autoDlToggle" style="width:auto; transform:scale(1.5);" checked onchange="toggleAutoDl(this.checked)">
             </div>
             
             <div class="toggle-row" style="flex-direction:column; align-items:flex-start; gap:10px;">
