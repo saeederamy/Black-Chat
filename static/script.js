@@ -1,11 +1,12 @@
 let currentUser = null;
 let currentRole = null;
 let currentRoom = null;
-let targetUserForDM = null; // متغیر حیاتی برای رفع باگ پیام دادن
+let targetUserForDM = null; 
 let ws = null;
 let autoDownload = true;
 let currentLang = localStorage.getItem('lang') || 'fa';
 
+// اعمال بک‌گراند
 let savedBg = localStorage.getItem('chatBg');
 if(savedBg) document.getElementById('chatArea').style.backgroundImage = `url('${savedBg}')`;
 
@@ -26,7 +27,9 @@ const translations = {
 
 function applyLang() {
     document.documentElement.dir = currentLang === 'fa' ? 'rtl' : 'ltr';
-    document.getElementById('langSelect').value = currentLang;
+    let langSel = document.getElementById('langSelect');
+    if(langSel) langSel.value = currentLang;
+    
     document.querySelectorAll('[data-i18n]').forEach(el => { el.innerText = translations[currentLang][el.getAttribute('data-i18n')]; });
     document.querySelectorAll('[data-i18n-ph]').forEach(el => { el.placeholder = translations[currentLang][el.getAttribute('data-i18n-ph')]; });
 }
@@ -44,16 +47,23 @@ async function login() {
     const p = document.getElementById('password').value.trim();
     if (!u || !p) return;
 
-    const res = await fetch('/api/login', { method: 'POST', body: JSON.stringify({username: u, password: p}), headers: {'Content-Type': 'application/json'} });
-    const data = await res.json();
-    if (data.success) {
-        currentUser = data.username; currentRole = data.role;
-        document.getElementById('login-screen').style.display = 'none';
-        document.getElementById('app').style.display = 'flex';
-        
-        initWebSocket();
-        loadInitData();
-    } else alert("اطلاعات ورود اشتباه است");
+    try {
+        const res = await fetch('/api/login', { method: 'POST', body: JSON.stringify({username: u, password: p}), headers: {'Content-Type': 'application/json'} });
+        const data = await res.json();
+        if (data.success) {
+            currentUser = data.username; 
+            currentRole = data.role;
+            document.getElementById('login-screen').style.display = 'none';
+            document.getElementById('app').style.display = 'flex';
+            
+            initWebSocket();
+            loadInitData();
+        } else {
+            alert("اطلاعات ورود اشتباه است / Invalid Login");
+        }
+    } catch(e) {
+        alert("خطا در اتصال به سرور / Server Connection Error");
+    }
 }
 
 function initWebSocket() {
@@ -76,7 +86,7 @@ function initWebSocket() {
             if(msg.room === currentRoom) { const el = document.getElementById(`msg-${msg.msg_id}`); if(el) el.remove(); }
         }
     };
-    ws.onclose = () => { setTimeout(initWebSocket, 2000); };
+    ws.onclose = () => { setTimeout(initWebSocket, 3000); };
 }
 
 async function loadInitData() {
@@ -98,11 +108,19 @@ async function loadInitData() {
         list.innerHTML += `<div class="chat-item" data-room="${c}" onclick="openChat('${c}', 'private', '👤', '${c}', '${c}')">
                 <div class="avatar">👤</div><div class="chat-info"><div class="chat-name">${c}</div><div class="chat-preview" data-i18n="private_chat">${translations[currentLang].private_chat}</div></div><span class="unread-badge" id="badge-dm_${c}">0</span></div>`;
     });
+    
     openChat('Announcements', 'channel', '📢', 'Announcements');
 }
 
-function openModal(id) { document.getElementById('menuOverlay').style.display = 'flex'; document.getElementById(id).style.display = 'flex'; if(id === 'settingsModal') fetchIPs(); }
-function closeModal(id) { document.getElementById(id).style.display = 'none'; document.getElementById('menuOverlay').style.display = 'none'; }
+function openModal(id) { 
+    let m = document.getElementById(id);
+    if(m) { m.style.display = 'flex'; }
+    if(id === 'settingsModal') fetchIPs(); 
+}
+function closeModal(id) { 
+    let m = document.getElementById(id);
+    if(m) m.style.display = 'none'; 
+}
 
 function searchChat() {
     let q = document.getElementById('searchInput').value.toLowerCase();
@@ -112,21 +130,33 @@ function searchChat() {
 async function fetchIPs() {
     const res = await fetch('/api/action', { method: 'POST', body: JSON.stringify({action: 'get_ips', user: currentUser}), headers: {'Content-Type': 'application/json'} });
     const data = await res.json();
-    document.getElementById('ipList').innerHTML = data.ips.map(i => `<div style="border-bottom:1px solid #333; padding:5px 0;">🌐 ${i.ip} <br><span style="color:#aaa;">${i.date}</span></div>`).join('');
+    document.getElementById('ipList').innerHTML = data.ips.map(i => `<div style="border-bottom:1px solid var(--border); padding:5px 0;">🌐 ${i.ip} <br><span style="color:var(--c-gray);">${i.date}</span></div>`).join('');
 }
 
 async function submitContact() {
     const t = document.getElementById('contactUsername').value.trim(); if(!t) return;
     const res = await fetch('/api/action', { method: 'POST', body: JSON.stringify({action:'add_contact', owner: currentUser, target: t}), headers: {'Content-Type': 'application/json'} });
     const data = await res.json();
-    if(data.success) { closeModal('contactModal'); loadInitData(); openChat(data.target, 'private', '👤', data.target, data.target); } else alert(data.msg);
+    if(data.success) { 
+        closeModal('contactModal'); 
+        loadInitData(); 
+        openChat(data.target, 'private', '👤', data.target, data.target); 
+    } else {
+        alert(data.msg);
+    }
 }
 
 async function submitCreation() {
-    const n = document.getElementById('creationName').value.trim(); const t = document.getElementById('creationType').value; if(!n) return;
+    const n = document.getElementById('creationName').value.trim(); 
+    const t = document.getElementById('creationType').value; 
+    if(!n) return;
     const res = await fetch('/api/action', { method: 'POST', body: JSON.stringify({action:'create_room', type: t, name: n, user: currentUser}), headers: {'Content-Type': 'application/json'} });
     const data = await res.json();
-    if(data.success) { closeModal('contactModal'); loadInitData(); openChat(data.room_id, t, t==='group'?'🌍':'📢', n); }
+    if(data.success) { 
+        closeModal('contactModal'); 
+        loadInitData(); 
+        openChat(data.room_id, t, t==='group'?'🌍':'📢', n); 
+    }
 }
 
 function openChat(roomId, type, icon, title, targetUser = null) {
@@ -134,12 +164,12 @@ function openChat(roomId, type, icon, title, targetUser = null) {
     let activeItem = document.querySelector(`.chat-item[data-room="${roomId}"]`);
     if(activeItem) activeItem.classList.add('active');
 
-    targetUserForDM = targetUser; // ذخیره دقیق شخص مقابل
+    targetUserForDM = targetUser; 
     
     let realRoomId = roomId;
     if (type === 'private') { 
         const users = [currentUser, roomId].sort(); 
-        realRoomId = `dm_${users.join('-')}`; // استفاده از خط تیره برای امنیت
+        realRoomId = `dm_${users.join('-')}`; 
     }
     currentRoom = realRoomId;
 
@@ -168,13 +198,11 @@ function openChat(roomId, type, icon, title, targetUser = null) {
 function closeChat() { document.getElementById('sidebar').classList.remove('hidden'); }
 
 function handleNotification(msg) {
-    // پیدا کردن فرستنده برای روشن کردن چراغ نوتیفیکیشن
     let isDM = msg.room.startsWith('dm_');
     if (isDM && !msg.room.includes(currentUser)) return;
     
-    // اگر خصوصی بود و شخص در لیست نبود اضافه شود
     if (isDM && !document.querySelector(`.chat-item[data-room="${msg.data.user}"]`)) {
-        loadInitData(); // رفرش لیست
+        loadInitData(); 
     }
 
     let targetId = isDM ? msg.data.user : msg.room;
@@ -192,7 +220,7 @@ function appendMessage(data) {
     if (data.msgType === 'image' || data.msgType === 'video') {
         let tag = data.msgType === 'image' ? `<img src="${data.url}">` : `<video controls src="${data.url}"></video>`;
         if(!autoDownload && data.msgType === 'image') {
-            media = `<div style="position:relative;" onclick="this.innerHTML='${tag}'"><img src="${data.url}" style="filter:blur(10px);"><div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:30px;">⬇️</div></div>`;
+            media = `<div style="position:relative;" onclick="this.innerHTML='${tag}'"><img src="${data.url}" style="filter:blur(10px);"></div>`;
         } else media = tag;
     }
     else if (data.msgType === 'audio') media = `<audio controls src="${data.url}"></audio>`;
@@ -214,7 +242,7 @@ function appendMessage(data) {
     msgBox.scrollTop = msgBox.scrollHeight;
 }
 
-function deleteMsg(id) { if(confirm("آیا پیام برای همه پاک شود؟")) ws.send(JSON.stringify({action: 'delete_msg', msg_id: id})); }
+function deleteMsg(id) { if(confirm("آیا از حذف پیام مطمئن هستید؟")) ws.send(JSON.stringify({action: 'delete_msg', msg_id: id})); }
 
 // --- Inputs & Recording ---
 let mediaRecorder; let audioChunks = []; let isRecording = false;
@@ -278,7 +306,7 @@ async function startRecord(type, btn) {
             if(type === 'video') document.getElementById('actionBtn').style.display = 'none';
             else document.getElementById('actionVideoBtn').style.display = 'none';
             
-        } catch (err) { alert("دسترسی دوربین/میکروفون وجود ندارد"); }
+        } catch (err) { alert("لطفا دسترسی دوربین/میکروفون را تایید کنید"); }
     } else {
         mediaRecorder.stop(); isRecording = false; btn.classList.remove('rec');
         clearInterval(recTimerInterval);
