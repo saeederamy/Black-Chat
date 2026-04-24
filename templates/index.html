@@ -3,59 +3,63 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <meta name="theme-color" content="#121418">
+    <meta name="theme-color" content="#0f0f11">
     <title>Black Chat | Secure Messenger</title>
     <style>
+        /* استفاده از فونت‌های نیتیو و سریع برای جلوگیری از کندی مرورگر */
         :root {
-            --bg-base: #121418;       
-            --bg-panel: #1e2026;      
-            --bg-input: #292d36;      
-            --border: #2f333d;
+            --bg-base: #0f0f11;       /* تم مشکی قالب پروژه */
+            --bg-panel: #181a1f;      /* خاکستری تیره (شیشه‌ای) */
+            --bg-input: #22252b;      
+            --border: #2a2d35;
             
             --c-blue: #007aff;        
             --c-blue-hover: #005bb5;
             --c-red: #ff3b30;         
             --c-orange: #ff9500;      
             --c-white: #ffffff;
-            --c-gray: #9ba1ad;
+            --c-gray: #8e8e93;
             
             --bubble-me: #007aff;
-            --bubble-other: #292d36;
+            --bubble-other: #22252b;
         }
 
-        * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; outline: none; }
-        body { display: flex; height: 100dvh; background: var(--bg-base); color: var(--c-white); overflow: hidden; }
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; outline: none; -webkit-tap-highlight-color: transparent;}
+        
+        body { display: flex; height: 100vh; height: 100dvh; background: var(--bg-base); color: var(--c-white); overflow: hidden; }
 
         /* --- Login Screen --- */
-        #login-screen { position: fixed; top:0; left:0; width:100%; height:100%; background: #121418; display:flex; justify-content:center; align-items:center; flex-direction: column; z-index: 9999; }
-        .login-box { background: var(--bg-panel); border: 1px solid var(--border); padding: 40px; border-radius: 16px; text-align: center; width: 90%; max-width: 350px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
-        .login-box h2 { margin-bottom: 25px; color: var(--c-white); font-weight: 600; }
+        #login-screen { position: fixed; top:0; left:0; width:100%; height:100%; background: var(--bg-base); display:flex; justify-content:center; align-items:center; flex-direction: column; z-index: 9999; }
+        .login-box { background: var(--bg-panel); border: 1px solid var(--border); padding: 40px; border-radius: 20px; text-align: center; width: 90%; max-width: 360px; box-shadow: 0 10px 40px rgba(0,0,0,0.6); }
+        .login-box h2 { margin-bottom: 25px; color: var(--c-white); font-weight: 700; }
         .login-box input { width: 100%; padding: 14px; margin-bottom: 15px; background: var(--bg-input); border: 1px solid var(--border); color: white; border-radius: 12px; font-size: 15px; text-align: center;}
         .login-box input:focus { border-color: var(--c-blue); }
         .login-box button { width: 100%; padding: 14px; background: var(--c-blue); color: white; border: none; border-radius: 12px; font-weight: bold; cursor: pointer; transition: 0.2s; font-size: 16px;}
         .login-box button:hover { background: var(--c-blue-hover); }
+        .dev-credit { margin-top: 30px; color: var(--c-gray); font-size: 13px; font-weight: bold; letter-spacing: 1px; text-transform: uppercase; }
 
         #app { display: none; width: 100%; height: 100%; }
 
         /* --- Sidebar --- */
-        .sidebar { width: 320px; background: var(--bg-panel); border-left: 1px solid var(--border); display: flex; flex-direction: column; z-index: 100; transition: transform 0.3s; flex-shrink: 0; }
-        .sidebar-header { display: flex; align-items: center; padding: 10px 15px; gap: 10px; height: 65px; border-bottom: 1px solid var(--border); flex-shrink: 0;}
+        .sidebar { width: 340px; background: var(--bg-panel); border-left: 1px solid var(--border); display: flex; flex-direction: column; z-index: 100; transition: transform 0.3s; flex-shrink: 0; }
         
+        .sidebar-header { display: flex; align-items: center; padding: 15px 15px; gap: 10px; border-bottom: 1px solid var(--border); flex-shrink: 0;}
         .icon-btn { width: 40px; height: 40px; border-radius: 50%; background: transparent; border: none; color: var(--c-gray); cursor: pointer; display: flex; justify-content: center; align-items: center; font-size: 20px; transition: 0.2s; flex-shrink: 0;}
         .icon-btn:hover { background: var(--bg-input); color: var(--c-white); }
-        .icon-btn.primary { background: var(--c-blue); color: white; }
-        .icon-btn.primary:hover { background: var(--c-blue-hover); transform: scale(1.05); }
+        
+        .new-chat-btn { background: var(--c-blue); color: white; border: none; border-radius: 12px; width: 40px; height: 40px; display: flex; justify-content: center; align-items: center; cursor: pointer; flex-shrink: 0; font-size: 22px; transition: 0.2s;}
+        .new-chat-btn:hover { background: var(--c-blue-hover); transform: scale(1.05); }
 
-        .search-box { flex: 1; background: var(--bg-input); border-radius: 12px; display: flex; align-items: center; padding: 0 10px; height: 40px; }
-        .search-box input { flex: 1; background: transparent; border: none; color: white; font-size: 14px; padding: 0 5px;}
+        .search-box { flex: 1; background: var(--bg-input); border-radius: 12px; display: flex; align-items: center; padding: 0 10px; height: 40px; min-width: 0;}
+        .search-box input { flex: 1; background: transparent; border: none; color: white; font-size: 14px; padding: 0 5px; min-width: 0;}
 
-        .chat-list { flex: 1; overflow-y: auto; padding: 10px; }
-        .chat-item { display: flex; align-items: center; padding: 12px; cursor: pointer; gap: 15px; border-radius: 12px; margin-bottom: 5px; position: relative;}
-        .chat-item:hover { background: var(--bg-input); }
+        .chat-list { flex: 1; overflow-y: auto; padding: 10px 5px; }
+        .chat-item { display: flex; align-items: center; padding: 12px 10px; cursor: pointer; gap: 12px; border-radius: 12px; margin-bottom: 2px; position: relative;}
+        .chat-item:hover { background: rgba(255,255,255,0.03); }
         .chat-item.active { background: var(--c-blue); }
         
         .avatar { width: 48px; height: 48px; border-radius: 50%; background: var(--bg-base); display: flex; justify-content: center; align-items: center; font-size: 20px; border: 1px solid var(--border); flex-shrink: 0;}
-        .chat-info { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+        .chat-info { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center;}
         .chat-name { font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--c-white); }
         .chat-preview { font-size: 13px; color: var(--c-gray); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .chat-item.active .chat-preview { color: #e0e0e0; }
@@ -63,15 +67,15 @@
         .unread-badge { background: var(--c-orange); color: white; font-size: 12px; font-weight: bold; padding: 2px 8px; border-radius: 12px; display: none; margin-right: auto;}
 
         /* --- Chat Area --- */
-        .chat-area { flex: 1; display: flex; flex-direction: column; background: var(--bg-base); min-width: 0; position: relative; background-size: cover; background-position: center;}
+        .chat-area { flex: 1; display: flex; flex-direction: column; background: var(--bg-base); min-width: 0; min-height: 0; position: relative; background-size: cover; background-position: center;}
         
         .chat-header { height: 65px; background: var(--bg-panel); display: flex; align-items: center; padding: 0 15px; gap: 15px; border-bottom: 1px solid var(--border); z-index: 10; flex-shrink: 0;}
-        .back-btn { display: none; }
+        .back-btn { display: none; font-weight: bold;}
         [dir="rtl"] .back-btn { transform: scaleX(-1); }
 
-        .messages { flex: 1; padding: 20px 5%; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; scroll-behavior: smooth;}
+        .messages { flex: 1; padding: 20px 5%; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; scroll-behavior: smooth; min-height: 0;}
         .msg-row { display: flex; width: 100%; position: relative; }
-        .msg-row.out { justify-content: flex-start; } /* راست‌چین شده */
+        .msg-row.out { justify-content: flex-start; } 
         .msg-row.in { justify-content: flex-end; }
         
         .bubble { max-width: 80%; padding: 10px 14px; border-radius: 16px; font-size: 15px; line-height: 1.5; position: relative; word-break: break-word; box-shadow: 0 1px 2px rgba(0,0,0,0.2); display: flex; flex-direction: column;}
@@ -85,8 +89,7 @@
         .msg-row.out .delete-btn { left: calc(100% + 5px); }
         .msg-row:hover .delete-btn { opacity: 1; }
 
-        /* Media in chat */
-        .bubble img, .bubble video { max-width: 100%; border-radius: 10px; margin-top: 5px; cursor: pointer; border: 1px solid rgba(255,255,255,0.1); }
+        .bubble img, .bubble video { max-width: 100%; border-radius: 10px; margin-top: 5px; cursor: pointer; }
         .bubble audio { width: 240px; height: 40px; margin-top: 5px; outline: none; }
         .file-link { display: flex; align-items: center; gap: 10px; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 10px; color: white; text-decoration: none; margin-top:5px; }
 
@@ -104,7 +107,7 @@
 
         @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.1); } 100% { transform: scale(1); } }
 
-        /* --- Modals --- */
+        /* --- Modals & Overlays --- */
         .modal-overlay { position: fixed; top:0; left:0; width:100%; height:100%; background: rgba(0,0,0,0.6); z-index: 2000; display: none; justify-content: center; align-items: center; backdrop-filter: blur(5px); }
         .modal-box { background: var(--bg-panel); border: 1px solid var(--border); padding: 25px; border-radius: 16px; width: 90%; max-width: 380px; box-shadow: 0 10px 40px rgba(0,0,0,0.8); display: flex; flex-direction: column; gap: 15px;}
         .modal-box h3 { color: var(--c-white); font-weight: 600;}
@@ -119,12 +122,13 @@
 
         /* Mobile Adjustments */
         @media (max-width: 768px) {
-            .sidebar { position: absolute; top:0; right:0; width: 100%; height: 100%; z-index: 50; }
+            .sidebar { position: absolute; top:0; right:0; width: 100%; height: 100%; z-index: 1000; }
             .sidebar.hidden { transform: translateX(100%); }
-            .back-btn { display: flex; }
+            .back-btn { display: flex !important; }
             .messages { padding: 20px 5%; }
             .bubble { max-width: 90%; }
             .msg-row.out .delete-btn { left: 0; top: -15px; transform: none; font-size:16px;}
+            .input-area { padding-bottom: max(15px, env(safe-area-inset-bottom)); } /* جلوگیری کامل از زیر کیبورد رفتن */
         }
     </style>
 </head>
@@ -137,6 +141,7 @@
             <input type="password" id="password" placeholder="Password" dir="ltr">
             <button onclick="login()" data-i18n="btn_login">ورود / تایید</button>
         </div>
+        <div class="dev-credit">Developed by saeed eramy</div>
     </div>
 
     <div id="app">
@@ -146,7 +151,7 @@
                 <div class="search-box">
                     <input type="text" id="searchInput" data-i18n-ph="search_ph" placeholder="جستجو..." onkeyup="searchChat()">
                 </div>
-                <button class="icon-btn primary" onclick="openModal('contactModal')" title="چت جدید">➕</button>
+                <button class="new-chat-btn" onclick="openModal('contactModal')" title="چت جدید">➕</button>
             </div>
             <div class="chat-list" id="chat-list"></div>
         </div>
@@ -231,7 +236,6 @@
         </div>
     </div>
 
-    <audio id="notif-sound" src="data:audio/mp3;base64,//NExAAAAANIAAAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq" preload="auto"></audio>
     <script src="/static/script.js"></script>
 </body>
 </html>
