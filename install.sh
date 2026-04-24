@@ -48,7 +48,6 @@ function install_app() {
     mkdir -p $INSTALL_DIR/static/uploads
     mkdir -p $INSTALL_DIR/templates
     
-    # در صورت وجود فایل‌های لوکال کپی می‌شوند، در غیر این صورت از گیت‌هاب دانلود می‌شوند
     if [ -f "main.py" ]; then
         cp -r * $INSTALL_DIR/ 2>/dev/null
     else
@@ -104,11 +103,15 @@ function update_app() {
     curl -sL "$REPO_URL/install.sh" -o "$INSTALL_DIR/install.sh"
     chmod +x "$INSTALL_DIR/install.sh"
     
+    # [حل باگ بزرگ کش مرورگر]: اضافه کردن مُهر زمانی به فایل JS تا مرورگرها فایل جدید را بگیرند
+    TIMESTAMP=$(date +%s)
+    sed -i "s/script.js/script.js?v=$TIMESTAMP/g" "$INSTALL_DIR/templates/index.html"
+    
     if systemctl is-active --quiet $SERVICE_NAME; then
         systemctl restart $SERVICE_NAME
     fi
     
-    echo -e "${GREEN}[✔] Update Complete! Users, Database, and uploads are safe.${RESET}"
+    echo -e "${GREEN}[✔] Update Complete! Cache busted. Users, DB, and uploads are safe.${RESET}"
 }
 
 function add_user() {
@@ -164,7 +167,6 @@ EOF
     systemctl restart nginx
     certbot --nginx -d $DOMAIN --non-interactive --agree-tos --register-unsafely-without-email
     
-    # اضافه کردن نام دامنه به فایل کانفیگ
     echo "DOMAIN=$DOMAIN" >> $ENV_FILE
     echo -e "${GREEN}[✔] Auto SSL & Nginx Ready!${RESET}"
 }
@@ -215,8 +217,9 @@ EOF
 }
 
 function uninstall_app() {
-    echo -e "${RED}⚠️ WARNING: This will delete the app, database, users, and all uploaded files!${RESET}"
-    read -e -p "Are you absolutely sure? (y/n): " choice
+    echo -e "${RED}⚠️ WARNING: This will delete the App, Database, and Chat Nginx block.${RESET}"
+    echo -e "${CYAN}Don't worry! Your global Nginx installation and other server files are SAFE.${RESET}"
+    read -e -p "Are you sure? (y/n): " choice
     if [ "$choice" == "y" ]; then
         echo "Stopping and removing service..."
         systemctl stop $SERVICE_NAME 2>/dev/null
@@ -224,16 +227,17 @@ function uninstall_app() {
         rm -f /etc/systemd/system/$SERVICE_NAME
         systemctl daemon-reload
         
-        echo "Removing Nginx configs..."
+        echo "Removing Black Chat Nginx config (Other configs are safe)..."
         rm -f /etc/nginx/sites-enabled/black-chat
         rm -f /etc/nginx/sites-available/black-chat
         systemctl restart nginx
 
-        echo "Deleting files..."
-        rm -rf $INSTALL_DIR
+        echo "Deleting application folder..."
+        cd /tmp || exit
+        rm -rf "$INSTALL_DIR"
         rm -f /usr/local/bin/black-chat
         
-        echo -e "${RED}[✔] Black Chat has been completely uninstalled.${RESET}"
+        echo -e "${GREEN}[✔] Black Chat has been safely uninstalled!${RESET}"
         exit 0
     fi
 }
@@ -258,14 +262,14 @@ while true; do
     echo -e " ${YELLOW}7)${RESET} 🔐 Setup Nginx & Auto SSL (Certbot)"
     echo -e " ${YELLOW}8)${RESET} 🔐 Setup Nginx & Manual SSL"
     echo -e " ${YELLOW}9)${RESET} 🔑 Show Users & Info"
-    echo -e "${RED}10)${RESET} ☢️  Full Uninstall (Nuclear Option)"
+    echo -e "${RED}10)${RESET} ☢️  Safe Uninstall (App Only)"
     echo -e "  ${RED}0)${RESET} ❌ Exit"
     echo -e "${GREEN}-----------------------------------------${RESET}"
     read -e -p "Choose an option (0-10): " choice
 
     case $choice in
         1) install_app ; sleep 2 ;;
-        2) update_app ; sleep 3 ; exec black-chat ;; # ری‌استارت پنل بعد از آپدیت
+        2) update_app ; sleep 3 ; exec black-chat ;;
         3) add_user ; sleep 2 ;;
         4) delete_user ; sleep 2 ;;
         5) systemctl start $SERVICE_NAME; echo -e "${GREEN}[✔] Started!${RESET}" ; sleep 1 ;;
