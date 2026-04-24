@@ -30,11 +30,21 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS contacts (id INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT, contact TEXT, UNIQUE(owner, contact))''')
     c.execute('''CREATE TABLE IF NOT EXISTS active_ips (user TEXT, ip TEXT, last_seen DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE(user, ip))''')
     c.execute('''CREATE TABLE IF NOT EXISTS profiles (user TEXT PRIMARY KEY, avatar TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS custom_rooms (room_id TEXT PRIMARY KEY, type TEXT, name TEXT, owner TEXT)''')
+    # جدول گروه‌های خصوصی
+    c.execute('''CREATE TABLE IF NOT EXISTS custom_rooms (room_id TEXT PRIMARY KEY, name TEXT, owner TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS room_members (room_id TEXT, user TEXT, UNIQUE(room_id, user))''')
     conn.commit()
     conn.close()
 
 init_db()
+
+# تابع استخراج آی‌پی واقعی از پشت Nginx
+def get_real_ip(request: Request):
+    real_ip = request.headers.get("X-Real-IP")
+    forwarded = request.headers.get("X-Forwarded-For")
+    if real_ip: return real_ip
+    if forwarded: return forwarded.split(",")[0].strip()
+    return request.client.host
 
 class ConnectionManager:
     def __init__(self):
@@ -50,10 +60,8 @@ class ConnectionManager:
 
     async def broadcast(self, message: dict):
         for connection in self.active_connections:
-            try:
-                await connection.send_json(message)
-            except:
-                pass
+            try: await connection.send_json(message)
+            except: pass
 
 manager = ConnectionManager()
 
@@ -84,7 +92,7 @@ async def login_api(request: Request):
     user, pwd = data.get("username"), data.get("password")
     role = check_login(user, pwd)
     if role:
-        ip = request.client.host
+        ip = get_real_ip(request)
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
         c.execute("INSERT OR REPLACE INTO active_ips (user, ip, last_seen) VALUES (?, ?, CURRENT_TIMESTAMP)", (user, ip))
@@ -107,22 +115,6 @@ async def upload_file(file: UploadFile = File(...)):
     
     return {"url": f"/static/uploads/{file.filename}", "type": msg_type, "name": file.filename}
 
-@app.post("/api/upload_avatar")
-async def upload_avatar(username: str = Form(...), file: UploadFile = File(...)):
-    ext = file.filename.split('.')[-1]
-    avatar_name = f"avatar_{username}_{uuid.uuid4().hex[:6]}.{ext}"
-    file_location = os.path.join(UPLOAD_DIR, avatar_name)
-    async with aiofiles.open(file_location, 'wb') as out_file:
-        await out_file.write(await file.read())
-    
-    url = f"/static/uploads/{avatar_name}"
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO profiles (user, avatar) VALUES (?, ?)", (username, url))
-    conn.commit()
-    conn.close()
-    return {"success": True, "url": url}
-
 @app.post("/api/action")
 async def api_action(request: Request):
     data = await request.json()
@@ -131,25 +123,40 @@ async def api_action(request: Request):
     c = conn.cursor()
     res = {"success": True}
     
-    if act == "get_ips":
-        c.execute("SELECT ip, last_seen FROM active_ips WHERE user=?", (data.get("user"),))
-        res["ips"] = [{"ip": r[0], "date": r[1]} for r in c.fetchall()]
-    elif act == "create_room":
-        room_id = "rm_" + uuid.uuid4().hex[:8]
-        c.execute("INSERT INTO custom_rooms (room_id, type, name, owner) VALUES (?, ?, ?, ?)", (room_id, data.get("type"), data.get("name"), data.get("user")))
-        res["room_id"] = room_id
-    elif act == "get_init_data":
+    if act == "get_init_data":
         u = data.get("user")
         c.execute("SELECT contact FROM contacts WHERE owner=?", (u,))
         res["contacts"] = [r[0] for r in c.fetchall()]
-        c.execute("SELECT room_id, type, name FROM custom_rooms")
-        res["custom_rooms"] = [{"id": r[0], "type": r[1], "name": r[2]} for r in c.fetchall()]
-        c.execute("SELECT avatar FROM profiles WHERE user=?", (u,))
-        av = c.fetchone()
-        res["avatar"] = av[0] if av else ""
+        
+        # واکشی گروه‌هایی که کاربر عضو آن‌هاست
+        c.execute("""
+            SELECT r.room_id, r.name 
+            FROM custom_rooms r
+            JOIN room_members m ON r.room_id = m.room_id
+            WHERE m.user = ?
+        """, (u,))
+        res["custom_rooms"] = [{"id": r[0], "type": "group", "name": r[1]} for r in c.fetchall()]
+        
+    elif act == "get_ips":
+        c.execute("SELECT ip, last_seen FROM active_ips WHERE user=?", (data.get("user"),))
+        res["ips"] = [{"ip": r[0], "date": r[1]} for r in c.fetchall()]
+        
+    elif act == "create_room":
+        room_id = "rm_" + uuid.uuid4().hex[:8]
+        owner = data.get("user")
+        room_name = data.get("name")
+        members = data.get("members", [])
+        
+        c.execute("INSERT INTO custom_rooms (room_id, name, owner) VALUES (?, ?, ?)", (room_id, room_name, owner))
+        c.execute("INSERT INTO room_members (room_id, user) VALUES (?, ?)", (room_id, owner))
+        for m in members:
+            c.execute("INSERT OR IGNORE INTO room_members (room_id, user) VALUES (?, ?)", (room_id, m))
+            
+        res["room_id"] = room_id
+        
     elif act == "add_contact":
         owner, target = data.get("owner"), data.get("target")
-        if target not in get_all_users(): 
+        if target not in get_all_users():
             res = {"success": False, "msg": "User not found"}
         else:
             c.execute("INSERT OR IGNORE INTO contacts (owner, contact) VALUES (?, ?)", (owner, target))
@@ -192,16 +199,22 @@ async def websocket_endpoint(websocket: WebSocket, username: str, role: str):
                 
                 if room == "Announcements" and role != "admin": continue
                 
-                c.execute("SELECT type, owner FROM custom_rooms WHERE room_id=?", (room,))
-                r_data = c.fetchone()
-                if r_data and r_data[0] == 'channel' and role != 'admin' and r_data[1] != username: continue
-                
+                # دریافت اعضای گروه برای ارسال نوتیفیکیشن صحیح
+                room_members = []
+                if room.startswith('rm_'):
+                    c.execute("SELECT user FROM room_members WHERE room_id=?", (room,))
+                    room_members = [r[0] for r in c.fetchall()]
+
                 if target_user:
                     c.execute("INSERT OR IGNORE INTO contacts (owner, contact) VALUES (?, ?)", (username, target_user))
                     c.execute("INSERT OR IGNORE INTO contacts (owner, contact) VALUES (?, ?)", (target_user, username))
 
                 msg_id = str(uuid.uuid4())
-                msg_payload = {"id": msg_id, "user": msg['user'], "msgType": msg['msgType'], "text": msg.get('text',''), "url": msg.get('url',''), "fileName": msg.get('fileName','')}
+                msg_payload = {
+                    "id": msg_id, "user": msg['user'], "msgType": msg['msgType'], 
+                    "text": msg.get('text',''), "url": msg.get('url',''), 
+                    "fileName": msg.get('fileName',''), "roomMembers": room_members
+                }
                 
                 c.execute("INSERT INTO messages (msg_id, room, user, msg_type, content, file_name) VALUES (?, ?, ?, ?, ?, ?)", 
                           (msg_id, room, msg['user'], msg['msgType'], msg.get('text', msg.get('url', '')), msg.get('fileName', '')))
