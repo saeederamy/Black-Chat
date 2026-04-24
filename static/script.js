@@ -1,5 +1,5 @@
 // =========================================================
-// ⚙️ WebRTC STUN/TURN Config (Prepared for Iran Servers - MCI fix)
+// ⚙️ WebRTC STUN/TURN Config 
 // =========================================================
 const SERVER_CONFIG = {
     turnDomain: window.location.hostname,   
@@ -8,24 +8,15 @@ const SERVER_CONFIG = {
     turnPass: "pass"         
 };
 
-let currentUser = null;
-let currentRole = null;
-let currentRoom = null;
-let targetUserForDM = null; 
-let ws = null;
-let currentLang = localStorage.getItem('lang') || 'fa';
-let myContacts = [];
-
+let currentUser = null; let currentRole = null; let currentRoom = null; let targetUserForDM = null; 
+let ws = null; let currentLang = localStorage.getItem('lang') || 'fa'; let myContacts = [];
 let contextMsgId = null; let contextMsgText = null; let contextMsgSender = null;
 let replyToMsg = null; let selectionMode = false; let selectedMsgs = [];
+let autoDownload = true; 
 
 let savedTheme = localStorage.getItem('hub_theme') || 'dark';
 document.documentElement.setAttribute('data-theme', savedTheme);
-function toggleTheme() {
-    savedTheme = savedTheme === 'dark' ? 'light' : 'dark';
-    document.documentElement.setAttribute('data-theme', savedTheme);
-    localStorage.setItem('hub_theme', savedTheme);
-}
+function toggleTheme() { savedTheme = savedTheme === 'dark' ? 'light' : 'dark'; document.documentElement.setAttribute('data-theme', savedTheme); localStorage.setItem('hub_theme', savedTheme); }
 
 let savedBg = localStorage.getItem('chatBg');
 if(savedBg) document.getElementById('chatArea').style.backgroundImage = `url('${savedBg}')`;
@@ -43,14 +34,9 @@ function applyLang() {
 }
 applyLang();
 function changeLang(lang) { currentLang = lang; localStorage.setItem('lang', lang); applyLang(); }
+function toggleAutoDl(state) { autoDownload = state; }
+function changeBg(url) { if(url.trim() === '') { localStorage.removeItem('chatBg'); document.getElementById('chatArea').style.backgroundImage = 'none'; } else { localStorage.setItem('chatBg', url); document.getElementById('chatArea').style.backgroundImage = `url('${url}')`; } }
 
-let autoDownload = true; function toggleAutoDl(state) { autoDownload = state; }
-function changeBg(url) { 
-    if(url.trim() === '') { localStorage.removeItem('chatBg'); document.getElementById('chatArea').style.backgroundImage = 'none'; }
-    else { localStorage.setItem('chatBg', url); document.getElementById('chatArea').style.backgroundImage = `url('${url}')`; }
-}
-
-// سیستم حفظ لاگین
 window.onload = () => {
     const s_usr = localStorage.getItem('bc_user');
     const s_role = localStorage.getItem('bc_role');
@@ -62,11 +48,7 @@ window.onload = () => {
     }
 };
 
-function doLogout() {
-    localStorage.removeItem('bc_user');
-    localStorage.removeItem('bc_role');
-    location.reload();
-}
+function doLogout() { localStorage.removeItem('bc_user'); localStorage.removeItem('bc_role'); location.reload(); }
 
 async function login() {
     const u = document.getElementById('username').value.trim(); const p = document.getElementById('password').value.trim();
@@ -103,11 +85,7 @@ function initWebSocket() {
         else if (msg.type === 'webrtc') { handleWebRTC(msg.data); }
     };
     ws.onclose = () => { setTimeout(initWebSocket, 2000); };
-
-    // پینگ کلودفلر/اروان برای زنده نگه داشتن سوکت
-    setInterval(() => {
-        if(ws && ws.readyState === WebSocket.OPEN) { ws.send(JSON.stringify({action: 'ping'})); }
-    }, 15000);
+    setInterval(() => { if(ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({action: 'ping'})); }, 15000);
 }
 
 let userAvatars = {};
@@ -121,23 +99,23 @@ async function loadInitData() {
     if(data.avatar) { document.getElementById('my-avatar').src = data.avatar; document.getElementById('my-avatar').style.display='block'; document.getElementById('my-initial').style.display='none'; }
 
     const list = document.getElementById('chat-list');
-    list.innerHTML = `<div class="chat-item" data-room="Announcements" onclick="openChat('Announcements', 'channel', '📢', 'Announcements')">
+    // باگ کوتیشن برطرف شد (از پاس دادن تگ img درون onclick جلوگیری شد)
+    list.innerHTML = `<div class="chat-item" data-room="Announcements" onclick="openChat('Announcements', 'channel', 'Announcements')">
             <div class="avatar" style="background:var(--c-red); color:white;">📢</div><div class="chat-info"><div class="chat-name">Announcements</div><div class="chat-preview" data-i18n="system_channel">${translations[currentLang].system_channel}</div></div><span class="unread-badge" id="badge-Announcements">0</span></div>`;
     
     data.custom_rooms.forEach(r => {
-        let icon = r.type === 'group' ? '👥' : '📢';
         let sub = r.type === 'group' ? translations[currentLang].group : translations[currentLang].channel;
-        list.innerHTML += `<div class="chat-item" data-room="${r.id}" onclick="openChat('${r.id}', '${r.type}', '${icon}', '${r.name}')">
-                <div class="avatar" style="background:var(--c-blue); color:white;">${icon}</div><div class="chat-info"><div class="chat-name">${r.name}</div><div class="chat-preview">${sub}</div></div><span class="unread-badge" id="badge-${r.id}">0</span></div>`;
+        list.innerHTML += `<div class="chat-item" data-room="${r.id}" onclick="openChat('${r.id}', '${r.type}', '${r.name}')">
+                <div class="avatar" style="background:var(--c-blue); color:white;">👥</div><div class="chat-info"><div class="chat-name">${r.name}</div><div class="chat-preview">${sub}</div></div><span class="unread-badge" id="badge-${r.id}">0</span></div>`;
     });
 
     data.contacts.forEach(c => {
-        let av = userAvatars[c] ? `<img src="${userAvatars[c]}">` : '👤';
-        list.innerHTML += `<div class="chat-item" data-room="${c}" onclick="openChat('${c}', 'private', \`${av}\`, '${c}', '${c}')">
-                <div class="avatar">${av}</div><div class="chat-info"><div class="chat-name">${c}</div><div class="chat-preview" data-i18n="private_chat">${translations[currentLang].private_chat}</div></div><span class="unread-badge" id="badge-dm_${c}">0</span></div>`;
+        let avHTML = userAvatars[c] ? `<img src="${userAvatars[c]}">` : '👤';
+        list.innerHTML += `<div class="chat-item" data-room="${c}" onclick="openChat('${c}', 'private', '${c}', '${c}')">
+                <div class="avatar">${avHTML}</div><div class="chat-info"><div class="chat-name">${c}</div><div class="chat-preview" data-i18n="private_chat">${translations[currentLang].private_chat}</div></div><span class="unread-badge" id="badge-dm_${c}">0</span></div>`;
     });
     
-    if(!currentRoom) openChat('Announcements', 'channel', '📢', 'Announcements');
+    if(!currentRoom) openChat('Announcements', 'channel', 'Announcements');
 }
 
 function openModal(id) { let m = document.getElementById(id); if(m) m.style.display = 'flex'; if(id === 'settingsModal') fetchIPs(); }
@@ -187,7 +165,7 @@ async function submitContact() {
     const t = document.getElementById('contactUsername').value.trim(); if(!t) return;
     const res = await fetch('/api/action', { method: 'POST', body: JSON.stringify({action:'add_contact', owner: currentUser, target: t}), headers: {'Content-Type': 'application/json'} });
     const data = await res.json();
-    if(data.success) { closeModal('createModal'); loadInitData(); openChat(data.target, 'private', '👤', data.target, data.target); } else alert(data.msg);
+    if(data.success) { closeModal('createModal'); loadInitData(); openChat(data.target, 'private', data.target, data.target); } else alert(data.msg);
 }
 
 async function submitCreation() {
@@ -195,10 +173,11 @@ async function submitCreation() {
     let members = []; document.querySelectorAll('#groupMembersList input:checked').forEach(chk => members.push(chk.value));
     const res = await fetch('/api/action', { method: 'POST', body: JSON.stringify({action:'create_room', type: t, name: n, user: currentUser, members: members}), headers: {'Content-Type': 'application/json'} });
     const data = await res.json();
-    if(data.success) { closeModal('createModal'); loadInitData(); openChat(data.room_id, t, t==='group'?'👥':'📢', n); }
+    if(data.success) { closeModal('createModal'); loadInitData(); openChat(data.room_id, t, n); }
 }
 
-function openChat(roomId, type, icon, title, targetUser = null) {
+// تابع باز کردن چت (ایزوله از تگ‌های HTML)
+function openChat(roomId, type, title, targetUser = null) {
     document.querySelectorAll('.chat-item').forEach(c => c.classList.remove('active'));
     let activeItem = document.querySelector(`.chat-item[data-room="${roomId}"]`);
     if(activeItem) activeItem.classList.add('active');
@@ -212,7 +191,13 @@ function openChat(roomId, type, icon, title, targetUser = null) {
     let st = type === 'channel' ? translations[currentLang].system_channel : (type === 'group' ? translations[currentLang].group : translations[currentLang].private_chat);
     if(roomId === 'Announcements') st = translations[currentLang].system_channel;
     document.getElementById('room-status').innerText = st;
-    document.getElementById('header-avatar').innerHTML = icon; 
+    
+    // تنظیم آیکون چت در هدر با جاوا اسکریپت
+    let headerAv = '📢';
+    if (type === 'group') headerAv = '👥';
+    if (type === 'private') headerAv = (targetUser && userAvatars[targetUser]) ? `<img src="${userAvatars[targetUser]}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;">` : '👤';
+    document.getElementById('header-avatar').innerHTML = headerAv;
+
     document.getElementById('messages').innerHTML = '';
     
     let badgeId = type === 'private' ? `badge-dm_${roomId}` : `badge-${roomId}`;
@@ -232,6 +217,7 @@ function openChat(roomId, type, icon, title, targetUser = null) {
 
 function closeChat() { document.getElementById('sidebar').classList.remove('hidden'); }
 
+// Profile Shared Media
 function openProfile() {
     if(!currentRoom) return;
     document.getElementById('prof-avatar').innerHTML = document.getElementById('header-avatar').innerHTML;
@@ -241,11 +227,10 @@ function openProfile() {
     document.querySelectorAll('.bubble').forEach(b => {
         let img = b.querySelector('img'); let vid = b.querySelector('video');
         if(img) mediaH += `<img src="${img.src}" style="width:30%; height:80px; object-fit:cover; border-radius:8px; border:1px solid var(--border);">`;
-        if(vid && !vid.classList.contains('video-msg')) mediaH += `<video src="${vid.src}" style="width:30%; height:80px; object-fit:cover; border-radius:8px; border:1px solid var(--border);"></video>`;
+        if(vid) mediaH += `<video src="${vid.src}" style="width:30%; height:80px; object-fit:cover; border-radius:8px; border:1px solid var(--border);"></video>`;
         
-        let aud = b.querySelector('audio'); let vidMsg = b.querySelector('.video-msg');
+        let aud = b.querySelector('audio'); 
         if(aud) audioH += `<audio controls src="${aud.src}" style="width:100%; height:40px; margin-bottom:5px; border-radius:20px;"></audio>`;
-        if(vidMsg) audioH += `<video src="${vidMsg.src}" controls style="width:100px; height:100px; border-radius:50%; object-fit:cover; margin-bottom:5px; border:2px solid var(--c-blue);"></video>`; 
 
         let link = b.querySelector('.file-link');
         if(link) filesH += `<a href="${link.href}" class="file-link" download>${link.innerHTML}</a>`;
@@ -257,18 +242,17 @@ function openProfile() {
     
     document.getElementById('tab-media').innerHTML = mediaH || '<p style="padding:20px; color:var(--c-gray);">محتوایی یافت نشد.</p>';
     document.getElementById('tab-files').innerHTML = filesH || '<p style="padding:20px; color:var(--c-gray);">فایلی یافت نشد.</p>';
-    document.getElementById('tab-audio').innerHTML = audioH || '<p style="padding:20px; color:var(--c-gray);">ویس/ویدیویی یافت نشد.</p>';
+    document.getElementById('tab-audio').innerHTML = audioH || '<p style="padding:20px; color:var(--c-gray);">ویسی یافت نشد.</p>';
     document.getElementById('tab-links').innerHTML = linksH || '<p style="padding:20px; color:var(--c-gray);">لینکی یافت نشد.</p>';
     
     switchProfTab('media', document.querySelector('.prof-tab'));
     openModal('profileModal');
 }
-
 function switchProfTab(tab, btn) {
     document.querySelectorAll('.prof-tab').forEach(b => { b.style.color = 'var(--c-gray)'; b.style.borderBottomColor = 'transparent'; });
     btn.style.color = 'var(--c-blue)'; btn.style.borderBottomColor = 'var(--c-blue)';
     document.querySelectorAll('.prof-content').forEach(c => c.style.display = 'none');
-    document.getElementById(`tab-${tab}`).style.display = 'flex';
+    document.getElementById(`tab-${tab}`).style.display = tab==='media'?'flex':'flex';
 }
 
 function handleNotification(msg) {
@@ -290,12 +274,8 @@ function appendMessage(data) {
     let media = '';
     if (data.msgType === 'image') media = `<img src="${data.url}">`;
     else if (data.msgType === 'video') {
-        let isVideoMessage = data.url.includes('rec.webm') || data.url.includes('rec.mp4');
-        if (isVideoMessage) {
-            media = `<video class="video-msg" autoplay loop muted playsinline src="${data.url}" onclick="this.muted = !this.muted;"></video>`;
-        } else {
-            media = `<video controls playsinline style="max-width:100%; border-radius:12px; margin-top:5px;" src="${data.url}"></video>`;
-        }
+        // ویدیو مسیج هم کاملا مربعی با حاشیه نرم (مثل بقیه مدیا) شد تا کنترلرها به هم نریزند
+        media = `<video controls playsinline style="max-width:100%; border-radius:12px; margin-top:5px; border:1px solid var(--border);" src="${data.url}"></video>`;
     }
     else if (data.msgType === 'audio') media = `<audio controls preload="metadata" src="${data.url}"></audio>`;
     else if (data.msgType === 'file') {
@@ -309,18 +289,19 @@ function appendMessage(data) {
         replyHtml = `<div class="reply-preview" onclick="scrollToMsg('msg-${data.replyTo.id}')"><div style="color:var(--c-blue); font-weight:bold; font-size:12px;">${data.replyTo.user}</div><div style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${data.replyTo.text}</div></div>`;
     }
 
-    let isOnlyVidMsg = data.msgType === 'video' && (data.url.includes('rec.webm') || data.url.includes('rec.mp4')) && !textContent;
-    let bubbleClass = isOnlyVidMsg ? "bubble video-msg-bubble" : "bubble normal-msg";
+    let delBtn = (isSelf || currentRole === 'admin') ? `<button class="delete-btn" onclick="deleteMsg('${data.id}')"><svg style="width:20px; fill:currentColor;"><use href="#icon-trash"></use></svg></button>` : '';
 
     const html = `
         <div class="msg-row ${isSelf ? 'out' : 'in'}" id="msg-${data.id}">
-            <div class="${bubbleClass}" dir="auto" oncontextmenu="openMsgMenu(event, '${data.id}', '${encodeURIComponent(textContent)}', '${data.user}')" onclick="toggleMsgSelection('${data.id}')">
+            ${isSelf ? delBtn : ''}
+            <div class="bubble" dir="auto" oncontextmenu="openMsgMenu(event, '${data.id}', '${encodeURIComponent(textContent)}', '${data.user}')" onclick="toggleMsgSelection('${data.id}')">
                 <span class="sender-name">${data.user}</span>
                 ${replyHtml}
                 ${textContent}
                 ${media}
                 <div class="reactions-bar" id="reacts-${data.id}"></div>
             </div>
+            ${!isSelf ? delBtn : ''}
         </div>`;
     
     msgBox.insertAdjacentHTML('beforeend', html);
@@ -450,7 +431,7 @@ async function startRecord(type, btn) {
             recSeconds = 0; document.getElementById('recTimer').innerText = "00:00";
             recTimerInterval = setInterval(updateTimer, 1000);
             
-        } catch (err) { alert("لطفا دسترسی میکروفون/دوربین را مجاز کنید."); }
+        } catch (err) { alert("لطفا دسترسی میکروفون/دوربین را در مرورگر مجاز کنید."); }
     }
 }
 
