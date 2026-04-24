@@ -1,26 +1,38 @@
+// =========================================================
+// ⚙️ WebRTC STUN/TURN Config (Prepared for Iran Servers - MCI fix)
+// =========================================================
 const SERVER_CONFIG = {
-    turnDomain: window.location.hostname,   
+    turnDomain: "turn.yourdomain.ir",   // سرور ترن خود را اینجا بگذارید
     turnPort: "3478",                 
     turnUser: "user",            
     turnPass: "pass"         
 };
 
-let currentUser = null; let currentRole = null; let currentRoom = null; let targetUserForDM = null; 
-let ws = null; let currentLang = localStorage.getItem('lang') || 'fa'; let myContacts = [];
+let currentUser = null;
+let currentRole = null;
+let currentRoom = null;
+let targetUserForDM = null; 
+let ws = null;
+let currentLang = localStorage.getItem('lang') || 'fa';
+let myContacts = [];
+
 let contextMsgId = null; let contextMsgText = null; let contextMsgSender = null;
 let replyToMsg = null; let selectionMode = false; let selectedMsgs = [];
-let autoDownload = true; 
 
 let savedTheme = localStorage.getItem('hub_theme') || 'dark';
 document.documentElement.setAttribute('data-theme', savedTheme);
-function toggleTheme() { savedTheme = savedTheme === 'dark' ? 'light' : 'dark'; document.documentElement.setAttribute('data-theme', savedTheme); localStorage.setItem('hub_theme', savedTheme); }
+function toggleTheme() {
+    savedTheme = savedTheme === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', savedTheme);
+    localStorage.setItem('hub_theme', savedTheme);
+}
 
 let savedBg = localStorage.getItem('chatBg');
 if(savedBg) document.getElementById('chatArea').style.backgroundImage = `url('${savedBg}')`;
 
 const translations = {
-    'en': { login_title: 'System Login', btn_login: 'Login', search_ph: 'Search...', type_ph: 'Message...', settings: 'Settings', add_contact: 'New Chat / Group', username_ph: 'Enter exact username', language: 'Language', active_sessions: 'Active IPs (Real IP)', chat_bg: 'Chat Wallpaper URL', system_channel: 'System Channel', private_chat: 'Private Chat', group: 'Private Group' },
-    'fa': { login_title: 'ورود به سیستم', btn_login: 'ورود / تایید', search_ph: 'جستجو...', type_ph: 'پیام خود را بنویسید...', settings: 'تنظیمات سیستم', add_contact: 'چت یا گروه جدید', username_ph: 'آیدی دقیق را وارد کنید', language: 'زبان برنامه', active_sessions: 'آی‌پی‌های متصل شما', chat_bg: 'پس‌زمینه چت (لینک عکس)', system_channel: 'کانال سیستم', private_chat: 'چت خصوصی', group: 'گروه خصوصی' }
+    'en': { login_title: 'System Login', btn_login: 'Login', search_ph: 'Search...', type_ph: 'Message...', settings: 'Settings', add_contact: 'New Chat / Group', username_ph: 'Enter exact username', language: 'Language', active_sessions: 'Active IPs', chat_bg: 'Chat Wallpaper URL', system_channel: 'System Channel', private_chat: 'Private Chat', group: 'Private Group', channel: 'Public Channel' },
+    'fa': { login_title: 'ورود به سیستم', btn_login: 'ورود / تایید', search_ph: 'جستجو...', type_ph: 'پیام خود را بنویسید...', settings: 'تنظیمات سیستم', add_contact: 'چت یا گروه جدید', username_ph: 'آیدی دقیق را وارد کنید', language: 'زبان برنامه', active_sessions: 'آی‌پی‌های متصل شما', chat_bg: 'پس‌زمینه چت (لینک عکس)', system_channel: 'کانال سیستم', private_chat: 'چت خصوصی', group: 'گروه خصوصی', channel: 'کانال عمومی' }
 };
 
 function applyLang() {
@@ -31,21 +43,12 @@ function applyLang() {
 }
 applyLang();
 function changeLang(lang) { currentLang = lang; localStorage.setItem('lang', lang); applyLang(); }
-function toggleAutoDl(state) { autoDownload = state; }
-function changeBg(url) { if(url.trim() === '') { localStorage.removeItem('chatBg'); document.getElementById('chatArea').style.backgroundImage = 'none'; } else { localStorage.setItem('chatBg', url); document.getElementById('chatArea').style.backgroundImage = `url('${url}')`; } }
 
-window.onload = () => {
-    const s_usr = localStorage.getItem('bc_user');
-    const s_role = localStorage.getItem('bc_role');
-    if (s_usr && s_role) {
-        currentUser = s_usr; currentRole = s_role;
-        document.getElementById('login-screen').style.display = 'none';
-        document.getElementById('app').style.display = 'flex';
-        initWebSocket(); loadInitData();
-    }
-};
-
-function doLogout() { localStorage.removeItem('bc_user'); localStorage.removeItem('bc_role'); location.reload(); }
+let autoDownload = true; function toggleAutoDl(state) { autoDownload = state; }
+function changeBg(url) { 
+    if(url.trim() === '') { localStorage.removeItem('chatBg'); document.getElementById('chatArea').style.backgroundImage = 'none'; }
+    else { localStorage.setItem('chatBg', url); document.getElementById('chatArea').style.backgroundImage = `url('${url}')`; }
+}
 
 async function login() {
     const u = document.getElementById('username').value.trim(); const p = document.getElementById('password').value.trim();
@@ -55,8 +58,6 @@ async function login() {
         const data = await res.json();
         if (data.success) {
             currentUser = data.username; currentRole = data.role;
-            localStorage.setItem('bc_user', currentUser); localStorage.setItem('bc_role', currentRole);
-            if ("Notification" in window && Notification.permission !== "granted") Notification.requestPermission();
             document.getElementById('login-screen').style.display = 'none'; document.getElementById('app').style.display = 'flex';
             initWebSocket(); loadInitData();
         } else alert("اطلاعات ورود اشتباه است");
@@ -83,7 +84,6 @@ function initWebSocket() {
         else if (msg.type === 'webrtc') { handleWebRTC(msg.data); }
     };
     ws.onclose = () => { setTimeout(initWebSocket, 2000); };
-    setInterval(() => { if(ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({action: 'ping'})); }, 15000);
 }
 
 let userAvatars = {};
@@ -97,25 +97,23 @@ async function loadInitData() {
     if(data.avatar) { document.getElementById('my-avatar').src = data.avatar; document.getElementById('my-avatar').style.display='block'; document.getElementById('my-initial').style.display='none'; }
 
     const list = document.getElementById('chat-list');
-    
-    // ارسال داده‌های استرینگ به متد (بدون تگ HTML)
-    list.innerHTML = `<div class="chat-item" data-room="Announcements" onclick="openChat('Announcements', 'channel', 'Announcements')">
+    list.innerHTML = `<div class="chat-item" data-room="Announcements" onclick="openChat('Announcements', 'channel', '📢', 'Announcements')">
             <div class="avatar" style="background:var(--c-red); color:white;">📢</div><div class="chat-info"><div class="chat-name">Announcements</div><div class="chat-preview" data-i18n="system_channel">${translations[currentLang].system_channel}</div></div><span class="unread-badge" id="badge-Announcements">0</span></div>`;
     
     data.custom_rooms.forEach(r => {
-        let sub = translations[currentLang].group;
-        // بدون تداخل کوتیشن 
-        list.innerHTML += `<div class="chat-item" data-room="${r.id}" onclick="openChat('${r.id}', 'group', '${r.name.replace(/'/g, "\\'")}')">
-                <div class="avatar" style="background:var(--c-blue); color:white;">👥</div><div class="chat-info"><div class="chat-name">${r.name}</div><div class="chat-preview">${sub}</div></div><span class="unread-badge" id="badge-${r.id}">0</span></div>`;
+        let icon = r.type === 'group' ? '👥' : '📢';
+        let sub = r.type === 'group' ? translations[currentLang].group : translations[currentLang].channel;
+        list.innerHTML += `<div class="chat-item" data-room="${r.id}" onclick="openChat('${r.id}', '${r.type}', '${icon}', '${r.name}')">
+                <div class="avatar" style="background:var(--c-blue); color:white;">${icon}</div><div class="chat-info"><div class="chat-name">${r.name}</div><div class="chat-preview">${sub}</div></div><span class="unread-badge" id="badge-${r.id}">0</span></div>`;
     });
 
     data.contacts.forEach(c => {
-        let avHTML = userAvatars[c] ? `<img src="${userAvatars[c]}">` : '👤';
-        list.innerHTML += `<div class="chat-item" data-room="${c}" onclick="openChat('${c}', 'private', '${c}', '${c}')">
-                <div class="avatar">${avHTML}</div><div class="chat-info"><div class="chat-name">${c}</div><div class="chat-preview" data-i18n="private_chat">${translations[currentLang].private_chat}</div></div><span class="unread-badge" id="badge-dm_${c}">0</span></div>`;
+        let av = userAvatars[c] ? `<img src="${userAvatars[c]}">` : '👤';
+        list.innerHTML += `<div class="chat-item" data-room="${c}" onclick="openChat('${c}', 'private', '${av}', '${c}', '${c}')">
+                <div class="avatar">${av}</div><div class="chat-info"><div class="chat-name">${c}</div><div class="chat-preview" data-i18n="private_chat">${translations[currentLang].private_chat}</div></div><span class="unread-badge" id="badge-dm_${c}">0</span></div>`;
     });
     
-    if(!currentRoom) openChat('Announcements', 'channel', 'Announcements');
+    if(!currentRoom) openChat('Announcements', 'channel', '📢', 'Announcements');
 }
 
 function openModal(id) { let m = document.getElementById(id); if(m) m.style.display = 'flex'; if(id === 'settingsModal') fetchIPs(); }
@@ -124,10 +122,10 @@ function closeContextMenu() { document.getElementById('msgContextMenu').style.di
 
 function openCreateModal() {
     let html = '';
-    myContacts.forEach(c => { 
-        html += `<label class="contact-check"><input type="checkbox" value="${c}"> <span>${c}</span></label>`; 
-    });
+    myContacts.forEach(c => { html += `<label class="custom-checkbox" style="display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid var(--border); cursor:pointer;"><input type="checkbox" value="${c}" style="width:18px;height:18px;"> <span>${c}</span></label>`; });
     document.getElementById('groupMembersList').innerHTML = html || '<p style="font-size:12px; color:var(--c-gray);">مخاطبی یافت نشد.</p>';
+    
+    // Default to Private tab
     switchCreateTab('private');
     openModal('createModal');
 }
@@ -142,11 +140,6 @@ function switchCreateTab(tab) {
         document.getElementById('tab-private').style.color = 'var(--c-gray)'; document.getElementById('tab-private').style.borderBottomColor = 'transparent';
         document.getElementById('content-group').style.display = 'block'; document.getElementById('content-private').style.display = 'none';
     }
-}
-
-function searchChat() {
-    let q = document.getElementById('searchInput').value.toLowerCase();
-    document.querySelectorAll('.chat-item').forEach(i => { i.style.display = i.querySelector('.chat-name').innerText.toLowerCase().includes(q) ? 'flex' : 'none'; });
 }
 
 async function fetchIPs() {
@@ -167,7 +160,7 @@ async function submitContact() {
     const t = document.getElementById('contactUsername').value.trim(); if(!t) return;
     const res = await fetch('/api/action', { method: 'POST', body: JSON.stringify({action:'add_contact', owner: currentUser, target: t}), headers: {'Content-Type': 'application/json'} });
     const data = await res.json();
-    if(data.success) { closeModal('createModal'); loadInitData(); openChat(data.target, 'private', data.target, data.target); } else alert(data.msg);
+    if(data.success) { closeModal('createModal'); loadInitData(); openChat(data.target, 'private', '👤', data.target, data.target); } else alert(data.msg);
 }
 
 async function submitCreation() {
@@ -175,11 +168,10 @@ async function submitCreation() {
     let members = []; document.querySelectorAll('#groupMembersList input:checked').forEach(chk => members.push(chk.value));
     const res = await fetch('/api/action', { method: 'POST', body: JSON.stringify({action:'create_room', type: t, name: n, user: currentUser, members: members}), headers: {'Content-Type': 'application/json'} });
     const data = await res.json();
-    if(data.success) { closeModal('createModal'); loadInitData(); openChat(data.room_id, t, n); }
+    if(data.success) { closeModal('createModal'); loadInitData(); openChat(data.room_id, t, t==='group'?'👥':'📢', n); }
 }
 
-// این متد برای جلوگیری از باگ تگ HTML درون کلیک، آیکون را خودش بر اساس دیتای موجود میسازد
-function openChat(roomId, type, title, targetUser = null) {
+function openChat(roomId, type, icon, title, targetUser = null) {
     document.querySelectorAll('.chat-item').forEach(c => c.classList.remove('active'));
     let activeItem = document.querySelector(`.chat-item[data-room="${roomId}"]`);
     if(activeItem) activeItem.classList.add('active');
@@ -193,12 +185,7 @@ function openChat(roomId, type, title, targetUser = null) {
     let st = type === 'channel' ? translations[currentLang].system_channel : (type === 'group' ? translations[currentLang].group : translations[currentLang].private_chat);
     if(roomId === 'Announcements') st = translations[currentLang].system_channel;
     document.getElementById('room-status').innerText = st;
-    
-    let headerAv = '📢';
-    if (type === 'group') headerAv = '👥';
-    if (type === 'private') headerAv = (targetUser && userAvatars[targetUser]) ? `<img src="${userAvatars[targetUser]}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;">` : '👤';
-    document.getElementById('header-avatar').innerHTML = headerAv;
-
+    document.getElementById('header-avatar').innerHTML = icon; // icon is raw HTML now (img or span)
     document.getElementById('messages').innerHTML = '';
     
     let badgeId = type === 'private' ? `badge-dm_${roomId}` : `badge-${roomId}`;
@@ -218,6 +205,7 @@ function openChat(roomId, type, title, targetUser = null) {
 
 function closeChat() { document.getElementById('sidebar').classList.remove('hidden'); }
 
+// Profile logic
 function openProfile() {
     if(!currentRoom) return;
     document.getElementById('prof-avatar').innerHTML = document.getElementById('header-avatar').innerHTML;
@@ -225,12 +213,15 @@ function openProfile() {
     
     let mediaH = '', filesH = '', audioH = '', linksH = '';
     document.querySelectorAll('.bubble').forEach(b => {
-        let img = b.querySelector('img'); let vid = b.querySelector('video');
+        let img = b.querySelector('img'); 
+        let vid = b.querySelector('video');
         if(img) mediaH += `<img src="${img.src}" style="width:30%; height:80px; object-fit:cover; border-radius:8px; border:1px solid var(--border);">`;
-        if(vid) mediaH += `<video src="${vid.src}" style="width:30%; height:80px; object-fit:cover; border-radius:8px; border:1px solid var(--border);"></video>`;
+        if(vid && !vid.classList.contains('video-msg')) mediaH += `<video src="${vid.src}" style="width:30%; height:80px; object-fit:cover; border-radius:8px; border:1px solid var(--border);"></video>`;
         
-        let aud = b.querySelector('audio'); 
+        let aud = b.querySelector('audio');
+        let vidMsg = b.querySelector('.video-msg');
         if(aud) audioH += `<audio controls src="${aud.src}" style="width:100%; height:40px; margin-bottom:5px; border-radius:20px;"></audio>`;
+        if(vidMsg) audioH += `<video src="${vidMsg.src}" controls style="width:100px; height:100px; border-radius:50%; object-fit:cover; margin-bottom:5px;"></video>`; // Video messages go to Audio tab for now
 
         let link = b.querySelector('.file-link');
         if(link) filesH += `<a href="${link.href}" class="file-link" download>${link.innerHTML}</a>`;
@@ -265,33 +256,24 @@ function handleNotification(msg) {
     let badge = document.getElementById(`badge-${isDM ? 'dm_'+targetId : targetId}`);
     if(badge) { badge.style.display = 'inline-block'; badge.innerText = parseInt(badge.innerText) + 1; }
     try { document.getElementById('notif-sound').play(); } catch(e){}
-
-    if ("Notification" in window && Notification.permission === "granted" && document.hidden) {
-        new Notification(isDM ? msg.data.user : msg.room, { body: msg.data.msgType === 'text' ? msg.data.text : "پیام جدید رسانه‌ای" });
-    }
 }
-
-// سیستم تشخیص کلیک طولانی (Long Press) برای موبایل
-let pressTimer;
-function startPress(e, id, text, sender) {
-    pressTimer = window.setTimeout(() => { openMsgMenu(e, id, text, sender); }, 600); // 600ms long press
-}
-function cancelPress() { clearTimeout(pressTimer); }
 
 function appendMessage(data) {
     const isSelf = data.user === currentUser;
     const msgBox = document.getElementById('messages');
     
     let media = '';
-    // ویدیو مسیج مربعی و استاندارد بدون دکمه‌های آزاردهنده
+    // رفع مشکل ویدیو مسیج: قرار دادن کنترلر با کلاس گرد
     if (data.msgType === 'image') media = `<img src="${data.url}">`;
     else if (data.msgType === 'video') {
-        media = `<video controls playsinline style="max-width:100%; border-radius:12px; margin-top:5px; border:1px solid var(--border);" src="${data.url}"></video>`;
+        let isVideoMessage = data.url.includes('rec.webm') || data.url.includes('rec.mp4');
+        if (isVideoMessage) media = `<video class="video-msg" controls playsinline src="${data.url}"></video>`;
+        else media = `<video controls playsinline style="max-width:100%; border-radius:12px; margin-top:5px;" src="${data.url}"></video>`;
     }
     else if (data.msgType === 'audio') media = `<audio controls preload="metadata" src="${data.url}"></audio>`;
     else if (data.msgType === 'file') {
         let fName = data.fileName || "File";
-        media = `<a href="${data.url}" class="file-link" download><div class="file-icon"><svg style="width:24px;fill:white;"><use href="#icon-doc"></use></svg></div> <div style="display:flex; flex-direction:column; overflow:hidden;"><span style="font-weight:bold; font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" dir="auto">${fName}</span><span style="font-size:11px; opacity:0.7;">Download</span></div></a>`;
+        media = `<a href="${data.url}" class="file-link" download><div class="file-icon">📄</div> <div style="display:flex; flex-direction:column; overflow:hidden;"><span style="font-weight:bold; font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" dir="auto">${fName}</span><span style="font-size:11px; opacity:0.7;">Download</span></div></a>`;
     }
 
     let textContent = data.text || '';
@@ -300,17 +282,13 @@ function appendMessage(data) {
         replyHtml = `<div class="reply-preview" onclick="scrollToMsg('msg-${data.replyTo.id}')"><div style="color:var(--c-blue); font-weight:bold; font-size:12px;">${data.replyTo.user}</div><div style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${data.replyTo.text}</div></div>`;
     }
 
-    let safeText = encodeURIComponent(textContent);
+    // اگر پیام فقط ویدیو مسیج است، استایل حباب را شفاف می‌کنیم
+    let isOnlyVidMsg = data.msgType === 'video' && (data.url.includes('rec.webm') || data.url.includes('rec.mp4')) && !textContent;
+    let bubbleClass = isOnlyVidMsg ? "bubble video-msg-bubble" : "bubble normal-msg";
 
     const html = `
         <div class="msg-row ${isSelf ? 'out' : 'in'}" id="msg-${data.id}">
-            <div class="bubble" dir="auto" 
-                oncontextmenu="openMsgMenu(event, '${data.id}', '${safeText}', '${data.user}')"
-                ontouchstart="startPress(event, '${data.id}', '${safeText}', '${data.user}')" 
-                ontouchend="cancelPress()" 
-                ontouchmove="cancelPress()"
-                onclick="toggleMsgSelection('${data.id}')">
-                
+            <div class="${bubbleClass}" dir="auto" oncontextmenu="openMsgMenu(event, '${data.id}', '${encodeURIComponent(textContent)}', '${data.user}')" onclick="toggleMsgSelection('${data.id}')">
                 <span class="sender-name">${data.user}</span>
                 ${replyHtml}
                 ${textContent}
@@ -335,43 +313,53 @@ function scrollToMsg(id) {
 }
 
 function openMsgMenu(e, id, textEncoded, sender) {
-    if(e && e.preventDefault) e.preventDefault();
+    e.preventDefault();
     if(selectionMode) { toggleMsgSelection(id); return; }
     contextMsgId = id; contextMsgText = decodeURIComponent(textEncoded) || 'Media'; contextMsgSender = sender;
     const menu = document.getElementById('msgContextMenu');
     menu.style.display = 'flex';
-    
-    // تشخیص کلیک ماوس یا تاچ موبایل
-    let x = window.innerWidth / 2; let y = window.innerHeight / 2;
-    if(e) {
-        x = e.clientX || (e.touches && e.touches[0].clientX) || x;
-        y = e.clientY || (e.touches && e.touches[0].clientY) || y;
-    }
-    
-    if(x + 220 > window.innerWidth) x = window.innerWidth - 230;
-    if(y + 250 > window.innerHeight) y = window.innerHeight - 260;
+    let x = e.clientX; let y = e.clientY;
+    if(x + 220 > window.innerWidth) x -= 220;
+    if(y + 250 > window.innerHeight) y -= 250;
     menu.style.left = `${x}px`; menu.style.top = `${y}px`;
 }
 
-function sendReaction(emoji) { if(!contextMsgId) return; ws.send(JSON.stringify({action: 'react_msg', msg_id: contextMsgId, emoji: emoji})); closeContextMenu(); }
+function sendReaction(emoji) {
+    if(!contextMsgId) return;
+    ws.send(JSON.stringify({action: 'react_msg', msg_id: contextMsgId, emoji: emoji}));
+    closeContextMenu();
+}
 
 function updateReactionUI(msgId, reactionsObj) {
     const bar = document.getElementById(`reacts-${msgId}`); if(!bar) return;
-    bar.innerHTML = ''; let counts = {}; let myReact = null;
-    for(let usr in reactionsObj) { let em = reactionsObj[usr]; counts[em] = (counts[em] || 0) + 1; if(usr === currentUser) myReact = em; }
-    for(let em in counts) { let isMine = (myReact === em) ? 'mine' : ''; bar.innerHTML += `<span class="react-badge ${isMine}" onclick="ws.send(JSON.stringify({action:'react_msg', msg_id:'${msgId}', emoji:'${em}'})); event.stopPropagation();">${em} ${counts[em]}</span>`; }
+    bar.innerHTML = '';
+    let counts = {}; let myReact = null;
+    for(let usr in reactionsObj) {
+        let em = reactionsObj[usr]; counts[em] = (counts[em] || 0) + 1;
+        if(usr === currentUser) myReact = em;
+    }
+    for(let em in counts) {
+        let isMine = (myReact === em) ? 'mine' : '';
+        bar.innerHTML += `<span class="react-badge ${isMine}" onclick="ws.send(JSON.stringify({action:'react_msg', msg_id:'${msgId}', emoji:'${em}'}))">${em} ${counts[em]}</span>`;
+    }
 }
 
-function doReply() { replyToMsg = { id: contextMsgId, text: contextMsgText, user: contextMsgSender }; document.getElementById('replySender').innerText = contextMsgSender; document.getElementById('replyText').innerText = contextMsgText; document.getElementById('replyBar').style.display = 'block'; document.getElementById('msgInput').focus(); closeContextMenu(); }
+function doReply() {
+    replyToMsg = { id: contextMsgId, text: contextMsgText, user: contextMsgSender };
+    document.getElementById('replySender').innerText = contextMsgSender;
+    document.getElementById('replyText').innerText = contextMsgText;
+    document.getElementById('replyBar').style.display = 'block';
+    document.getElementById('msgInput').focus();
+    closeContextMenu();
+}
 function cancelReply() { replyToMsg = null; document.getElementById('replyBar').style.display = 'none'; }
 function doCopy() { navigator.clipboard.writeText(contextMsgText); closeContextMenu(); }
-function doDeleteMsg() { if(confirm("حذف پیام برای همه؟")) ws.send(JSON.stringify({action: 'delete_msg', msg_ids: [contextMsgId]})); closeContextMenu(); }
+function doDeleteMsg() { if(confirm("حذف پیام؟")) ws.send(JSON.stringify({action: 'delete_msg', msg_ids: [contextMsgId]})); closeContextMenu(); }
 
 function doSelect() { selectionMode = true; closeContextMenu(); toggleMsgSelection(contextMsgId); }
 function toggleMsgSelection(id) {
     if(!selectionMode) return;
     const bubble = document.querySelector(`#msg-${id} .bubble`);
-    if(!bubble) return;
     if(selectedMsgs.includes(id)) { selectedMsgs = selectedMsgs.filter(m => m !== id); bubble.classList.remove('selected-msg'); } 
     else { selectedMsgs.push(id); bubble.classList.add('selected-msg'); }
     updateSelectionUI();
@@ -386,10 +374,10 @@ function cancelSelection() {
     document.querySelectorAll('.bubble.selected-msg').forEach(b => b.classList.remove('selected-msg'));
     document.getElementById('multiSelectBar').style.display = 'none';
 }
-function deleteSelected() { if(confirm(`حذف ${selectedMsgs.length} پیام برای همه؟`)) { ws.send(JSON.stringify({action: 'delete_msg', msg_ids: selectedMsgs})); cancelSelection(); } }
+function deleteSelected() { if(confirm(`حذف ${selectedMsgs.length} پیام؟`)) { ws.send(JSON.stringify({action: 'delete_msg', msg_ids: selectedMsgs})); cancelSelection(); } }
 function forwardSelected() { alert("امکان هدایت به زودی..."); cancelSelection(); }
 
-// --- Inputs & Recording (خالی شدن حافظه در هر بار) ---
+// --- Inputs & Recording ---
 let mediaRecorder; let audioChunks = []; let isRecording = false; let isPaused = false;
 let recTimerInterval; let recSeconds = 0;
 
@@ -398,6 +386,7 @@ function checkInput() {
     const btnSend = document.getElementById('actionSendBtn');
     const btnMic = document.getElementById('actionMicBtn');
     const btnVid = document.getElementById('actionVideoBtn');
+    
     if (input.value.trim() !== '') { 
         btnSend.style.display = 'flex'; btnMic.style.display = 'none'; btnVid.style.display = 'none';
     } else { 
@@ -412,6 +401,7 @@ function handleSendText() {
         input.value = ''; cancelReply(); checkInput(); 
     }
 }
+
 document.getElementById('msgInput')?.addEventListener('keypress', (e) => { if(e.key === 'Enter') handleSendText(); });
 
 function updateTimer() {
@@ -421,18 +411,20 @@ function updateTimer() {
 async function startRecord(type, btn) {
     if (!isRecording) {
         try {
-            audioChunks = []; // اطمینان از پاک شدن مخزن صدای قبلی
-            const constraints = type === 'video' ? { audio: true, video: { facingMode: "user" } } : { audio: true };
+            const constraints = type === 'video' ? { audio: true, video: { facingMode: "user", aspectRatio: 1 } } : { audio: true };
             const stream = await navigator.mediaDevices.getUserMedia(constraints);
-            
+            if (type === 'video') { const vidPrev = document.getElementById('videoPreview'); vidPrev.srcObject = stream; vidPrev.style.display = 'block'; }
+
             mediaRecorder = new MediaRecorder(stream);
             mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
             mediaRecorder.onstop = async () => {
+                if(type === 'video') { const vidPrev = document.getElementById('videoPreview'); vidPrev.style.display = 'none'; vidPrev.srcObject = null; }
                 stream.getTracks().forEach(t => t.stop());
+
                 if(audioChunks.length > 0) {
                     const mime = type === 'video' ? 'video/webm' : 'audio/webm';
-                    const fd = new FormData(); fd.append('file', new File([new Blob(audioChunks, { type: mime })], `rec.${type==='video'?'mp4':'webm'}`, { type: mime }));
-                    audioChunks = []; // خالی کردن مجدد
+                    const fd = new FormData(); fd.append('file', new File([new Blob(audioChunks, { type: mime })], `rec.${type==='video'?'webm':'webm'}`, { type: mime }));
+                    audioChunks = [];
                     const res = await fetch('/api/upload', { method: 'POST', body: fd });
                     const data = await res.json();
                     if(data.url) ws.send(JSON.stringify({action: 'send_msg', room: currentRoom, user: currentUser, targetUser: targetUserForDM, msgType: type, url: data.url, replyTo: replyToMsg}));
@@ -447,14 +439,16 @@ async function startRecord(type, btn) {
             document.getElementById('actionMicBtn').style.display = 'none';
             
             document.getElementById('recControls').style.display = 'flex';
+            
+            // نمایش دکمه ارسال به جای ویس
             let sendBtn = document.getElementById('actionSendBtn');
             sendBtn.style.display = 'flex'; sendBtn.classList.add('rec'); sendBtn.classList.remove('send');
-            sendBtn.onclick = stopAndSendRecord; 
+            sendBtn.onclick = stopAndSendRecord; // تغییر موقت تابع دکمه ارسال
 
             recSeconds = 0; document.getElementById('recTimer').innerText = "00:00";
             recTimerInterval = setInterval(updateTimer, 1000);
             
-        } catch (err) { alert("لطفا دسترسی میکروفون/دوربین را مجاز کنید."); }
+        } catch (err) { alert("دسترسی میکروفون/دوربین را در مرورگر مجاز کنید."); }
     }
 }
 
@@ -464,8 +458,13 @@ function pauseResumeRecord() {
     else { mediaRecorder.pause(); isPaused = true; btn.innerHTML = '▶'; btn.style.color = "var(--c-red)";}
 }
 
-function cancelRecord() { audioChunks = []; mediaRecorder.stop(); resetRecordUI(); }
-function stopAndSendRecord() { mediaRecorder.stop(); resetRecordUI(); }
+function cancelRecord() {
+    audioChunks = []; mediaRecorder.stop(); resetRecordUI();
+}
+
+function stopAndSendRecord() {
+    mediaRecorder.stop(); resetRecordUI();
+}
 
 function resetRecordUI() {
     isRecording = false; clearInterval(recTimerInterval);
@@ -475,8 +474,9 @@ function resetRecordUI() {
     
     let sendBtn = document.getElementById('actionSendBtn');
     sendBtn.classList.remove('rec'); sendBtn.classList.add('send');
-    sendBtn.onclick = handleSendText; 
-    checkInput(); 
+    sendBtn.onclick = handleSendText; // بازگشت به حالت ارسال متن
+    
+    checkInput(); // برگرداندن دکمه‌های صحیح
 }
 
 async function uploadFile() {
@@ -487,7 +487,7 @@ async function uploadFile() {
     if (data.url) { ws.send(JSON.stringify({action: 'send_msg', room: currentRoom, user: currentUser, targetUser: targetUserForDM, msgType: data.type, url: data.url, fileName: data.name, replyTo: replyToMsg})); cancelReply(); }
 }
 
-// --- WebRTC Voice Call ---
+// --- WebRTC Voice Call (With TURN Config) ---
 let localStreamCall; let peerConnection; let callTarget;
 
 const servers = { 
@@ -508,7 +508,7 @@ async function startCall() {
     document.getElementById('callModal').style.display = 'flex';
     document.getElementById('callStatusText').innerText = "در حال تماس...";
     document.getElementById('callUserText').innerText = callTarget;
-    document.getElementById('callBtns').innerHTML = `<button class="call-btn btn-rej" onclick="endCall()" style="background:var(--c-red); color:white;">✖</button>`;
+    document.getElementById('callBtns').innerHTML = `<button class="icon-btn" onclick="endCall()" style="background:var(--c-red); color:white; width:60px; height:60px; font-size:24px;">✖</button>`;
     
     try {
         localStreamCall = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -532,7 +532,7 @@ function handleWebRTC(data) {
         document.getElementById('callModal').style.display = 'flex';
         document.getElementById('callStatusText').innerText = "تماس ورودی...";
         document.getElementById('callUserText').innerText = callTarget;
-        document.getElementById('callBtns').innerHTML = `<button class="call-btn btn-ans" onclick='acceptCall(${JSON.stringify(data.offer)})' style="background:#52c41a; color:white;">📞</button><button class="call-btn btn-rej" onclick="endCall()" style="background:var(--c-red); color:white;">✖</button>`;
+        document.getElementById('callBtns').innerHTML = `<button class="icon-btn" onclick='acceptCall(${JSON.stringify(data.offer)})' style="background:#52c41a; color:white; width:60px; height:60px; font-size:24px;">📞</button><button class="icon-btn" onclick="endCall()" style="background:var(--c-red); color:white; width:60px; height:60px; font-size:24px;">✖</button>`;
         try { document.getElementById('notif-sound').play(); } catch(e){}
     }
     else if(data.type === 'answer') {
@@ -549,7 +549,7 @@ function handleWebRTC(data) {
 
 async function acceptCall(offerData) {
     document.getElementById('callStatusText').innerText = "در حال اتصال...";
-    document.getElementById('callBtns').innerHTML = `<button class="call-btn btn-rej" onclick="endCall()" style="background:var(--c-red); color:white;">✖</button>`;
+    document.getElementById('callBtns').innerHTML = `<button class="icon-btn" onclick="endCall()" style="background:var(--c-red); color:white; width:60px; height:60px; font-size:24px;">✖</button>`;
     
     try {
         localStreamCall = await navigator.mediaDevices.getUserMedia({ audio: true });
