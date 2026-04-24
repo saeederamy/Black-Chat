@@ -4,10 +4,10 @@ import json
 import uuid
 import aiofiles
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, UploadFile, File, Form
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from typing import Dict, List
+from typing import List
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -36,7 +36,6 @@ def init_db():
 
 init_db()
 
-# مدیریت کانکشن سراسری (Global Connection)
 class ConnectionManager:
     def __init__(self):
         self.active_connections: List[WebSocket] = []
@@ -163,7 +162,6 @@ async def api_action(request: Request):
     conn.close()
     return res
 
-# اتصال گلوبال سوکت
 @app.websocket("/ws/{username}/{role}")
 async def websocket_endpoint(websocket: WebSocket, username: str, role: str):
     await manager.connect(websocket)
@@ -198,7 +196,6 @@ async def websocket_endpoint(websocket: WebSocket, username: str, role: str):
                 r_data = c.fetchone()
                 if r_data and r_data[0] == 'channel' and role != 'admin' and r_data[1] != username: continue
                 
-                # اطمینان از افزودن خودکار مخاطب در چت خصوصی
                 if room.startswith('dm_'):
                     target = room.replace('dm_', '').replace(username, '').replace('_', '')
                     c.execute("INSERT OR IGNORE INTO contacts (owner, contact) VALUES (?, ?)", (username, target))
