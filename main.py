@@ -28,7 +28,6 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS messages (msg_id TEXT PRIMARY KEY, room TEXT, user TEXT, msg_type TEXT, content TEXT, file_name TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
     c.execute('CREATE INDEX IF NOT EXISTS idx_room ON messages(room)')
     
-    # اضافه کردن ستون‌های ریپلای و ری‌اکشن بدون پاک شدن دیتای قبلی
     try: c.execute("ALTER TABLE messages ADD COLUMN reply_to TEXT DEFAULT '{}'")
     except: pass
     try: c.execute("ALTER TABLE messages ADD COLUMN reactions TEXT DEFAULT '{}'")
@@ -156,6 +155,7 @@ async def api_action(request: Request):
         av = c.fetchone()
         res["avatar"] = av[0] if av else ""
         
+        # گرفتن پروفایل بقیه برای لود شدن سریع
         c.execute("SELECT user, avatar FROM profiles")
         res["all_avatars"] = {r[0]: r[1] for r in c.fetchall()}
 
@@ -197,9 +197,6 @@ async def websocket_endpoint(websocket: WebSocket, username: str, role: str):
             msg = json.loads(data)
             action = msg.get("action")
             
-            if action == "ping":
-                continue 
-            
             conn = sqlite3.connect(DB_FILE)
             c = conn.cursor()
             
@@ -234,7 +231,6 @@ async def websocket_endpoint(websocket: WebSocket, username: str, role: str):
             elif action == "send_msg":
                 room = msg.get("room")
                 target_user = msg.get("targetUser")
-                
                 if room == "Announcements" and role != "admin": continue
                 
                 room_members = []
@@ -261,6 +257,7 @@ async def websocket_endpoint(websocket: WebSocket, username: str, role: str):
                 
                 await manager.broadcast({"type": "new_msg", "room": room, "data": msg_payload})
                 
+            # WebRTC Signaling Route
             elif action == "webrtc":
                 await manager.broadcast({"type": "webrtc", "data": msg})
                 
