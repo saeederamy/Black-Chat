@@ -3,52 +3,42 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <meta name="theme-color" content="#14151a">
+    <meta name="theme-color" content="#000000">
     <title>Black Chat | V 1.0.0</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
     <style>
-        /* X-UI Sanaei Exact Theme Variables */
         :root {
-            --bg-base: #14151a;       
-            --bg-panel: #1e2029;      
-            --bg-input: #282a36;      
-            --border: #313238;
+            /* Pure Glossy Black Theme */
+            --bg-base: #000000;       
+            --bg-panel: #0d0d0d;      
+            --bg-input: #151515;      
+            --border: rgba(255, 255, 255, 0.1);
             
-            --c-blue: #1890ff;        
-            --c-blue-hover: #40a9ff;
-            --c-red: #f5222d;         
-            --c-orange: #fa8c16;      
+            --c-blue: #007aff;        
+            --c-blue-hover: #005bb5;
+            --c-red: #ff3b30;         
+            --c-orange: #ff9500;      
             --c-white: #ffffff;
             --c-gray: #a3a6ad;
             
-            --bubble-me: #1890ff;
-            --bubble-other: #282a36;
+            --bubble-me: #007aff;
+            --bubble-other: #1a1a1a;
         }
 
-        /* Light Mode Variables */
         [data-theme="light"] {
-            --bg-base: #f0f2f5;       
-            --bg-panel: #ffffff;      
-            --bg-input: #f4f4f5;      
-            --border: #e4e4e7;
-            
-            --c-white: #18181b; /* متن در لایت مود تیره می‌شود */
-            --c-gray: #71717a;
-            
-            --bubble-me: #1890ff;
-            --bubble-other: #f4f4f5;
+            --bg-base: #f0f2f5; --bg-panel: #ffffff; --bg-input: #f4f4f5; --border: #e4e4e7;
+            --c-white: #18181b; --c-gray: #71717a; --bubble-me: #007aff; --bubble-other: #ffffff;
         }
 
-        * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, sans-serif; outline: none; -webkit-tap-highlight-color: transparent;}
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif; outline: none; -webkit-tap-highlight-color: transparent;}
         body { display: flex; height: 100dvh; background: var(--bg-base); color: var(--c-white); overflow: hidden; transition: background 0.3s, color 0.3s; }
 
         /* --- Login Screen --- */
         #login-screen { position: fixed; top:0; left:0; width:100%; height:100%; background: var(--bg-base); display:flex; justify-content:center; align-items:center; flex-direction: column; z-index: 9999; }
-        .login-box { background: var(--bg-panel); border: 1px solid var(--border); padding: 40px; border-radius: 12px; text-align: center; width: 90%; max-width: 360px; box-shadow: 0 10px 40px rgba(0,0,0,0.2); }
+        .login-box { background: rgba(20,20,20,0.7); backdrop-filter: blur(20px); border: 1px solid var(--border); padding: 40px; border-radius: 24px; text-align: center; width: 90%; max-width: 360px; box-shadow: 0 10px 40px rgba(0,0,0,0.8); }
         .login-box h2 { margin-bottom: 25px; color: var(--c-white); font-weight: 700; }
-        .login-box input { width: 100%; padding: 14px; margin-bottom: 15px; background: var(--bg-input); border: 1px solid var(--border); color: var(--c-white); border-radius: 8px; font-size: 15px; text-align: center; transition: 0.3s;}
-        .login-box input:focus { border-color: var(--c-blue); }
-        .login-box button { width: 100%; padding: 14px; background: var(--c-blue); color: #fff; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; transition: 0.2s; font-size: 16px;}
+        .login-box input { width: 100%; padding: 14px; margin-bottom: 15px; background: var(--bg-input); border: 1px solid var(--border); color: var(--c-white); border-radius: 16px; font-size: 15px; text-align: center; transition: 0.3s;}
+        .login-box input:focus { border-color: var(--c-blue); box-shadow: inset 0 0 10px rgba(0,122,255,0.2);}
+        .login-box button { width: 100%; padding: 14px; background: var(--c-blue); color: #fff; border: none; border-radius: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; font-size: 16px;}
         .login-box button:hover { background: var(--c-blue-hover); transform: translateY(-2px); }
         .dev-credit { margin-top: 30px; color: var(--c-gray); font-size: 13px; font-weight: bold; letter-spacing: 1px; text-transform: uppercase; }
 
@@ -58,112 +48,123 @@
         .sidebar { width: 340px; background: var(--bg-panel); border-left: 1px solid var(--border); display: flex; flex-direction: column; z-index: 100; transition: transform 0.3s; flex-shrink: 0; }
         
         .sidebar-header { display: flex; align-items: center; padding: 15px 15px; gap: 10px; border-bottom: 1px solid var(--border); flex-shrink: 0;}
-        .icon-btn { width: 40px; height: 40px; border-radius: 8px; background: transparent; border: none; color: var(--c-gray); cursor: pointer; display: flex; justify-content: center; align-items: center; font-size: 20px; transition: 0.2s; flex-shrink: 0;}
-        .icon-btn:hover { background: var(--bg-input); color: var(--c-blue); }
+        .icon-btn { width: 40px; height: 40px; border-radius: 50%; background: transparent; border: 1px solid transparent; color: var(--c-gray); cursor: pointer; display: flex; justify-content: center; align-items: center; font-size: 20px; transition: 0.2s; flex-shrink: 0;}
+        .icon-btn:hover { background: var(--bg-input); color: var(--c-white); border-color: var(--border); }
         
-        .new-chat-btn { background: var(--c-blue); color: white; border: none; border-radius: 8px; width: 40px; height: 40px; display: flex; justify-content: center; align-items: center; cursor: pointer; flex-shrink: 0; font-size: 22px; transition: 0.2s;}
+        .new-chat-btn { background: var(--c-blue); color: white; border: none; border-radius: 50%; width: 40px; height: 40px; display: flex; justify-content: center; align-items: center; cursor: pointer; flex-shrink: 0; font-size: 22px; transition: 0.2s;}
         .new-chat-btn:hover { background: var(--c-blue-hover); transform: scale(1.05); }
 
-        .search-box { flex: 1; background: var(--bg-input); border-radius: 8px; display: flex; align-items: center; padding: 0 10px; height: 40px; min-width: 0; border: 1px solid var(--border);}
+        .search-box { flex: 1; background: var(--bg-input); border-radius: 20px; display: flex; align-items: center; padding: 0 10px; height: 40px; min-width: 0; border: 1px solid var(--border);}
         .search-box input { flex: 1; background: transparent; border: none; color: var(--c-white); font-size: 14px; padding: 0 5px; min-width: 0;}
 
         .chat-list { flex: 1; overflow-y: auto; padding: 10px 5px; }
-        .chat-item { display: flex; align-items: center; padding: 12px 10px; cursor: pointer; gap: 12px; border-radius: 8px; margin-bottom: 2px; position: relative; border: 1px solid transparent;}
+        .chat-item { display: flex; align-items: center; padding: 12px 10px; cursor: pointer; gap: 12px; border-radius: 20px; margin-bottom: 2px; position: relative; border: 1px solid transparent; transition: 0.2s;}
         .chat-item:hover { background: var(--bg-input); border-color: var(--border); }
-        .chat-item.active { background: var(--bg-input); border-color: var(--c-blue); }
+        .chat-item.active { background: rgba(0,122,255,0.15); border-color: var(--c-blue); }
         
-        .avatar { width: 48px; height: 48px; border-radius: 50%; background: var(--c-blue); color: #fff; display: flex; justify-content: center; align-items: center; font-size: 20px; flex-shrink: 0;}
+        .avatar { width: 50px; height: 50px; border-radius: 50%; background: var(--c-blue); color: #fff; display: flex; justify-content: center; align-items: center; font-size: 20px; flex-shrink: 0;}
         .chat-info { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center;}
         .chat-name { font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--c-white); }
         .chat-preview { font-size: 13px; color: var(--c-gray); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         
-        .unread-badge { background: var(--c-red); color: white; font-size: 12px; font-weight: bold; padding: 2px 8px; border-radius: 12px; display: none; margin-right: auto;}
+        .unread-badge { background: var(--c-orange); color: white; font-size: 12px; font-weight: bold; padding: 2px 8px; border-radius: 12px; display: none; margin-right: auto;}
 
         /* --- Chat Area --- */
         .chat-area { flex: 1; display: flex; flex-direction: column; background: var(--bg-base); min-width: 0; min-height: 0; position: relative; background-size: cover; background-position: center;}
         
-        .chat-header { height: 65px; background: var(--bg-panel); display: flex; align-items: center; padding: 0 15px; gap: 15px; border-bottom: 1px solid var(--border); z-index: 10; flex-shrink: 0;}
+        .chat-header { height: 65px; background: rgba(13,13,13,0.85); backdrop-filter: blur(20px); display: flex; align-items: center; padding: 0 15px; gap: 15px; border-bottom: 1px solid var(--border); z-index: 10; flex-shrink: 0;}
         .back-btn { display: none; font-weight: bold;}
         [dir="rtl"] .back-btn { transform: scaleX(-1); }
 
         .messages { flex: 1; padding: 20px 5%; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; scroll-behavior: smooth; min-height: 0;}
-        .msg-row { display: flex; width: 100%; position: relative; }
+        
+        .msg-row { display: flex; width: 100%; position: relative; align-items: flex-end;}
         .msg-row.out { justify-content: flex-start; } 
         .msg-row.in { justify-content: flex-end; }
         
-        .bubble { max-width: 80%; padding: 10px 14px; border-radius: 12px; font-size: 15px; line-height: 1.5; position: relative; word-break: break-word; box-shadow: 0 1px 2px rgba(0,0,0,0.1); display: flex; flex-direction: column; border: 1px solid var(--border);}
-        .msg-row.out .bubble { background: var(--bubble-me); color: #fff; border-bottom-right-radius: 4px; border-color: var(--c-blue); }
-        .msg-row.in .bubble { background: var(--bubble-other); color: var(--c-white); border-bottom-left-radius: 4px;}
+        .bubble { max-width: 80%; padding: 10px 14px; border-radius: 24px; font-size: 15px; line-height: 1.5; position: relative; word-break: break-word; box-shadow: 0 4px 15px rgba(0,0,0,0.3); display: flex; flex-direction: column; border: 1px solid var(--border); cursor: pointer; -webkit-user-select: none; user-select: none;}
+        .msg-row.out .bubble { background: var(--bubble-me); color: #fff; border-bottom-right-radius: 6px; border-color: var(--c-blue); }
+        .msg-row.in .bubble { background: var(--bubble-other); color: var(--c-white); border-bottom-left-radius: 6px;}
+        .bubble.selected-msg { border: 2px solid var(--c-orange); background: rgba(255,149,0,0.2) !important; }
         
-        .sender-name { font-size: 12px; color: var(--c-red); font-weight: bold; margin-bottom: 5px; display: block; }
+        .sender-name { font-size: 12px; color: var(--c-orange); font-weight: bold; margin-bottom: 5px; display: block; }
         .msg-row.out .sender-name { display: none; }
+
+        /* Reply Block inside Message */
+        .reply-preview { background: rgba(0,0,0,0.2); border-right: 3px solid var(--c-orange); padding: 5px 10px; border-radius: 8px; margin-bottom: 8px; font-size: 13px;}
+        [dir="rtl"] .reply-preview { border-right: 3px solid var(--c-orange); border-left: none; }
         
-        .delete-btn { position: absolute; top: 50%; transform: translateY(-50%); background: transparent; border: none; color: var(--c-red); font-size: 20px; cursor: pointer; opacity: 0; transition: 0.2s; padding: 5px;}
-        .msg-row.out .delete-btn { left: calc(100% + 5px); }
-        .msg-row:hover .delete-btn { opacity: 1; }
+        /* Reaction Badges */
+        .reactions-bar { display: flex; gap: 5px; margin-top: 5px; flex-wrap: wrap;}
+        .react-badge { background: rgba(255,255,255,0.1); border-radius: 12px; padding: 2px 8px; font-size: 12px; cursor: pointer; border: 1px solid var(--border);}
+        .react-badge.mine { background: rgba(0,122,255,0.3); border-color: var(--c-blue);}
 
         /* Media in chat */
-        .bubble img { max-width: 100%; border-radius: 8px; margin-top: 5px; cursor: pointer; border: 1px solid rgba(255,255,255,0.1); }
+        .bubble img, .bubble video { max-width: 100%; border-radius: 16px; margin-top: 5px; cursor: pointer; border: 1px solid rgba(255,255,255,0.1); }
         .bubble audio { width: 240px; height: 40px; margin-top: 5px; outline: none; border-radius: 20px;}
         
-        /* Telegram Style File Links */
-        .file-link { display: flex; align-items: center; gap: 12px; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 8px; color: var(--c-white); text-decoration: none; margin-top:5px; border: 1px solid var(--border); transition: 0.2s;}
+        .file-link { display: flex; align-items: center; gap: 12px; background: rgba(0,0,0,0.3); padding: 10px; border-radius: 16px; color: var(--c-white); text-decoration: none; margin-top:5px; border: 1px solid var(--border); transition: 0.2s;}
         .file-link:hover { background: var(--bg-input); }
         .file-icon { width: 44px; height: 44px; border-radius: 50%; background: var(--c-blue); display: flex; justify-content: center; align-items: center; color: white; flex-shrink: 0;}
         .file-info-dl { display: flex; flex-direction: column; overflow: hidden; }
         .file-name-dl { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-        /* Telegram Video Message Bubble */
-        .video-msg { width: 220px; height: 220px; border-radius: 50%; object-fit: cover; border: 3px solid var(--c-blue); margin-top: 5px; }
-
         /* Video Preview Circle */
-        #videoPreview { display: none; position: absolute; bottom: 80px; right: 20px; width: 220px; height: 220px; border-radius: 50%; object-fit: cover; border: 4px solid var(--c-red); box-shadow: 0 10px 30px rgba(0,0,0,0.5); z-index: 100; transform: scaleX(-1); background: #000;}
+        #videoPreview { display: none; position: absolute; bottom: 80px; right: 20px; width: 220px; height: 220px; border-radius: 50%; object-fit: cover; border: 4px solid var(--c-red); box-shadow: 0 10px 30px rgba(0,0,0,0.8); z-index: 100; transform: scaleX(-1); background: #000;}
         [dir="rtl"] #videoPreview { right: auto; left: 20px; }
 
+        /* Context Menu (Telegram Style) */
+        .context-menu { position: fixed; background: rgba(20,20,20,0.95); backdrop-filter: blur(15px); border: 1px solid var(--border); border-radius: 16px; width: 220px; display: none; flex-direction: column; z-index: 5000; box-shadow: 0 10px 40px rgba(0,0,0,0.8); padding: 8px; animation: popIn 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);}
+        .context-menu button { background: transparent; border: none; color: var(--c-white); padding: 12px; text-align: left; border-radius: 10px; cursor: pointer; font-size: 14px; font-weight: 500; transition: 0.2s; display: flex; gap: 10px; align-items: center;}
+        [dir="rtl"] .context-menu button { text-align: right; }
+        .context-menu button:hover { background: rgba(255,255,255,0.1); }
+        .context-menu button.danger { color: var(--c-red); }
+        .context-menu button.danger:hover { background: rgba(255,59,48,0.15); }
+        .emoji-bar { display: flex; justify-content: space-between; padding: 10px; border-bottom: 1px solid var(--border); margin-bottom: 5px;}
+        .emoji-bar span { font-size: 22px; cursor: pointer; transition: 0.2s; }
+        .emoji-bar span:hover { transform: scale(1.3); }
+
+        /* Multi-Select Action Bar */
+        #multiSelectBar { display: none; position: absolute; bottom: 0; left: 0; width: 100%; background: var(--bg-panel); z-index: 50; padding: 15px 20px; padding-bottom: max(15px, env(safe-area-inset-bottom)); border-top: 1px solid var(--border); align-items: center; justify-content: space-between; box-shadow: 0 -5px 20px rgba(0,0,0,0.5);}
+        #multiSelectBar button { background: transparent; color: white; border: 1px solid var(--border); padding: 10px 15px; border-radius: 12px; cursor: pointer; font-weight: bold; transition: 0.2s;}
+        #multiSelectBar button:hover { background: rgba(255,255,255,0.1); }
+
         /* --- Input Area Mobile Fix --- */
-        .input-area { 
-            padding: 10px 15px; 
-            padding-bottom: max(10px, env(safe-area-inset-bottom)); 
-            background: var(--bg-panel); 
-            display: flex; 
-            align-items: center; /* مرکزچین عمودی برای جلوگیری از گیر کردن */
-            gap: 10px; 
-            border-top: 1px solid var(--border); 
-            z-index: 10; 
-            flex-shrink: 0;
-            width: 100%;
-        }
-        .input-box { flex: 1; background: var(--bg-input); border-radius: 12px; display: flex; align-items: center; padding: 0 5px; min-height: 48px; border: 1px solid var(--border); min-width: 0;}
+        .input-wrapper-container { background: rgba(13,13,13,0.85); backdrop-filter: blur(20px); padding: 10px 15px; padding-bottom: max(10px, env(safe-area-inset-bottom)); display: flex; flex-direction: column; border-top: 1px solid var(--border); z-index: 10; flex-shrink: 0; width: 100%;}
+        
+        #replyBar { display: none; background: var(--bg-input); border-right: 3px solid var(--c-blue); border-radius: 12px; padding: 8px 12px; margin-bottom: 10px; position: relative;}
+        [dir="rtl"] #replyBar { border-right: 3px solid var(--c-blue); border-left: none; }
+        
+        .input-area-row { display: flex; align-items: center; gap: 10px; width: 100%; }
+        .input-box { flex: 1; background: var(--bg-input); border-radius: 24px; border: 1px solid var(--border); display: flex; align-items: center; padding: 0 5px; min-height: 48px; min-width: 0;}
         .input-box input { flex: 1; background: transparent; border: none; color: var(--c-white); font-size: 15px; padding: 10px; min-width: 0;}
         
         .action-btn { width: 44px; height: 44px; border-radius: 50%; background: transparent; border: none; color: var(--c-gray); font-size: 20px; display: flex; justify-content: center; align-items: center; cursor: pointer; transition: 0.2s; flex-shrink: 0;}
-        .action-btn:hover { color: var(--c-white); background: var(--bg-input); }
-        .action-btn.send { background: var(--c-blue); color: white; }
+        .action-btn:hover { color: var(--c-white); background: var(--bg-input); transform: scale(1.1); }
+        .action-btn:active { transform: scale(0.9); }
+        .action-btn.send { background: var(--c-blue); color: white; box-shadow: 0 4px 15px rgba(0, 122, 255, 0.4);}
         .action-btn.rec { background: var(--c-red); color: white; animation: pulse 1s infinite; }
         
         .rec-timer { display: none; color: var(--c-red); font-weight: bold; font-family: monospace; font-size: 16px; padding: 0 10px; }
 
-        @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.1); } 100% { transform: scale(1); } }
+        @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.08); } 100% { transform: scale(1); } }
+        @keyframes popIn { from { opacity: 0; transform: scale(0.9); } to { opacity: 1; transform: scale(1); } }
 
         /* --- Modals --- */
-        .modal-overlay { position: fixed; top:0; left:0; width:100%; height:100%; background: rgba(0,0,0,0.7); z-index: 2000; display: none; justify-content: center; align-items: center; }
-        .modal-box { background: var(--bg-panel); border: 1px solid var(--border); padding: 25px; border-radius: 12px; width: 90%; max-width: 380px; box-shadow: 0 15px 50px rgba(0,0,0,0.9); display: flex; flex-direction: column; gap: 15px;}
-        .modal-box h3 { color: var(--c-white); font-weight: 600;}
-        .modal-box input, .modal-box select { width: 100%; padding: 12px; background: var(--bg-input); border: 1px solid var(--border); color: var(--c-white); border-radius: 8px; font-size: 14px;}
+        .modal-overlay { position: fixed; top:0; left:0; width:100%; height:100%; background: rgba(0,0,0,0.8); z-index: 9000; display: none; justify-content: center; align-items: center; backdrop-filter: blur(5px);}
+        .modal-box { background: var(--bg-panel); border: 1px solid var(--border); padding: 25px; border-radius: 24px; width: 90%; max-width: 400px; box-shadow: 0 15px 50px rgba(0,0,0,0.9); display: flex; flex-direction: column; gap: 15px;}
+        .modal-box h3 { color: var(--c-white); font-weight: 700;}
+        .modal-box input, .modal-box select { width: 100%; padding: 14px; background: var(--bg-input); border: 1px solid var(--border); color: var(--c-white); border-radius: 16px; font-size: 15px;}
         
-        .contact-list-box { max-height: 150px; overflow-y: auto; background: var(--bg-input); border: 1px solid var(--border); border-radius: 8px; padding: 10px;}
-        .contact-check { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); cursor: pointer; color: var(--c-white);}
-        .contact-check:last-child { border-bottom: none; }
+        .contact-list-box { max-height: 200px; overflow-y: auto; background: var(--bg-input); border: 1px solid var(--border); border-radius: 16px; padding: 10px;}
+        .contact-check { display: flex; align-items: center; gap: 10px; padding: 10px; border-bottom: 1px solid var(--border); cursor: pointer; color: var(--c-white);}
         
         .modal-actions { display: flex; gap: 10px; margin-top: 10px; }
-        .modal-actions button { flex: 1; padding: 12px; border-radius: 8px; border: none; font-weight: bold; cursor: pointer;}
+        .modal-actions button { flex: 1; padding: 14px; border-radius: 16px; border: none; font-weight: bold; cursor: pointer; transition: 0.2s;}
         .btn-cancel { background: var(--bg-input); color: var(--c-white); border: 1px solid var(--border);}
         .btn-cancel:hover { background: var(--border); }
         .btn-confirm { background: var(--c-blue); color: #fff; }
         .btn-confirm:hover { background: var(--c-blue-hover); }
-        
-        .toggle-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border);}
-        .ip-list { max-height: 120px; overflow-y: auto; background: var(--bg-input); border-radius: 8px; padding: 10px; font-size: 12px; font-family: monospace; color: var(--c-orange); direction: ltr; text-align: left; border: 1px solid var(--border);}
 
         /* Mobile Adjustments */
         @media (max-width: 768px) {
@@ -172,15 +173,15 @@
             .back-btn { display: flex !important; }
             .messages { padding: 15px; }
             .bubble { max-width: 92%; }
-            .msg-row.out .delete-btn { left: 0; top: -15px; transform: none; font-size:16px;}
-            #videoPreview { width: 150px; height: 150px; bottom: 70px; right: 10px;}
-            [dir="rtl"] #videoPreview { left: 10px; }
+            #videoPreview { width: 150px; height: 150px; bottom: 85px; right: 10px;}
+            [dir="rtl"] #videoPreview { left: 10px; right: auto; }
         }
     </style>
 </head>
 <body>
 
     <svg style="display:none;">
+        <symbol id="icon-search" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></symbol>
         <symbol id="icon-back" viewBox="0 0 24 24"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></symbol>
         <symbol id="icon-attach" viewBox="0 0 24 24"><path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z"/></symbol>
         <symbol id="icon-mic" viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/><path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></symbol>
@@ -203,7 +204,7 @@
         <div class="sidebar" id="sidebar">
             <div class="sidebar-header">
                 <button class="icon-btn" onclick="openModal('settingsModal')" title="تنظیمات">⚙️</button>
-                <button class="icon-btn" onclick="toggleTheme()" title="تغییر تم (لایت/دارک)">🌓</button>
+                <button class="icon-btn" onclick="toggleTheme()" title="تغییر تم">🌓</button>
                 <div class="search-box">
                     <input type="text" id="searchInput" data-i18n-ph="search_ph" placeholder="جستجو..." onkeyup="searchChat()">
                 </div>
@@ -222,44 +223,74 @@
                 </div>
             </div>
             
-            <div class="messages" id="messages"></div>
+            <div class="messages" id="messages" onclick="closeContextMenu()"></div>
             
             <video id="videoPreview" autoplay muted playsinline></video>
 
-            <div class="input-area" id="input-area">
-                <button class="action-btn" onclick="document.getElementById('fileInput').click()">
-                    <svg style="width:24px;fill:currentColor;"><use href="#icon-attach"></use></svg>
-                </button>
-                <input type="file" id="fileInput" style="display:none" onchange="uploadFile()">
-                
-                <div class="input-box">
-                    <span class="rec-timer" id="recTimer" dir="ltr">00:00</span>
-                    <input type="text" id="msgInput" data-i18n-ph="type_ph" placeholder="پیام خود را بنویسید..." autocomplete="off" oninput="checkInput()">
+            <div id="multiSelectBar">
+                <span id="selectCount" style="font-weight:bold;">1 پیام انتخاب شده</span>
+                <div style="display:flex; gap:10px;">
+                    <button onclick="forwardSelected()">➡️ هدایت (Forward)</button>
+                    <button onclick="deleteSelected()" style="color:var(--c-red); border-color:var(--c-red);">🗑 حذف</button>
+                    <button onclick="cancelSelection()">✖ لغو</button>
+                </div>
+            </div>
+
+            <div class="input-wrapper-container" id="input-container">
+                <div id="replyBar">
+                    <div style="color:var(--c-blue); font-size:13px; font-weight:bold;" id="replySender"></div>
+                    <div style="color:var(--c-gray); font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" id="replyText"></div>
+                    <span onclick="cancelReply()" style="position:absolute; left:10px; top:10px; cursor:pointer; color:var(--c-gray); font-size:16px;">✖</span>
                 </div>
                 
-                <button class="action-btn" id="actionVideoBtn" onclick="startRecord('video', this)" title="ویدیو مسیج">
-                    <svg style="width:24px;fill:currentColor;"><use href="#icon-cam"></use></svg>
-                </button>
-                <button class="action-btn" id="actionBtn" onclick="handleAction()" title="صدا / ارسال">
-                    <svg style="width:24px;fill:currentColor;"><use href="#icon-mic"></use></svg>
-                </button>
+                <div class="input-area-row">
+                    <input type="file" id="fileInput" style="display:none" onchange="uploadFile()">
+                    <button class="action-btn" onclick="document.getElementById('fileInput').click()">
+                        <svg style="width:24px;fill:currentColor;"><use href="#icon-attach"></use></svg>
+                    </button>
+                    
+                    <div class="input-box">
+                        <span class="rec-timer" id="recTimer" dir="ltr">00:00</span>
+                        <input type="text" id="msgInput" data-i18n-ph="type_ph" placeholder="پیام خود را بنویسید..." autocomplete="off" oninput="checkInput()">
+                    </div>
+                    
+                    <button class="action-btn" id="actionVideoBtn" onclick="startRecord('video', this)" title="ویدیو مسیج">
+                        <svg style="width:24px;fill:currentColor;"><use href="#icon-cam"></use></svg>
+                    </button>
+                    <button class="action-btn" id="actionBtn" onclick="handleAction()" title="صدا / ارسال">
+                        <svg style="width:24px;fill:currentColor;"><use href="#icon-mic"></use></svg>
+                    </button>
+                </div>
             </div>
         </div>
+    </div>
+
+    <div id="msgContextMenu" class="context-menu">
+        <div class="emoji-bar">
+            <span onclick="sendReaction('👍')">👍</span>
+            <span onclick="sendReaction('❤️')">❤️</span>
+            <span onclick="sendReaction('😂')">😂</span>
+            <span onclick="sendReaction('🙏')">🙏</span>
+            <span onclick="sendReaction('😢')">😢</span>
+        </div>
+        <button onclick="doReply()">↩️ پاسخ (Reply)</button>
+        <button onclick="doCopy()">📋 کپی متن (Copy)</button>
+        <button onclick="doSelect()">☑️ انتخاب (Select)</button>
+        <button onclick="doDeleteMsg()" class="danger">🗑 حذف (Delete)</button>
     </div>
 
     <div class="modal-overlay" id="contactModal">
         <div class="modal-box">
             <h3 data-i18n="add_contact">چت خصوصی جدید</h3>
             <input type="text" id="contactUsername" data-i18n-ph="username_ph" placeholder="آیدی دقیق شخص را وارد کنید" dir="ltr">
-            <button class="btn-confirm" onclick="submitContact()" style="padding:12px; border-radius:8px; border:none; width:100%;">شروع چت</button>
+            <button class="btn-confirm" onclick="submitContact()" style="padding:14px; border-radius:12px; border:none; width:100%;">شروع چت</button>
             
             <hr style="border:0; border-top:1px solid var(--border); margin: 15px 0;">
             
             <h3 style="color:var(--c-blue);">گروه خصوصی جدید</h3>
             <input type="text" id="creationName" placeholder="نام گروه خصوصی">
             <div style="font-size:13px; margin-bottom:5px; color:var(--c-gray);">انتخاب اعضا (از مخاطبین شما):</div>
-            <div class="contact-list-box" id="groupMembersList">
-                </div>
+            <div class="contact-list-box" id="groupMembersList"></div>
             
             <div class="modal-actions">
                 <button class="btn-cancel" onclick="closeModal('contactModal')">لغو</button>
@@ -268,10 +299,19 @@
         </div>
     </div>
 
+    <div class="modal-overlay" id="forwardModal">
+        <div class="modal-box">
+            <h3>هدایت پیام (Forward)</h3>
+            <div class="contact-list-box" id="forwardList"></div>
+            <div class="modal-actions">
+                <button class="btn-cancel" onclick="closeModal('forwardModal')">لغو</button>
+            </div>
+        </div>
+    </div>
+
     <div class="modal-overlay" id="settingsModal">
         <div class="modal-box" style="max-width: 450px;">
             <h3 data-i18n="settings">تنظیمات سیستم</h3>
-            
             <div class="toggle-row">
                 <span data-i18n="language">زبان برنامه</span>
                 <select id="langSelect" onchange="changeLang(this.value)" style="width:120px; padding:6px; margin:0;">
@@ -279,17 +319,18 @@
                     <option value="en">English</option>
                 </select>
             </div>
-            
+            <div class="toggle-row">
+                <span data-i18n="auto_dl">دانلود خودکار مدیا</span>
+                <input type="checkbox" id="autoDlToggle" style="width:auto; transform:scale(1.5);" checked onchange="toggleAutoDl(this.checked)">
+            </div>
             <div class="toggle-row" style="flex-direction:column; align-items:flex-start; gap:10px;">
                 <span data-i18n="chat_bg">پس‌زمینه چت (لینک عکس)</span>
                 <input type="text" id="bgInput" placeholder="https://..." onchange="changeBg(this.value)" dir="ltr">
             </div>
-            
             <div style="margin-top:10px;">
                 <span style="font-size:13px; color:var(--c-gray);" data-i18n="active_sessions">آی‌پی‌های متصل شما</span>
                 <div class="ip-list" id="ipList"></div>
             </div>
-            
             <div class="modal-actions">
                 <button class="btn-cancel" onclick="closeModal('settingsModal')" style="flex: 2;">بستن</button>
                 <button class="btn-confirm" onclick="location.reload()" style="flex: 1; background:var(--c-red);">خروج</button>
