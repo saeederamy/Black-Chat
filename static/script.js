@@ -35,6 +35,7 @@ function changeLang(lang) { currentLang = lang; localStorage.setItem('lang', lan
 function toggleAutoDl(state) { autoDownload = state; }
 function changeBg(url) { if(url.trim() === '') { localStorage.removeItem('chatBg'); document.getElementById('chatArea').style.backgroundImage = 'none'; } else { localStorage.setItem('chatBg', url); document.getElementById('chatArea').style.backgroundImage = `url('${url}')`; } }
 
+// حفظ لاگین کاربر
 window.onload = () => {
     const s_usr = localStorage.getItem('bc_user');
     const s_role = localStorage.getItem('bc_role');
@@ -111,6 +112,7 @@ async function loadInitData() {
 
     const list = document.getElementById('chat-list');
     
+    // مقادیر ارسال شده به تابع کاملاً ایمن و بدون تگ html است
     list.innerHTML = `<div class="chat-item" data-room="Announcements" onclick="openChat('Announcements', 'channel', 'Announcements')">
             <div class="avatar" style="background:var(--c-red); color:white;">📢</div><div class="chat-info"><div class="chat-name">Announcements</div><div class="chat-preview" data-i18n="system_channel">${translations[currentLang].system_channel}</div></div><span class="unread-badge" id="badge-Announcements">0</span></div>`;
     
@@ -136,7 +138,7 @@ function closeContextMenu() { document.getElementById('msgContextMenu').style.di
 function openCreateModal() {
     let html = '';
     myContacts.forEach(c => { 
-        html += `<label class="contact-check"><input type="checkbox" value="${c}"> <span>${c}</span></label>`; 
+        html += `<label class="contact-check"><input type="checkbox" value="${c}" style="width:18px;height:18px;cursor:pointer;accent-color:var(--c-blue);"> <span>${c}</span></label>`; 
     });
     document.getElementById('groupMembersList').innerHTML = html || '<p style="font-size:12px; color:var(--c-gray);">مخاطبی یافت نشد.</p>';
     switchCreateTab('private');
@@ -189,6 +191,7 @@ async function submitCreation() {
     if(data.success) { closeModal('createModal'); loadInitData(); openChat(data.room_id, t, n); }
 }
 
+// تابع باز کردن چت (رندر آیکون در محیط امن جاوا اسکریپت)
 function openChat(roomId, type, title, targetUser = null) {
     document.querySelectorAll('.chat-item').forEach(c => c.classList.remove('active'));
     let activeItem = document.querySelector(`.chat-item[data-room="${roomId}"]`);
@@ -270,17 +273,13 @@ function switchProfTab(tab, btn) {
 
 function handleNotification(msg) {
     let isDM = msg.room.startsWith('dm_');
-    let isGroup = msg.room.startsWith('rm_');
-
     if (isDM && !msg.room.includes(currentUser)) return;
-    if (isGroup && msg.data.roomMembers && !msg.data.roomMembers.includes(currentUser)) return;
-
+    if (msg.data.roomMembers && !msg.data.roomMembers.includes(currentUser)) return;
     if (isDM && !document.querySelector(`.chat-item[data-room="${msg.data.user}"]`)) loadInitData(); 
 
     let targetId = isDM ? msg.data.user : msg.room;
     let badge = document.getElementById(`badge-${isDM ? 'dm_'+targetId : targetId}`);
-    if(badge) { badge.style.display = 'inline-block'; badge.innerText = (parseInt(badge.innerText) || 0) + 1; }
-    
+    if(badge) { badge.style.display = 'inline-block'; badge.innerText = parseInt(badge.innerText) + 1; }
     try { document.getElementById('notif-sound').play(); } catch(e){}
 
     if ("Notification" in window && Notification.permission === "granted" && document.hidden) {
@@ -297,6 +296,7 @@ function appendMessage(data) {
     const msgBox = document.getElementById('messages');
     
     let media = '';
+    // ویدیو مسیج مربعی و استاندارد
     if (data.msgType === 'image') media = `<img src="${data.url}">`;
     else if (data.msgType === 'video') {
         media = `<video controls playsinline style="max-width:100%; border-radius:12px; margin-top:5px; border:1px solid var(--border);" src="${data.url}"></video>`;
@@ -412,7 +412,7 @@ function cancelSelection() {
 function deleteSelected() { if(confirm(`حذف ${selectedMsgs.length} پیام برای همه؟`)) { ws.send(JSON.stringify({action: 'delete_msg', msg_ids: selectedMsgs})); cancelSelection(); } }
 function forwardSelected() { alert("امکان هدایت به زودی..."); cancelSelection(); }
 
-// --- Inputs & Recording (باگ ویس کاملاً برطرف شد) ---
+// --- Inputs & Recording (باگ کش شدن ویس با ID یکتا برطرف شد) ---
 let mediaRecorder; let audioChunks = []; let isRecording = false; let isPaused = false;
 let recTimerInterval; let recSeconds = 0;
 
@@ -449,25 +449,34 @@ function updateTimer() {
 async function startRecord(type, btn) {
     if (!isRecording) {
         try {
-            audioChunks = []; // اطمینان از پاک شدن مخزن صدای قبلی
+            audioChunks = []; 
             const constraints = type === 'video' ? { audio: true, video: { facingMode: "user" } } : { audio: true };
             const stream = await navigator.mediaDevices.getUserMedia(constraints);
             
+            // Chunking interval added (500ms) for stability
             mediaRecorder = new MediaRecorder(stream);
             mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
             mediaRecorder.onstop = async () => {
                 stream.getTracks().forEach(t => t.stop());
                 if(audioChunks.length > 0) {
                     const mime = type === 'video' ? 'video/webm' : 'audio/webm';
-                    const fd = new FormData(); fd.append('file', new File([new Blob(audioChunks, { type: mime })], `rec.${type==='video'?'mp4':'webm'}`, { type: mime }));
-                    audioChunks = []; // خالی کردن مجدد
+                    
+                    // حل باگ ذخیره فایل یکسان: ساخت شناسه یکتا برای هر رکورد
+                    const uniqueId = Math.random().toString(36).substring(2, 9);
+                    const fileName = `rec_${uniqueId}.${type==='video'?'mp4':'webm'}`;
+                    
+                    const fd = new FormData(); 
+                    fd.append('file', new File([new Blob(audioChunks, { type: mime })], fileName, { type: mime }));
+                    audioChunks = []; 
+                    
                     const res = await fetch('/api/upload', { method: 'POST', body: fd });
                     const data = await res.json();
                     if(data.url) ws.send(JSON.stringify({action: 'send_msg', room: currentRoom, user: currentUser, targetUser: targetUserForDM, msgType: type, url: data.url, replyTo: replyToMsg}));
                     cancelReply();
                 }
             };
-            mediaRecorder.start(); isRecording = true; isPaused = false;
+            mediaRecorder.start(500); // 500ms chunks
+            isRecording = true; isPaused = false;
             
             document.getElementById('textInputBox').style.display = 'none';
             document.getElementById('attachBtn').style.display = 'none';
@@ -488,12 +497,19 @@ async function startRecord(type, btn) {
 
 function pauseResumeRecord() {
     const btn = document.getElementById('pauseRecBtn');
-    if(isPaused) { mediaRecorder.resume(); isPaused = false; btn.innerHTML = '<svg style="width:20px;fill:currentColor;"><use href="#icon-pause"></use></svg>'; btn.style.color = "var(--c-blue)";}
+    if(isPaused) { mediaRecorder.resume(); isPaused = false; btn.innerHTML = '<svg style="width:22px;fill:currentColor;"><use href="#icon-pause"></use></svg>'; btn.style.color = "var(--c-blue)";}
     else { mediaRecorder.pause(); isPaused = true; btn.innerHTML = '▶'; btn.style.color = "var(--c-red)";}
 }
 
-function cancelRecord() { audioChunks = []; mediaRecorder.stop(); resetRecordUI(); }
-function stopAndSendRecord() { mediaRecorder.stop(); resetRecordUI(); }
+function cancelRecord() {
+    audioChunks = []; 
+    mediaRecorder.stop();
+    resetRecordUI();
+}
+
+function stopAndSendRecord() {
+    mediaRecorder.stop(); resetRecordUI();
+}
 
 function resetRecordUI() {
     isRecording = false; clearInterval(recTimerInterval);
@@ -536,7 +552,7 @@ async function startCall() {
     document.getElementById('callModal').style.display = 'flex';
     document.getElementById('callStatusText').innerText = "در حال تماس...";
     document.getElementById('callUserText').innerText = callTarget;
-    document.getElementById('callBtns').innerHTML = `<button class="call-btn btn-rej" onclick="endCall()" style="background:var(--c-red); color:white;">✖</button>`;
+    document.getElementById('callBtns').innerHTML = `<button class="icon-btn" onclick="endCall()" style="background:var(--c-red); color:white; width:60px; height:60px; font-size:24px;">✖</button>`;
     
     try {
         localStreamCall = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -560,7 +576,7 @@ function handleWebRTC(data) {
         document.getElementById('callModal').style.display = 'flex';
         document.getElementById('callStatusText').innerText = "تماس ورودی...";
         document.getElementById('callUserText').innerText = callTarget;
-        document.getElementById('callBtns').innerHTML = `<button class="call-btn btn-ans" onclick='acceptCall(${JSON.stringify(data.offer)})' style="background:#52c41a; color:white;">📞</button><button class="call-btn btn-rej" onclick="endCall()" style="background:var(--c-red); color:white;">✖</button>`;
+        document.getElementById('callBtns').innerHTML = `<button class="icon-btn" onclick='acceptCall(${JSON.stringify(data.offer)})' style="background:#52c41a; color:white; width:60px; height:60px; font-size:24px;">📞</button><button class="icon-btn" onclick="endCall()" style="background:var(--c-red); color:white; width:60px; height:60px; font-size:24px;">✖</button>`;
         try { document.getElementById('notif-sound').play(); } catch(e){}
     }
     else if(data.type === 'answer') {
@@ -577,7 +593,7 @@ function handleWebRTC(data) {
 
 async function acceptCall(offerData) {
     document.getElementById('callStatusText').innerText = "در حال اتصال...";
-    document.getElementById('callBtns').innerHTML = `<button class="call-btn btn-rej" onclick="endCall()" style="background:var(--c-red); color:white;">✖</button>`;
+    document.getElementById('callBtns').innerHTML = `<button class="icon-btn" onclick="endCall()" style="background:var(--c-red); color:white; width:60px; height:60px; font-size:24px;">✖</button>`;
     
     try {
         localStreamCall = await navigator.mediaDevices.getUserMedia({ audio: true });
