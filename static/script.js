@@ -36,17 +36,18 @@ function changeLang(lang) { currentLang = lang; localStorage.setItem('lang', lan
 function toggleAutoDl(state) { autoDownload = state; }
 function changeBg(url) { if(url.trim() === '') { localStorage.removeItem('chatBg'); document.getElementById('chatArea').style.backgroundImage = 'none'; } else { localStorage.setItem('chatBg', url); document.getElementById('chatArea').style.backgroundImage = `url('${url}')`; } }
 
+// تابع برای درخواست دسترسی نوتیف با کلیک کاربر (برای رفع محدودیت مرورگر)
+function requestNotificationAccess() {
+    if ("Notification" in window && Notification.permission === "default") {
+        Notification.requestPermission();
+    }
+}
+
 window.onload = () => {
     const s_usr = localStorage.getItem('bc_user');
     const s_role = localStorage.getItem('bc_role');
     if (s_usr && s_role) {
         currentUser = s_usr; currentRole = s_role;
-        
-        // چک کردن دسترسی نوتیفیکیشن در زمان لاگین مجدد
-        if ("Notification" in window && Notification.permission !== "granted") {
-            Notification.requestPermission();
-        }
-        
         document.getElementById('login-wrapper').style.display = 'none';
         document.getElementById('app').style.display = 'flex';
         initWebSocket(); loadInitData();
@@ -69,8 +70,11 @@ async function login() {
         if (data.success) {
             currentUser = data.username; currentRole = data.role;
             localStorage.setItem('bc_user', currentUser); localStorage.setItem('bc_role', currentRole);
-            if ("Notification" in window && Notification.permission !== "granted") Notification.requestPermission();
-            document.getElementById('login-wrapper').style.display = 'none'; document.getElementById('app').style.display = 'flex';
+            
+            requestNotificationAccess(); // اینجا چون روی دکمه کلیک شده، مرورگر دسترسی را بلاک نمیکند
+            
+            document.getElementById('login-wrapper').style.display = 'none'; 
+            document.getElementById('app').style.display = 'flex';
             initWebSocket(); loadInitData();
         } else alert("Invalid Credentials!");
     } catch(e) { alert("Connection Error:\n" + e.message); }
@@ -127,22 +131,26 @@ async function loadInitData() {
 
     const list = document.getElementById('chat-list');
     
-    list.innerHTML = `<div class="chat-item" data-room="Announcements" onclick="openChat('Announcements', 'channel', '📢', 'Announcements')">
+    // مقادیر ارسال شده به تابع کاملاً استرینگ است و هیچ تگ HTML درون Onclick نیست
+    list.innerHTML = `<div class="chat-item" data-room="Announcements" onclick="openChat('Announcements', 'channel', 'Announcements')">
             <div class="avatar" style="background:var(--c-red); color:white; border:none; box-shadow:0 0 15px var(--c-red-glow);">📢</div><div class="chat-info"><div class="chat-name">Announcements</div><div class="chat-preview" data-i18n="system_channel">${translations[currentLang].system_channel}</div></div><span class="unread-badge" id="badge-Announcements">0</span></div>`;
     
     data.custom_rooms.forEach(r => {
         let sub = translations[currentLang].group;
-        list.innerHTML += `<div class="chat-item" data-room="${r.id}" onclick="openChat('${r.id}', 'group', '👥', '${r.name.replace(/'/g, "\\'")}')">
+        let safeName = r.name.replace(/'/g, "\\'").replace(/"/g, "&quot;");
+        list.innerHTML += `<div class="chat-item" data-room="${r.id}" onclick="openChat('${r.id}', 'group', '${safeName}')">
                 <div class="avatar" style="background:var(--c-blue); color:white; border:none; box-shadow:0 0 15px var(--c-blue-glow);">👥</div><div class="chat-info"><div class="chat-name">${r.name}</div><div class="chat-preview">${sub}</div></div><span class="unread-badge" id="badge-${r.id}">0</span></div>`;
     });
 
     data.contacts.forEach(c => {
         let avHTML = userAvatars[c] ? `<img src="${userAvatars[c]}">` : '👤';
-        list.innerHTML += `<div class="chat-item" data-room="${c}" onclick="openChat('${c}', 'private', \`${avHTML}\`, '${c}', '${c}')">
+        let safeC = c.replace(/'/g, "\\'").replace(/"/g, "&quot;");
+        // فقط شناسه کاربر پاس داده می‌شود، نه عکس!
+        list.innerHTML += `<div class="chat-item" data-room="${c}" onclick="openChat('${safeC}', 'private', '${safeC}', '${safeC}')">
                 <div class="avatar">${avHTML}</div><div class="chat-info"><div class="chat-name">${c}</div><div class="chat-preview" data-i18n="private_chat">${translations[currentLang].private_chat}</div></div><span class="unread-badge" id="badge-dm_${c}">0</span></div>`;
     });
     
-    if(!currentRoom) openChat('Announcements', 'channel', '📢', 'Announcements');
+    if(!currentRoom) openChat('Announcements', 'channel', 'Announcements');
 }
 
 function openModal(id) { document.getElementById(id).style.display = 'flex'; }
@@ -194,7 +202,7 @@ async function submitContact() {
     const t = document.getElementById('contactUsername').value.trim(); if(!t) return;
     const res = await fetch('/api/action', { method: 'POST', body: JSON.stringify({action:'add_contact', owner: currentUser, target: t}), headers: {'Content-Type': 'application/json'} });
     const data = await res.json();
-    if(data.success) { closeModal('createModal'); loadInitData(); openChat(data.target, 'private', '👤', data.target, data.target); } else alert(data.msg);
+    if(data.success) { closeModal('createModal'); loadInitData(); openChat(data.target, 'private', data.target, data.target); } else alert(data.msg);
 }
 
 async function submitCreation() {
@@ -202,10 +210,12 @@ async function submitCreation() {
     let members = []; document.querySelectorAll('#groupMembersList input:checked').forEach(chk => members.push(chk.value));
     const res = await fetch('/api/action', { method: 'POST', body: JSON.stringify({action:'create_room', type: t, name: n, user: currentUser, members: members}), headers: {'Content-Type': 'application/json'} });
     const data = await res.json();
-    if(data.success) { closeModal('createModal'); loadInitData(); openChat(data.room_id, t, '👥', n); }
+    if(data.success) { closeModal('createModal'); loadInitData(); openChat(data.room_id, t, n); }
 }
 
-function openChat(roomId, type, icon, title, targetUser = null) {
+function openChat(roomId, type, title, targetUser = null) {
+    requestNotificationAccess(); // اینجا هم تست میکنیم که اگر کاربر روی چت کلیک کرد اجازه نوتیف بگیرد
+
     document.querySelectorAll('.chat-item').forEach(c => c.classList.remove('active'));
     let activeItem = document.querySelector(`.chat-item[data-room="${roomId}"]`);
     if(activeItem) activeItem.classList.add('active');
@@ -220,6 +230,7 @@ function openChat(roomId, type, icon, title, targetUser = null) {
     if(roomId === 'Announcements') st = translations[currentLang].system_channel;
     document.getElementById('room-status').innerText = st;
     
+    // پردازش آیکون و عکس کاملاً جدا از onClick اتفاق می‌افتد
     let headerAv = '📢';
     if (type === 'group') headerAv = '👥';
     if (type === 'private') headerAv = (targetUser && userAvatars[targetUser]) ? `<img src="${userAvatars[targetUser]}" style="width:100%;height:100%;object-fit:cover;">` : '👤';
@@ -247,7 +258,6 @@ function openChat(roomId, type, icon, title, targetUser = null) {
 
 function closeChat() { document.getElementById('sidebar').classList.remove('hidden'); }
 
-// Profile Shared Media
 function openProfile() {
     if(!currentRoom) return;
     document.getElementById('prof-avatar').innerHTML = document.getElementById('header-avatar').innerHTML;
@@ -292,7 +302,6 @@ function switchProfTab(tab, btn) {
 }
 
 function handleNotification(msg) {
-    // حل باگ پاپ‌آپ
     let sender = msg.data.user; 
     let room = msg.room; 
     let isDM = room.startsWith('dm_');
@@ -310,7 +319,6 @@ function handleNotification(msg) {
     
     try { document.getElementById('notif-sound').play(); } catch(e){}
 
-    // پاپ‌آپ همیشه ارسال می‌شود
     if ("Notification" in window && Notification.permission === "granted") {
         let notifBody = msg.data.msgType === 'text' ? msg.data.text : "New Message 🖼️🎤";
         new Notification(sender, { body: notifBody });
