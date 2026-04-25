@@ -36,7 +36,6 @@ function changeLang(lang) { currentLang = lang; localStorage.setItem('lang', lan
 function toggleAutoDl(state) { autoDownload = state; }
 function changeBg(url) { if(url.trim() === '') { localStorage.removeItem('chatBg'); document.getElementById('chatArea').style.backgroundImage = 'none'; } else { localStorage.setItem('chatBg', url); document.getElementById('chatArea').style.backgroundImage = `url('${url}')`; } }
 
-// حفظ لاگین
 window.onload = () => {
     const s_usr = localStorage.getItem('bc_user');
     const s_role = localStorage.getItem('bc_role');
@@ -117,22 +116,23 @@ async function loadInitData() {
 
     const list = document.getElementById('chat-list');
     
-    list.innerHTML = `<div class="chat-item" data-room="Announcements" onclick="openChat('Announcements', 'channel', '📢', 'Announcements')">
-            <div class="avatar" style="background:var(--c-red); color:white; border:none; box-shadow:0 0 15px var(--c-red-glow);">📢</div><div class="chat-info"><div class="chat-name">Announcements</div><div class="chat-preview" data-i18n="system_channel">${translations[currentLang].system_channel}</div></div><span class="unread-badge" id="badge-Announcements">0</span></div>`;
+    // ایزوله کردن دیتا از onclick
+    list.innerHTML = `<div class="chat-item" data-room="Announcements" onclick="openChat('Announcements', 'channel', 'Announcements')">
+            <div class="avatar" style="background:var(--c-red); color:white;">📢</div><div class="chat-info"><div class="chat-name">Announcements</div><div class="chat-preview" data-i18n="system_channel">${translations[currentLang].system_channel}</div></div><span class="unread-badge" id="badge-Announcements">0</span></div>`;
     
     data.custom_rooms.forEach(r => {
         let sub = translations[currentLang].group;
-        list.innerHTML += `<div class="chat-item" data-room="${r.id}" onclick="openChat('${r.id}', 'group', '👥', '${r.name.replace(/'/g, "\\'")}')">
-                <div class="avatar" style="background:var(--c-blue); color:white; border:none; box-shadow:0 0 15px var(--c-blue-glow);">👥</div><div class="chat-info"><div class="chat-name">${r.name}</div><div class="chat-preview">${sub}</div></div><span class="unread-badge" id="badge-${r.id}">0</span></div>`;
+        list.innerHTML += `<div class="chat-item" data-room="${r.id}" onclick="openChat('${r.id}', 'group', '${r.name.replace(/'/g, "\\'")}')">
+                <div class="avatar" style="background:var(--c-blue); color:white;">👥</div><div class="chat-info"><div class="chat-name">${r.name}</div><div class="chat-preview">${sub}</div></div><span class="unread-badge" id="badge-${r.id}">0</span></div>`;
     });
 
     data.contacts.forEach(c => {
-        let avHTML = userAvatars[c] ? `<img src="${userAvatars[c]}">` : '👤';
-        list.innerHTML += `<div class="chat-item" data-room="${c}" onclick="openChat('${c}', 'private', \`${avHTML}\`, '${c}', '${c}')">
-                <div class="avatar">${avHTML}</div><div class="chat-info"><div class="chat-name">${c}</div><div class="chat-preview" data-i18n="private_chat">${translations[currentLang].private_chat}</div></div><span class="unread-badge" id="badge-dm_${c}">0</span></div>`;
+        // فقط استرینگ های متنی ایمن ارسال می‌شود تا html نشکند
+        list.innerHTML += `<div class="chat-item" data-room="${c}" onclick="openChat('${c}', 'private', '${c}', '${c}')">
+                <div class="avatar" id="av-${c}">${userAvatars[c] ? `<img src="${userAvatars[c]}">` : '👤'}</div><div class="chat-info"><div class="chat-name">${c}</div><div class="chat-preview" data-i18n="private_chat">${translations[currentLang].private_chat}</div></div><span class="unread-badge" id="badge-dm_${c}">0</span></div>`;
     });
     
-    if(!currentRoom) openChat('Announcements', 'channel', '📢', 'Announcements');
+    if(!currentRoom) openChat('Announcements', 'channel', 'Announcements');
 }
 
 function openModal(id) { document.getElementById(id).style.display = 'flex'; }
@@ -184,7 +184,7 @@ async function submitContact() {
     const t = document.getElementById('contactUsername').value.trim(); if(!t) return;
     const res = await fetch('/api/action', { method: 'POST', body: JSON.stringify({action:'add_contact', owner: currentUser, target: t}), headers: {'Content-Type': 'application/json'} });
     const data = await res.json();
-    if(data.success) { closeModal('createModal'); loadInitData(); openChat(data.target, 'private', '👤', data.target, data.target); } else alert(data.msg);
+    if(data.success) { closeModal('createModal'); loadInitData(); openChat(data.target, 'private', data.target, data.target); } else alert(data.msg);
 }
 
 async function submitCreation() {
@@ -192,10 +192,11 @@ async function submitCreation() {
     let members = []; document.querySelectorAll('#groupMembersList input:checked').forEach(chk => members.push(chk.value));
     const res = await fetch('/api/action', { method: 'POST', body: JSON.stringify({action:'create_room', type: t, name: n, user: currentUser, members: members}), headers: {'Content-Type': 'application/json'} });
     const data = await res.json();
-    if(data.success) { closeModal('createModal'); loadInitData(); openChat(data.room_id, t, '👥', n); }
+    if(data.success) { closeModal('createModal'); loadInitData(); openChat(data.room_id, t, n); }
 }
 
-function openChat(roomId, type, icon, title, targetUser = null) {
+// تابع ایمن شده از باگ HTML
+function openChat(roomId, type, title, targetUser = null) {
     document.querySelectorAll('.chat-item').forEach(c => c.classList.remove('active'));
     let activeItem = document.querySelector(`.chat-item[data-room="${roomId}"]`);
     if(activeItem) activeItem.classList.add('active');
@@ -210,6 +211,7 @@ function openChat(roomId, type, icon, title, targetUser = null) {
     if(roomId === 'Announcements') st = translations[currentLang].system_channel;
     document.getElementById('room-status').innerText = st;
     
+    // پردازش آیکون کاملاً داخل محیط امن JS انجام می‌شود
     let headerAv = '📢';
     if (type === 'group') headerAv = '👥';
     if (type === 'private') headerAv = (targetUser && userAvatars[targetUser]) ? `<img src="${userAvatars[targetUser]}" style="width:100%;height:100%;object-fit:cover;">` : '👤';
@@ -247,8 +249,8 @@ function openProfile() {
     document.querySelectorAll('.bubble').forEach(b => {
         let msgId = b.parentElement.id; 
         let img = b.querySelector('img'); let vid = b.querySelector('video');
-        if(img) mediaH += `<img src="${img.src}" onclick="closeModal('profileModal'); scrollToMsg('${msgId}')" style="width:30%; height:80px; object-fit:cover; border-radius:12px; border:1px solid var(--border); cursor:pointer; transition:0.3s;" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">`;
-        if(vid && !vid.classList.contains('video-msg')) mediaH += `<video src="${vid.src}" onclick="closeModal('profileModal'); scrollToMsg('${msgId}')" style="width:30%; height:80px; object-fit:cover; border-radius:12px; border:1px solid var(--border); cursor:pointer;"></video>`;
+        if(img) mediaH += `<img src="${img.src}" onclick="closeModal('profileModal'); scrollToMsg('${msgId}')" style="width:30%; height:80px; object-fit:cover; border-radius:8px; border:1px solid var(--border); cursor:pointer; transition:0.3s;" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">`;
+        if(vid && !vid.classList.contains('video-msg')) mediaH += `<video src="${vid.src}" onclick="closeModal('profileModal'); scrollToMsg('${msgId}')" style="width:30%; height:80px; object-fit:cover; border-radius:8px; border:1px solid var(--border); cursor:pointer;"></video>`;
         
         let aud = b.querySelector('audio'); 
         let vidMsg = b.querySelector('.video-msg');
@@ -274,7 +276,6 @@ function openProfile() {
     switchProfTab('media', document.querySelector('.prof-tab'));
     openModal('profileModal');
 }
-
 function switchProfTab(tab, btn) {
     document.querySelectorAll('.prof-tab').forEach(b => { b.style.color = 'var(--c-gray)'; b.style.borderBottomColor = 'transparent'; });
     btn.style.color = 'var(--c-blue)'; btn.style.borderBottomColor = 'var(--c-blue)';
@@ -283,22 +284,24 @@ function switchProfTab(tab, btn) {
 }
 
 function handleNotification(msg) {
-    let isDM = msg.room.startsWith('dm_');
-    let isGroup = msg.room.startsWith('rm_');
-
-    if (isDM && !msg.room.includes(currentUser)) return;
-    if (isGroup && msg.data.roomMembers && !msg.data.roomMembers.includes(currentUser)) return;
-
-    if (isDM && !document.querySelector(`.chat-item[data-room="${msg.data.user}"]`)) loadInitData(); 
-
-    let targetId = isDM ? msg.data.user : msg.room;
-    let badge = document.getElementById(`badge-${isDM ? 'dm_'+targetId : targetId}`);
-    if(badge) { badge.style.display = 'inline-block'; badge.innerText = (parseInt(badge.innerText) || 0) + 1; }
+    let sender = msg.user; 
+    let room = msg.room; 
+    let isDM = room.startsWith('dm_');
     
+    let targetId = isDM ? sender : room;
+    let chatItem = document.querySelector(`.chat-item[data-room="${targetId}"]`);
+    
+    if (chatItem) {
+        let badge = chatItem.querySelector('.unread-badge');
+        if(badge) { badge.style.display = 'inline-block'; badge.innerText = (parseInt(badge.innerText || 0) + 1); }
+    } else {
+        loadInitData(); // Refresh list if chat is new
+    }
+
     try { document.getElementById('notif-sound').play(); } catch(e){}
 
     if ("Notification" in window && Notification.permission === "granted" && document.hidden) {
-        new Notification(isDM ? msg.data.user : msg.room, { body: msg.data.msgType === 'text' ? msg.data.text : "New Media Message" });
+        new Notification(sender, { body: msg.msgType === 'text' ? msg.text : "New Media Message" });
     }
 }
 
@@ -313,7 +316,7 @@ function appendMessage(data) {
     let media = '';
     if (data.msgType === 'image') media = `<img src="${data.url}">`;
     else if (data.msgType === 'video') {
-        let isVideoMessage = data.url.includes('rec.webm') || data.url.includes('rec.mp4');
+        let isVideoMessage = data.url.includes('rec_');
         if (isVideoMessage) {
             media = `<video class="video-msg" autoplay loop muted playsinline src="${data.url}" onclick="this.muted = !this.muted;"></video>`;
         } else {
@@ -321,7 +324,6 @@ function appendMessage(data) {
         }
     }
     else if (data.msgType === 'audio') {
-        // حباب ویس بسیار شیک و کپسولی (Pill Shape)
         media = `<div style="display:flex; align-items:center; gap:10px; background:rgba(0,0,0,0.15); padding:6px 12px 6px 6px; border-radius:30px; margin-top:6px; border:1px solid rgba(255,255,255,0.05); box-shadow: 0 2px 8px rgba(0,0,0,0.1);"><div style="background:var(--c-blue); width:38px; height:38px; border-radius:50%; display:flex; justify-content:center; align-items:center; color:white; flex-shrink:0; font-size:18px; box-shadow:0 0 10px var(--c-blue-glow);">🎤</div><audio controls preload="metadata" src="${data.url}" style="height:32px; width:200px; outline:none; filter:grayscale(0.5);"></audio></div>`;
     }
     else if (data.msgType === 'file') {
@@ -346,7 +348,7 @@ function appendMessage(data) {
         lastDateStr = dateStr;
     }
 
-    let isOnlyVidMsg = data.msgType === 'video' && (data.url.includes('rec.webm') || data.url.includes('rec.mp4')) && !textContent;
+    let isOnlyVidMsg = data.msgType === 'video' && data.url.includes('rec_') && !textContent;
     let bubbleClass = isOnlyVidMsg ? "bubble video-msg-bubble" : "bubble";
 
     const html = `
@@ -397,7 +399,6 @@ function openMsgMenu(e, id, textEncoded, sender) {
         x = e.clientX || (e.touches && e.touches[0].clientX) || x;
         y = e.clientY || (e.touches && e.touches[0].clientY) || y;
     }
-    
     if(x + 240 > window.innerWidth) x = window.innerWidth - 250;
     if(y + 300 > window.innerHeight) y = window.innerHeight - 310;
     menu.style.left = `${x}px`; menu.style.top = `${y}px`;
@@ -421,8 +422,7 @@ function doEdit() {
     editMsgId = contextMsgId;
     document.getElementById('msgInput').value = contextMsgText;
     document.getElementById('msgInput').focus();
-    checkInput();
-    closeContextMenu();
+    checkInput(); closeContextMenu();
 }
 
 function doSelect() { selectionMode = true; closeContextMenu(); toggleMsgSelection(contextMsgId); }
@@ -453,7 +453,7 @@ function openForwardModal() {
         if(rid === 'Announcements' && currentRole !== 'admin') return; 
         let rname = item.querySelector('.chat-name').innerText;
         let avatar = item.querySelector('.avatar').innerHTML;
-        html += `<div class="contact-check" onclick="execForward('${rid}')" style="border-bottom:1px solid var(--border); padding:10px; display:flex; align-items:center; gap:10px; cursor:pointer; transition:0.2s;" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='none'"><div class="avatar" style="width:36px;height:36px;font-size:14px;">${avatar}</div> <span style="color:var(--c-white); font-weight:bold;">${rname}</span></div>`;
+        html += `<div class="contact-check" onclick="execForward('${rid}')" style="border-bottom:1px solid var(--border); padding:10px; display:flex; align-items:center; gap:10px; cursor:pointer; transition:0.2s;" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='none'"><div class="avatar" style="width:36px;height:36px;font-size:14px;border:none;">${avatar}</div> <span style="color:var(--c-white); font-weight:bold;">${rname}</span></div>`;
     });
     document.getElementById('forwardList').innerHTML = html || '<p style="text-align:center;color:gray;padding:15px;">No chats available</p>';
     openModal('forwardModal');
@@ -517,7 +517,7 @@ async function startRecord(type, btn) {
                 
                 if(audioChunks.length > 0) {
                     const mime = type === 'video' ? 'video/webm' : 'audio/webm';
-                    const uniqueId = Math.random().toString(36).substring(2, 9);
+                    const uniqueId = Math.random().toString(36).substring(2, 10);
                     const fileName = `rec_${uniqueId}.${type==='video'?'mp4':'webm'}`;
                     
                     const fd = new FormData(); 
@@ -545,7 +545,7 @@ async function startRecord(type, btn) {
             recSeconds = 0; document.getElementById('recTimer').innerText = "00:00";
             recTimerInterval = setInterval(updateTimer, 1000);
             
-        } catch (err) { alert("Microphone/Camera blocked! Please allow access."); }
+        } catch (err) { alert("Please allow Microphone/Camera access in your browser."); }
     }
 }
 
@@ -628,7 +628,7 @@ function handleWebRTC(data) {
         document.getElementById('callModal').style.display = 'flex';
         document.getElementById('callStatusText').innerText = "Incoming Call...";
         document.getElementById('callUserText').innerText = callTarget;
-        document.getElementById('callBtns').innerHTML = `<button class="call-btn btn-ans" onclick='acceptCall(${JSON.stringify(data.offer)})' style="background:#52c41a; color:white;">📞</button><button class="call-btn btn-rej" onclick="endCall()" style="background:var(--c-red); color:white;">✖</button>`;
+        document.getElementById('callBtns').innerHTML = `<button class="call-btn btn-ans" onclick='acceptCall(${JSON.stringify(data.offer)})' style="background:#10b981; color:white;">📞</button><button class="call-btn btn-rej" onclick="endCall()" style="background:var(--c-red); color:white;">✖</button>`;
         try { document.getElementById('notif-sound').play(); } catch(e){}
     }
     else if(data.type === 'answer') {
