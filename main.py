@@ -44,12 +44,18 @@ def init_db():
 
 init_db()
 
+# --- سیستم هوشمند تشخیص آی‌پی (رفع مشکل 127.0.0.1) ---
 def get_real_ip(request: Request):
-    real_ip = request.headers.get("X-Real-IP")
-    if real_ip: return real_ip
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded: return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "Unknown"
+    headers_to_check = ["CF-Connecting-IP", "X-Forwarded-For", "X-Real-IP"]
+    for header in headers_to_check:
+        val = request.headers.get(header)
+        if val:
+            return val.split(",")[0].strip()
+    
+    ip = request.client.host if request.client else "Unknown"
+    if ip == "127.0.0.1" or ip == "::1":
+        return "شبکه داخلی (Local)"
+    return ip
 
 class ConnectionManager:
     def __init__(self):
