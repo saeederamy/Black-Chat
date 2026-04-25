@@ -276,24 +276,36 @@ function switchProfTab(tab, btn) {
 }
 
 function handleNotification(msg) {
-    let sender = msg.user; 
+    // رفع باگ اصلی: دریافت نام فرستنده از مسیر درست
+    let sender = msg.data.user; 
     let room = msg.room; 
     let isDM = room.startsWith('dm_');
-    
-    let targetId = isDM ? sender : room;
-    let chatItem = document.querySelector(`.chat-item[data-room="${targetId}"]`);
-    
-    if (chatItem) {
-        let badge = chatItem.querySelector('.unread-badge');
-        if(badge) { badge.style.display = 'inline-block'; badge.innerText = (parseInt(badge.innerText || 0) + 1); }
-    } else {
-        loadInitData(); // Refresh list if chat is new
+
+    // مسدود کردن نوتیف‌های نامربوط
+    if (isDM && !room.includes(currentUser)) return;
+    if (!isDM && room !== 'Announcements' && msg.data.roomMembers && !msg.data.roomMembers.includes(currentUser)) return;
+
+    // اگر چت طرف مقابل در سایدبار نبود، لیست را رفرش کن
+    if (isDM && !document.querySelector(`.chat-item[data-room="${sender}"]`)) {
+        loadInitData(); 
     }
 
+    // تشخیص آیدی برای انداختن حباب
+    let targetId = isDM ? sender : room;
+    let badgeId = isDM ? `badge-dm_${targetId}` : `badge-${targetId}`;
+    let badge = document.getElementById(badgeId);
+    
+    if(badge) { 
+        badge.style.display = 'inline-block'; 
+        badge.innerText = (parseInt(badge.innerText) || 0) + 1; 
+    }
+    
     try { document.getElementById('notif-sound').play(); } catch(e){}
 
+    // ارسال پاپ‌آپ کروم (فقط وقتی تب مرورگر مخفی است)
     if ("Notification" in window && Notification.permission === "granted" && document.hidden) {
-        new Notification(sender, { body: msg.msgType === 'text' ? msg.text : "پیام جدید" });
+        let bodyText = msg.data.msgType === 'text' ? msg.data.text : "New Message 🖼️🎤";
+        new Notification(sender, { body: bodyText });
     }
 }
 
