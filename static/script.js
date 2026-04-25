@@ -36,7 +36,6 @@ function changeLang(lang) { currentLang = lang; localStorage.setItem('lang', lan
 function toggleAutoDl(state) { autoDownload = state; }
 function changeBg(url) { if(url.trim() === '') { localStorage.removeItem('chatBg'); document.getElementById('chatArea').style.backgroundImage = 'none'; } else { localStorage.setItem('chatBg', url); document.getElementById('chatArea').style.backgroundImage = `url('${url}')`; } }
 
-// تابع برای درخواست دسترسی نوتیف با کلیک کاربر (برای رفع محدودیت مرورگر)
 function requestNotificationAccess() {
     if ("Notification" in window && Notification.permission === "default") {
         Notification.requestPermission();
@@ -71,7 +70,7 @@ async function login() {
             currentUser = data.username; currentRole = data.role;
             localStorage.setItem('bc_user', currentUser); localStorage.setItem('bc_role', currentRole);
             
-            requestNotificationAccess(); // اینجا چون روی دکمه کلیک شده، مرورگر دسترسی را بلاک نمیکند
+            requestNotificationAccess(); 
             
             document.getElementById('login-wrapper').style.display = 'none'; 
             document.getElementById('app').style.display = 'flex';
@@ -131,7 +130,6 @@ async function loadInitData() {
 
     const list = document.getElementById('chat-list');
     
-    // مقادیر ارسال شده به تابع کاملاً استرینگ است و هیچ تگ HTML درون Onclick نیست
     list.innerHTML = `<div class="chat-item" data-room="Announcements" onclick="openChat('Announcements', 'channel', 'Announcements')">
             <div class="avatar" style="background:var(--c-red); color:white; border:none; box-shadow:0 0 15px var(--c-red-glow);">📢</div><div class="chat-info"><div class="chat-name">Announcements</div><div class="chat-preview" data-i18n="system_channel">${translations[currentLang].system_channel}</div></div><span class="unread-badge" id="badge-Announcements">0</span></div>`;
     
@@ -145,7 +143,6 @@ async function loadInitData() {
     data.contacts.forEach(c => {
         let avHTML = userAvatars[c] ? `<img src="${userAvatars[c]}">` : '👤';
         let safeC = c.replace(/'/g, "\\'").replace(/"/g, "&quot;");
-        // فقط شناسه کاربر پاس داده می‌شود، نه عکس!
         list.innerHTML += `<div class="chat-item" data-room="${c}" onclick="openChat('${safeC}', 'private', '${safeC}', '${safeC}')">
                 <div class="avatar">${avHTML}</div><div class="chat-info"><div class="chat-name">${c}</div><div class="chat-preview" data-i18n="private_chat">${translations[currentLang].private_chat}</div></div><span class="unread-badge" id="badge-dm_${c}">0</span></div>`;
     });
@@ -214,8 +211,8 @@ async function submitCreation() {
 }
 
 function openChat(roomId, type, title, targetUser = null) {
-    requestNotificationAccess(); // اینجا هم تست میکنیم که اگر کاربر روی چت کلیک کرد اجازه نوتیف بگیرد
-
+    requestNotificationAccess(); 
+    
     document.querySelectorAll('.chat-item').forEach(c => c.classList.remove('active'));
     let activeItem = document.querySelector(`.chat-item[data-room="${roomId}"]`);
     if(activeItem) activeItem.classList.add('active');
@@ -230,7 +227,6 @@ function openChat(roomId, type, title, targetUser = null) {
     if(roomId === 'Announcements') st = translations[currentLang].system_channel;
     document.getElementById('room-status').innerText = st;
     
-    // پردازش آیکون و عکس کاملاً جدا از onClick اتفاق می‌افتد
     let headerAv = '📢';
     if (type === 'group') headerAv = '👥';
     if (type === 'private') headerAv = (targetUser && userAvatars[targetUser]) ? `<img src="${userAvatars[targetUser]}" style="width:100%;height:100%;object-fit:cover;">` : '👤';
@@ -294,6 +290,7 @@ function openProfile() {
     switchProfTab('media', document.querySelector('.prof-tab'));
     openModal('profileModal');
 }
+
 function switchProfTab(tab, btn) {
     document.querySelectorAll('.prof-tab').forEach(b => { b.style.color = 'var(--c-gray)'; b.style.borderBottomColor = 'transparent'; });
     btn.style.color = 'var(--c-blue)'; btn.style.borderBottomColor = 'var(--c-blue)';
@@ -321,7 +318,21 @@ function handleNotification(msg) {
 
     if ("Notification" in window && Notification.permission === "granted") {
         let notifBody = msg.data.msgType === 'text' ? msg.data.text : "New Message 🖼️🎤";
-        new Notification(sender, { body: notifBody });
+        
+        if (navigator.serviceWorker) {
+            navigator.serviceWorker.getRegistration().then(function(reg) {
+                if (reg) {
+                    // ویبره حذف شد
+                    reg.showNotification(sender, { body: notifBody });
+                } else {
+                    new Notification(sender, { body: notifBody });
+                }
+            }).catch(() => {
+                new Notification(sender, { body: notifBody });
+            });
+        } else {
+            new Notification(sender, { body: notifBody });
+        }
     }
 }
 
