@@ -290,7 +290,6 @@ function openProfile() {
     switchProfTab('media', document.querySelector('.prof-tab'));
     openModal('profileModal');
 }
-
 function switchProfTab(tab, btn) {
     document.querySelectorAll('.prof-tab').forEach(b => { b.style.color = 'var(--c-gray)'; b.style.borderBottomColor = 'transparent'; });
     btn.style.color = 'var(--c-blue)'; btn.style.borderBottomColor = 'var(--c-blue)';
@@ -322,7 +321,6 @@ function handleNotification(msg) {
         if (navigator.serviceWorker) {
             navigator.serviceWorker.getRegistration().then(function(reg) {
                 if (reg) {
-                    // ویبره حذف شد
                     reg.showNotification(sender, { body: notifBody });
                 } else {
                     new Notification(sender, { body: notifBody });
@@ -644,12 +642,17 @@ async function startCall() {
     document.getElementById('callBtns').innerHTML = `<button class="call-btn btn-rej" onclick="endCall()" style="background:var(--c-red); color:white;">✖</button>`;
     
     try {
-        localStreamCall = await navigator.mediaDevices.getUserMedia({ audio: true });
+        // حذف اکو و تنظیمات ویژه میکروفون موبایل
+        localStreamCall = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
         peerConnection = new RTCPeerConnection(servers);
         localStreamCall.getTracks().forEach(t => peerConnection.addTrack(t, localStreamCall));
         
         peerConnection.onicecandidate = e => { if(e.candidate) ws.send(JSON.stringify({action: 'webrtc', type: 'ice', targetUser: callTarget, candidate: e.candidate, from: currentUser})); };
-        peerConnection.ontrack = e => { document.getElementById('remoteAudio').srcObject = e.streams[0]; };
+        peerConnection.ontrack = e => { 
+            const remoteAudio = document.getElementById('remoteAudio');
+            remoteAudio.srcObject = e.streams[0]; 
+            remoteAudio.play().catch(err => console.log("Audio blocked by mobile:", err));
+        };
         
         const offer = await peerConnection.createOffer();
         await peerConnection.setLocalDescription(offer);
@@ -691,12 +694,16 @@ async function acceptCall(offerData) {
     document.getElementById('callBtns').innerHTML = `<button class="call-btn btn-rej" onclick="endCall()" style="background:var(--c-red); color:white;">✖</button>`;
     
     try {
-        localStreamCall = await navigator.mediaDevices.getUserMedia({ audio: true });
+        localStreamCall = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
         peerConnection = new RTCPeerConnection(servers);
         localStreamCall.getTracks().forEach(t => peerConnection.addTrack(t, localStreamCall));
         
         peerConnection.onicecandidate = e => { if(e.candidate) ws.send(JSON.stringify({action: 'webrtc', type: 'ice', targetUser: callTarget, candidate: e.candidate, from: currentUser})); };
-        peerConnection.ontrack = e => { document.getElementById('remoteAudio').srcObject = e.streams[0]; };
+        peerConnection.ontrack = e => { 
+            const remoteAudio = document.getElementById('remoteAudio');
+            remoteAudio.srcObject = e.streams[0]; 
+            remoteAudio.play().catch(err => console.log("Audio blocked by mobile:", err));
+        };
         
         await peerConnection.setRemoteDescription(new RTCSessionDescription(offerData));
         const answer = await peerConnection.createAnswer();
