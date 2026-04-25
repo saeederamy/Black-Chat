@@ -239,6 +239,45 @@ async def websocket_endpoint(websocket: WebSocket, username: str, role: str):
                     c.execute("UPDATE messages SET reactions=? WHERE msg_id=?", (json.dumps(reacts), msg_id))
                     await manager.broadcast({"type": "reaction_updated", "room": row[1], "msg_id": msg_id, "reactions": reacts})
 
+            elif action == "forward_msg":
+                msg_ids = msg.get("msg_ids", [])
+                target_room = msg.get("target_room")
+                
+                room_members = []
+                if target_room.startswith('rm_'):
+                    c.execute("SELECT user FROM room_members WHERE room_id=?", (target_room,))
+                    room_members = [r[0] for r in c.fetchall()]
+
+                if target_room.startswith('dm_'):
+                    users = target_room.replace('dm_', '').split('-')
+                    if len(users) == 2:
+                        t_user = users[0] if users[1] == username else users[1]
+                        c.execute("INSERT OR IGNORE INTO contacts (owner, contact) VALUES (?, ?)", (username, t_user))
+                        c.execute("INSERT OR IGNORE INTO contacts (owner, contact) VALUES (?, ?)", (t_user, username))
+
+                for msg_id in msg_ids:
+                    c.execute("SELECT msg_type, content, file_name FROM messages WHERE msg_id=?", (msg_id,))
+                    row = c.fetchone()
+                    if row:
+                        msg_type, content, file_name = row
+                        new_msg_id = str(uuid.uuid4())
+                        now_str = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+                        
+                        fwd_content = f"Forwarded from {username}:\n{content}" if msg_type == 'text' else content
+                        
+                        msg_payload = {
+                            "id": new_msg_id, "user": username, "msgType": msg_type, 
+                            "text": fwd_content if msg_type == 'text' else '', 
+                            "url": content if msg_type != 'text' else '', 
+                            "fileName": file_name, "roomMembers": room_members,
+                            "replyTo": None, "reactions": {}, "timestamp": now_str
+                        }
+                        
+                        c.execute("INSERT INTO messages (msg_id, room, user, msg_type, content, file_name, reply_to, reactions, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", 
+                                  (new_msg_id, target_room, username, msg_type, fwd_content if msg_type == 'text' else content, file_name, '{}', '{}', now_str))
+                        
+                        await manager.broadcast({"type": "new_msg", "room": target_room, "data": msg_payload})
+
             elif action == "send_msg":
                 room = msg.get("room")
                 target_user = msg.get("targetUser")
@@ -256,8 +295,6 @@ async def websocket_endpoint(websocket: WebSocket, username: str, role: str):
 
                 msg_id = str(uuid.uuid4())
                 reply_to = json.dumps(msg.get('replyTo', {}))
-                
-                # ثبت زمان دقیق برای نمایش در کلاینت
                 now_str = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
                 
                 msg_payload = {
