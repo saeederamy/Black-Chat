@@ -21,7 +21,7 @@ let savedBg = localStorage.getItem('chatBg');
 if(savedBg) document.getElementById('chatArea').style.backgroundImage = `url('${savedBg}')`;
 
 const translations = {
-    'en': { login_title: 'System Login', btn_login: 'Login', search_ph: 'Search...', type_ph: 'Message...', settings: 'Settings', add_contact: 'New Chat / Group', username_ph: 'Enter exact username', language: 'Language', active_sessions: 'Active IPs', chat_bg: 'Chat Wallpaper URL', system_channel: 'System Channel', private_chat: 'Private Chat', group: 'Private Group' },
+    'en': { login_title: 'Secure Login', btn_login: 'Access Hub', search_ph: 'Search...', type_ph: 'Type a message...', settings: 'Settings', add_contact: 'New Chat / Group', username_ph: 'Enter Exact Username', language: 'Language', active_sessions: 'Active Sessions', chat_bg: 'Chat Wallpaper URL', system_channel: 'System Announcements', private_chat: 'Private Chat', group: 'Private Group' },
     'fa': { login_title: 'ورود به سیستم', btn_login: 'ورود / تایید', search_ph: 'جستجو...', type_ph: 'پیام خود را بنویسید...', settings: 'تنظیمات سیستم', add_contact: 'چت یا گروه جدید', username_ph: 'آیدی دقیق را وارد کنید', language: 'زبان برنامه', active_sessions: 'آی‌پی‌های متصل شما', chat_bg: 'پس‌زمینه چت (لینک عکس)', system_channel: 'کانال سیستم', private_chat: 'چت خصوصی', group: 'گروه خصوصی' }
 };
 
@@ -117,14 +117,13 @@ async function loadInitData() {
 
     const list = document.getElementById('chat-list');
     
-    // مقادیر ارسال شده به تابع کاملاً ایمن است (بدون تگ HTML)
     list.innerHTML = `<div class="chat-item" data-room="Announcements" onclick="openChat('Announcements', 'channel', 'Announcements')">
-            <div class="avatar" style="background:var(--c-red); color:white;">📢</div><div class="chat-info"><div class="chat-name">Announcements</div><div class="chat-preview" data-i18n="system_channel">${translations[currentLang].system_channel}</div></div><span class="unread-badge" id="badge-Announcements">0</span></div>`;
+            <div class="avatar" style="background:var(--c-red); color:white; border:none; box-shadow:0 0 15px var(--c-red-glow);">📢</div><div class="chat-info"><div class="chat-name">Announcements</div><div class="chat-preview" data-i18n="system_channel">${translations[currentLang].system_channel}</div></div><span class="unread-badge" id="badge-Announcements">0</span></div>`;
     
     data.custom_rooms.forEach(r => {
         let sub = translations[currentLang].group;
         list.innerHTML += `<div class="chat-item" data-room="${r.id}" onclick="openChat('${r.id}', 'group', '${r.name.replace(/'/g, "\\'")}')">
-                <div class="avatar" style="background:var(--c-blue); color:white;">👥</div><div class="chat-info"><div class="chat-name">${r.name}</div><div class="chat-preview">${sub}</div></div><span class="unread-badge" id="badge-${r.id}">0</span></div>`;
+                <div class="avatar" style="background:var(--c-blue); color:white; border:none; box-shadow:0 0 15px var(--c-blue-glow);">👥</div><div class="chat-info"><div class="chat-name">${r.name}</div><div class="chat-preview">${sub}</div></div><span class="unread-badge" id="badge-${r.id}">0</span></div>`;
     });
 
     data.contacts.forEach(c => {
@@ -136,16 +135,16 @@ async function loadInitData() {
     if(!currentRoom) openChat('Announcements', 'channel', 'Announcements');
 }
 
-function openModal(id) { let m = document.getElementById(id); if(m) m.style.display = 'flex'; if(id === 'settingsModal') fetchIPs(); }
-function closeModal(id) { let m = document.getElementById(id); if(m) m.style.display = 'none'; }
+function openModal(id) { document.getElementById(id).style.display = 'flex'; }
+function closeModal(id) { document.getElementById(id).style.display = 'none'; }
 function closeContextMenu() { document.getElementById('msgContextMenu').style.display = 'none'; }
 
 function openCreateModal() {
     let html = '';
     myContacts.forEach(c => { 
-        html += `<label class="contact-check"><input type="checkbox" value="${c}" style="width:18px;height:18px;cursor:pointer;accent-color:var(--c-blue);"> <span>${c}</span></label>`; 
+        html += `<label class="contact-check"><input type="checkbox" value="${c}"> <span>${c}</span></label>`; 
     });
-    document.getElementById('groupMembersList').innerHTML = html || '<p style="font-size:12px; color:var(--c-gray);">مخاطبی یافت نشد.</p>';
+    document.getElementById('groupMembersList').innerHTML = html || '<p style="font-size:13px; color:var(--c-gray); text-align:center; padding:15px;">مخاطبی یافت نشد.</p>';
     switchCreateTab('private');
     openModal('createModal');
 }
@@ -170,7 +169,7 @@ function searchChat() {
 async function fetchIPs() {
     const res = await fetch('/api/action', { method: 'POST', body: JSON.stringify({action: 'get_ips', user: currentUser}), headers: {'Content-Type': 'application/json'} });
     const data = await res.json();
-    document.getElementById('ipList').innerHTML = data.ips.map(i => `<div style="border-bottom:1px solid var(--border); padding:5px 0;">🌐 ${i.ip} <br><span style="color:var(--c-gray);">${i.date}</span></div>`).join('');
+    document.getElementById('ipList').innerHTML = data.ips.map(i => `<div style="border-bottom:1px solid var(--border); padding:8px 0;">🌐 ${i.ip} <br><span style="color:var(--c-gray); font-size:11px;">${i.date}</span></div>`).join('');
 }
 
 async function uploadAvatar() {
@@ -196,7 +195,6 @@ async function submitCreation() {
     if(data.success) { closeModal('createModal'); loadInitData(); openChat(data.room_id, t, n); }
 }
 
-// تابع ایمن شده (پردازش عکس داخل این تابع انجام میشود تا از باگ کوتیشن جلوگیری شود)
 function openChat(roomId, type, title, targetUser = null) {
     document.querySelectorAll('.chat-item').forEach(c => c.classList.remove('active'));
     let activeItem = document.querySelector(`.chat-item[data-room="${roomId}"]`);
@@ -214,8 +212,10 @@ function openChat(roomId, type, title, targetUser = null) {
     
     let headerAv = '📢';
     if (type === 'group') headerAv = '👥';
-    if (type === 'private') headerAv = (targetUser && userAvatars[targetUser]) ? `<img src="${userAvatars[targetUser]}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;">` : '👤';
+    if (type === 'private') headerAv = (targetUser && userAvatars[targetUser]) ? `<img src="${userAvatars[targetUser]}" style="width:100%;height:100%;object-fit:cover;">` : '👤';
     document.getElementById('header-avatar').innerHTML = headerAv;
+    document.getElementById('header-avatar').style.boxShadow = type === 'channel' ? '0 0 15px var(--c-red-glow)' : '0 0 15px var(--c-blue-glow)';
+    if(type === 'private' && targetUser && userAvatars[targetUser]) document.getElementById('header-avatar').style.border = 'none';
 
     document.getElementById('messages').innerHTML = '';
     
@@ -226,6 +226,10 @@ function openChat(roomId, type, title, targetUser = null) {
     const inputArea = document.getElementById('input-container');
     if ((roomId === 'Announcements' || type === 'channel') && currentRole !== 'admin') inputArea.style.display = 'none';
     else inputArea.style.display = 'flex';
+    
+    // دکمه تماس (فقط برای شخصی)
+    if(type === 'private') document.getElementById('callBtn').style.display = 'flex';
+    else document.getElementById('callBtn').style.display = 'none';
 
     if (window.innerWidth <= 768) document.getElementById('sidebar').classList.add('hidden');
     if(ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({action: 'get_history', room: currentRoom}));
@@ -243,13 +247,13 @@ function openProfile() {
     document.querySelectorAll('.bubble').forEach(b => {
         let msgId = b.parentElement.id; 
         let img = b.querySelector('img'); let vid = b.querySelector('video');
-        if(img) mediaH += `<img src="${img.src}" onclick="closeModal('profileModal'); scrollToMsg('${msgId}')" style="width:30%; height:80px; object-fit:cover; border-radius:8px; border:1px solid var(--border); cursor:pointer;">`;
-        if(vid && !vid.classList.contains('video-msg')) mediaH += `<video src="${vid.src}" onclick="closeModal('profileModal'); scrollToMsg('${msgId}')" style="width:30%; height:80px; object-fit:cover; border-radius:8px; border:1px solid var(--border); cursor:pointer;"></video>`;
+        if(img) mediaH += `<img src="${img.src}" onclick="closeModal('profileModal'); scrollToMsg('${msgId}')" style="width:30%; height:80px; object-fit:cover; border-radius:12px; border:1px solid var(--border); cursor:pointer; transition:0.3s;" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">`;
+        if(vid && !vid.classList.contains('video-msg')) mediaH += `<video src="${vid.src}" onclick="closeModal('profileModal'); scrollToMsg('${msgId}')" style="width:30%; height:80px; object-fit:cover; border-radius:12px; border:1px solid var(--border); cursor:pointer;"></video>`;
         
         let aud = b.querySelector('audio'); 
         let vidMsg = b.querySelector('.video-msg');
-        if(aud) audioH += `<div style="background:var(--bg-input); padding:10px; border-radius:12px; display:flex; align-items:center; gap:10px; width:100%; border:1px solid var(--border);"><div onclick="closeModal('profileModal'); scrollToMsg('${msgId}')" style="background:var(--c-blue); width:40px; height:40px; border-radius:50%; display:flex; justify-content:center; align-items:center; color:white; flex-shrink:0; cursor:pointer;">🎵</div><audio controls src="${aud.src}" style="height:35px; width:100%; outline:none;"></audio></div>`;
-        if(vidMsg) audioH += `<video src="${vidMsg.src}" onclick="closeModal('profileModal'); scrollToMsg('${msgId}')" controls style="width:100px; height:100px; border-radius:50%; object-fit:cover; margin-bottom:5px; border:2px solid var(--c-blue); cursor:pointer;"></video>`; 
+        if(aud) audioH += `<div style="background:var(--bg-input); padding:10px; border-radius:16px; display:flex; align-items:center; gap:12px; width:100%; border:1px solid var(--border);"><div onclick="closeModal('profileModal'); scrollToMsg('${msgId}')" style="background:var(--c-blue); width:44px; height:44px; border-radius:50%; display:flex; justify-content:center; align-items:center; color:white; flex-shrink:0; cursor:pointer; box-shadow:0 0 10px var(--c-blue-glow);">🎵</div><audio controls src="${aud.src}" style="height:35px; width:100%; outline:none;"></audio></div>`;
+        if(vidMsg) audioH += `<video src="${vidMsg.src}" onclick="closeModal('profileModal'); scrollToMsg('${msgId}')" controls style="width:100px; height:100px; border-radius:50%; object-fit:cover; margin-bottom:8px; border:3px solid var(--c-blue); cursor:pointer; box-shadow:0 4px 15px rgba(0,0,0,0.3);"></video>`; 
 
         let link = b.querySelector('.file-link');
         if(link) filesH += `<a href="${link.href}" class="file-link" download>${link.innerHTML}</a>`;
@@ -257,14 +261,14 @@ function openProfile() {
         let txt = b.querySelector('.msg-text-content');
         if(txt) {
             let urls = txt.innerText.match(/https?:\/\/[^\s]+/g);
-            if(urls) urls.forEach(u => linksH += `<a href="${u}" target="_blank" style="color:var(--c-blue); padding:10px; border-bottom:1px solid var(--border); display:block;">${u}</a>`);
+            if(urls) urls.forEach(u => linksH += `<a href="${u}" target="_blank" style="color:var(--c-blue); padding:12px; border-bottom:1px solid var(--border); display:block; border-radius:12px; background:var(--bg-input); margin-bottom:6px; transition:0.3s;" onmouseover="this.style.background='var(--border)'" onmouseout="this.style.background='var(--bg-input)'">${u}</a>`);
         }
     });
     
-    document.getElementById('tab-media').innerHTML = mediaH || '<p style="padding:20px; color:var(--c-gray);">محتوایی یافت نشد.</p>';
-    document.getElementById('tab-files').innerHTML = filesH || '<p style="padding:20px; color:var(--c-gray);">فایلی یافت نشد.</p>';
-    document.getElementById('tab-audio').innerHTML = audioH || '<p style="padding:20px; color:var(--c-gray);">ویس/ویدیویی یافت نشد.</p>';
-    document.getElementById('tab-links').innerHTML = linksH || '<p style="padding:20px; color:var(--c-gray);">لینکی یافت نشد.</p>';
+    document.getElementById('tab-media').innerHTML = mediaH || '<p style="padding:25px; color:var(--c-gray); width:100%; text-align:center;">محتوایی یافت نشد.</p>';
+    document.getElementById('tab-files').innerHTML = filesH || '<p style="padding:25px; color:var(--c-gray); width:100%; text-align:center;">فایلی یافت نشد.</p>';
+    document.getElementById('tab-audio').innerHTML = audioH || '<p style="padding:25px; color:var(--c-gray); width:100%; text-align:center;">ویس/ویدیویی یافت نشد.</p>';
+    document.getElementById('tab-links').innerHTML = linksH || '<p style="padding:25px; color:var(--c-gray); width:100%; text-align:center;">لینکی یافت نشد.</p>';
     
     switchProfTab('media', document.querySelector('.prof-tab'));
     openModal('profileModal');
@@ -284,7 +288,7 @@ function handleNotification(msg) {
 
     let targetId = isDM ? msg.data.user : msg.room;
     let badge = document.getElementById(`badge-${isDM ? 'dm_'+targetId : targetId}`);
-    if(badge) { badge.style.display = 'inline-block'; badge.innerText = parseInt(badge.innerText) + 1; }
+    if(badge) { badge.style.display = 'inline-block'; badge.innerText = parseInt(badge.innerText || 0) + 1; }
     try { document.getElementById('notif-sound').play(); } catch(e){}
 
     if ("Notification" in window && Notification.permission === "granted" && document.hidden) {
@@ -301,7 +305,6 @@ function appendMessage(data) {
     const msgBox = document.getElementById('messages');
     
     let media = '';
-    // ویدیو مسیج به سبک تلگرام (بدون کنترلر، دایره‌ای، و با کلیک صدا دار میشود)
     if (data.msgType === 'image') media = `<img src="${data.url}">`;
     else if (data.msgType === 'video') {
         let isVideoMessage = data.url.includes('rec.webm') || data.url.includes('rec.mp4');
@@ -320,12 +323,11 @@ function appendMessage(data) {
     let textContent = data.text || '';
     let replyHtml = '';
     if (data.replyTo && data.replyTo.id) {
-        replyHtml = `<div class="reply-preview" onclick="scrollToMsg('msg-${data.replyTo.id}'); event.stopPropagation();"><div style="color:var(--c-blue); font-weight:bold; font-size:12px;">${data.replyTo.user}</div><div style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${data.replyTo.text}</div></div>`;
+        replyHtml = `<div class="reply-preview" onclick="scrollToMsg('msg-${data.replyTo.id}'); event.stopPropagation();"><div style="color:var(--c-blue); font-weight:bold; font-size:12px; margin-bottom:2px;">${data.replyTo.user}</div><div style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${data.replyTo.text}</div></div>`;
     }
 
     let safeText = encodeURIComponent(textContent);
 
-    // محاسبه تاریخ و ساعت تلگرامی
     let dateObj = data.timestamp ? new Date(data.timestamp.replace(' ', 'T') + 'Z') : new Date();
     let timeStr = dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
     let dateStr = dateObj.toLocaleDateString('fa-IR', { month: 'long', day: 'numeric' });
@@ -371,6 +373,7 @@ function scrollToMsg(id) {
     }
 }
 
+// Context Menu
 function openMsgMenu(e, id, textEncoded, sender) {
     if(e && e.preventDefault) e.preventDefault();
     if(selectionMode) { toggleMsgSelection(id); return; }
@@ -386,8 +389,9 @@ function openMsgMenu(e, id, textEncoded, sender) {
         x = e.clientX || (e.touches && e.touches[0].clientX) || x;
         y = e.clientY || (e.touches && e.touches[0].clientY) || y;
     }
-    if(x + 220 > window.innerWidth) x = window.innerWidth - 230;
-    if(y + 250 > window.innerHeight) y = window.innerHeight - 260;
+    
+    if(x + 240 > window.innerWidth) x = window.innerWidth - 250;
+    if(y + 300 > window.innerHeight) y = window.innerHeight - 310;
     menu.style.left = `${x}px`; menu.style.top = `${y}px`;
 }
 
@@ -434,7 +438,7 @@ function cancelSelection() {
 function deleteSelected() { if(confirm(`حذف ${selectedMsgs.length} پیام برای همه؟`)) { ws.send(JSON.stringify({action: 'delete_msg', msg_ids: selectedMsgs})); cancelSelection(); } }
 function forwardSelected() { alert("امکان هدایت به زودی..."); cancelSelection(); }
 
-// --- Inputs & Recording (باگ ویس کاملا برطرف شد) ---
+// --- Inputs & Recording ---
 let mediaRecorder; let audioChunks = []; let isRecording = false; let isPaused = false;
 let recTimerInterval; let recSeconds = 0;
 
@@ -475,7 +479,6 @@ async function startRecord(type, btn) {
             const constraints = type === 'video' ? { audio: true, video: { facingMode: "user" } } : { audio: true };
             const stream = await navigator.mediaDevices.getUserMedia(constraints);
             
-            // نمایش پیش‌نمایش در دایره تلگرامی
             if (type === 'video') { const vidPrev = document.getElementById('videoPreview'); vidPrev.srcObject = stream; vidPrev.style.display = 'block'; }
 
             mediaRecorder = new MediaRecorder(stream);
@@ -483,22 +486,24 @@ async function startRecord(type, btn) {
             mediaRecorder.onstop = async () => {
                 if(type === 'video') { const vidPrev = document.getElementById('videoPreview'); vidPrev.style.display = 'none'; vidPrev.srcObject = null; }
                 stream.getTracks().forEach(t => t.stop());
-                
+
                 if(audioChunks.length > 0) {
                     const mime = type === 'video' ? 'video/webm' : 'audio/webm';
-                    // ایجاد نام کاملاً یونیک برای جلوگیری از کش شدن فایل در مرورگر
-                    const uniqueId = Math.random().toString(36).substring(2, 10);
+                    const uniqueId = Math.random().toString(36).substring(2, 9);
                     const fileName = `rec_${uniqueId}.${type==='video'?'mp4':'webm'}`;
                     
-                    const fd = new FormData(); fd.append('file', new File([new Blob(audioChunks, { type: mime })], fileName, { type: mime }));
+                    const fd = new FormData(); 
+                    fd.append('file', new File([new Blob(audioChunks, { type: mime })], fileName, { type: mime }));
                     audioChunks = []; 
+                    
                     const res = await fetch('/api/upload', { method: 'POST', body: fd });
                     const data = await res.json();
                     if(data.url) ws.send(JSON.stringify({action: 'send_msg', room: currentRoom, user: currentUser, targetUser: targetUserForDM, msgType: type, url: data.url, replyTo: replyToMsg}));
                     cancelReply();
                 }
             };
-            mediaRecorder.start(500); isRecording = true; isPaused = false;
+            mediaRecorder.start(500);
+            isRecording = true; isPaused = false;
             
             document.getElementById('textInputBox').style.display = 'none';
             document.getElementById('attachBtn').style.display = 'none';
@@ -513,7 +518,7 @@ async function startRecord(type, btn) {
             recSeconds = 0; document.getElementById('recTimer').innerText = "00:00";
             recTimerInterval = setInterval(updateTimer, 1000);
             
-        } catch (err) { alert("لطفا دسترسی میکروفون/دوربین را مجاز کنید."); }
+        } catch (err) { alert("لطفا دسترسی میکروفون/دوربین را در مرورگر مجاز کنید."); }
     }
 }
 
@@ -548,6 +553,7 @@ async function uploadFile() {
 
 // --- WebRTC Voice Call ---
 let localStreamCall; let peerConnection; let callTarget;
+
 const servers = { 
     'iceServers': [
         { 'urls': 'stun:stun.l.google.com:19302' },
@@ -572,6 +578,7 @@ async function startCall() {
         localStreamCall = await navigator.mediaDevices.getUserMedia({ audio: true });
         peerConnection = new RTCPeerConnection(servers);
         localStreamCall.getTracks().forEach(t => peerConnection.addTrack(t, localStreamCall));
+        
         peerConnection.onicecandidate = e => { if(e.candidate) ws.send(JSON.stringify({action: 'webrtc', type: 'ice', targetUser: callTarget, candidate: e.candidate, from: currentUser})); };
         peerConnection.ontrack = e => { document.getElementById('remoteAudio').srcObject = e.streams[0]; };
         
@@ -583,32 +590,43 @@ async function startCall() {
 
 function handleWebRTC(data) {
     if(data.targetUser !== currentUser) return;
+    
     if(data.type === 'offer') {
         callTarget = data.from;
         document.getElementById('callModal').style.display = 'flex';
         document.getElementById('callStatusText').innerText = "تماس ورودی...";
         document.getElementById('callUserText').innerText = callTarget;
-        document.getElementById('callBtns').innerHTML = `<button class="call-btn btn-ans" onclick='acceptCall(${JSON.stringify(data.offer)})' style="background:#52c41a; color:white;">📞</button><button class="call-btn btn-rej" onclick="endCall()" style="background:var(--c-red); color:white;">✖</button>`;
+        document.getElementById('callBtns').innerHTML = `<button class="call-btn btn-ans" onclick='acceptCall(${JSON.stringify(data.offer)})' style="background:#10b981; color:white;">📞</button><button class="call-btn btn-rej" onclick="endCall()" style="background:var(--c-red); color:white;">✖</button>`;
         try { document.getElementById('notif-sound').play(); } catch(e){}
     }
-    else if(data.type === 'answer') { peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer)); document.getElementById('callStatusText').innerText = "در حال مکالمه"; }
-    else if(data.type === 'ice') { if(peerConnection) peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate)); }
-    else if(data.type === 'end') { endCall(false); }
+    else if(data.type === 'answer') {
+        peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+        document.getElementById('callStatusText').innerText = "در حال مکالمه";
+    }
+    else if(data.type === 'ice') {
+        if(peerConnection) peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+    }
+    else if(data.type === 'end') {
+        endCall(false);
+    }
 }
 
 async function acceptCall(offerData) {
     document.getElementById('callStatusText').innerText = "در حال اتصال...";
     document.getElementById('callBtns').innerHTML = `<button class="call-btn btn-rej" onclick="endCall()" style="background:var(--c-red); color:white;">✖</button>`;
+    
     try {
         localStreamCall = await navigator.mediaDevices.getUserMedia({ audio: true });
         peerConnection = new RTCPeerConnection(servers);
         localStreamCall.getTracks().forEach(t => peerConnection.addTrack(t, localStreamCall));
+        
         peerConnection.onicecandidate = e => { if(e.candidate) ws.send(JSON.stringify({action: 'webrtc', type: 'ice', targetUser: callTarget, candidate: e.candidate, from: currentUser})); };
         peerConnection.ontrack = e => { document.getElementById('remoteAudio').srcObject = e.streams[0]; };
         
         await peerConnection.setRemoteDescription(new RTCSessionDescription(offerData));
         const answer = await peerConnection.createAnswer();
         await peerConnection.setLocalDescription(answer);
+        
         ws.send(JSON.stringify({action: 'webrtc', type: 'answer', targetUser: callTarget, answer: answer, from: currentUser}));
         document.getElementById('callStatusText').innerText = "در حال مکالمه";
     } catch(err) { alert("عدم دسترسی به میکروفون!"); endCall(); }
