@@ -42,6 +42,12 @@ window.onload = () => {
     const s_role = localStorage.getItem('bc_role');
     if (s_usr && s_role) {
         currentUser = s_usr; currentRole = s_role;
+        
+        // این خط اضافه شد تا همیشه دسترسی نوتیف را چک کند
+        if ("Notification" in window && Notification.permission !== "granted") {
+            Notification.requestPermission();
+        }
+        
         document.getElementById('login-screen').style.display = 'none';
         document.getElementById('app').style.display = 'flex';
         initWebSocket(); loadInitData();
@@ -300,12 +306,13 @@ function handleNotification(msg) {
         badge.innerText = (parseInt(badge.innerText) || 0) + 1; 
     }
     
-    try { document.getElementById('notif-sound').play(); } catch(e){}
+   try { document.getElementById('notif-sound').play(); } catch(e){}
 
-    // ارسال پاپ‌آپ کروم (فقط وقتی تب مرورگر مخفی است)
-    if ("Notification" in window && Notification.permission === "granted" && document.hidden) {
-        let bodyText = msg.data.msgType === 'text' ? msg.data.text : "New Message 🖼️🎤";
-        new Notification(sender, { body: bodyText });
+    // شرط document.hidden حذف شد تا پاپ‌آپ همیشه کار کند
+    if ("Notification" in window && Notification.permission === "granted") {
+        let notifTitle = isDM ? msg.data.user : msg.room;
+        let notifBody = msg.data.msgType === 'text' ? msg.data.text : "پیام جدید رسانه‌ای 🖼️🎤";
+        new Notification(notifTitle, { body: notifBody });
     }
 }
 
