@@ -11,6 +11,7 @@ let contextMsgId = null; let contextMsgText = null; let contextMsgSender = null;
 let replyToMsg = null; let selectionMode = false; let selectedMsgs = [];
 let editMsgId = null; 
 let autoDownload = true; 
+let lastDateStr = null; 
 
 let savedTheme = localStorage.getItem('hub_theme') || 'dark';
 document.documentElement.setAttribute('data-theme', savedTheme);
@@ -35,7 +36,7 @@ function changeLang(lang) { currentLang = lang; localStorage.setItem('lang', lan
 function toggleAutoDl(state) { autoDownload = state; }
 function changeBg(url) { if(url.trim() === '') { localStorage.removeItem('chatBg'); document.getElementById('chatArea').style.backgroundImage = 'none'; } else { localStorage.setItem('chatBg', url); document.getElementById('chatArea').style.backgroundImage = `url('${url}')`; } }
 
-// حفظ لاگین کاربر
+// حفظ لاگین
 window.onload = () => {
     const s_usr = localStorage.getItem('bc_user');
     const s_role = localStorage.getItem('bc_role');
@@ -72,7 +73,11 @@ function initWebSocket() {
     ws.onmessage = async (event) => {
         const msg = JSON.parse(event.data);
         if (msg.type === 'history') { 
-            if(msg.room === currentRoom) { document.getElementById('messages').innerHTML = ''; msg.data.forEach(m => appendMessage(m)); }
+            if(msg.room === currentRoom) { 
+                document.getElementById('messages').innerHTML = ''; 
+                lastDateStr = null; 
+                msg.data.forEach(m => appendMessage(m)); 
+            }
         } 
         else if (msg.type === 'new_msg') { 
             if(msg.room === currentRoom) appendMessage(msg.data); else handleNotification(msg);
@@ -88,7 +93,7 @@ function initWebSocket() {
                     const txtNode = el.querySelector('.msg-text-content');
                     if(txtNode) {
                         txtNode.innerText = msg.new_text;
-                        txtNode.innerHTML += ' <span class="edited-tag">(ویرایش شده)</span>';
+                        if(!txtNode.innerHTML.includes('edited-tag')) txtNode.innerHTML += ' <span class="edited-tag">(ویرایش شده)</span>';
                     }
                 }
             }
@@ -112,7 +117,7 @@ async function loadInitData() {
 
     const list = document.getElementById('chat-list');
     
-    // مقادیر ارسال شده به تابع کاملاً ایمن و بدون تگ html است
+    // مقادیر ارسال شده به تابع کاملاً ایمن است (بدون تگ HTML)
     list.innerHTML = `<div class="chat-item" data-room="Announcements" onclick="openChat('Announcements', 'channel', 'Announcements')">
             <div class="avatar" style="background:var(--c-red); color:white;">📢</div><div class="chat-info"><div class="chat-name">Announcements</div><div class="chat-preview" data-i18n="system_channel">${translations[currentLang].system_channel}</div></div><span class="unread-badge" id="badge-Announcements">0</span></div>`;
     
@@ -184,20 +189,20 @@ async function submitContact() {
 }
 
 async function submitCreation() {
-    const n = document.getElementById('creationName').value.trim(); const t = document.getElementById('creationType').value; if(!n) return;
+    const n = document.getElementById('creationName').value.trim(); const t = document.getElementById('creationType').value || 'group'; if(!n) return;
     let members = []; document.querySelectorAll('#groupMembersList input:checked').forEach(chk => members.push(chk.value));
     const res = await fetch('/api/action', { method: 'POST', body: JSON.stringify({action:'create_room', type: t, name: n, user: currentUser, members: members}), headers: {'Content-Type': 'application/json'} });
     const data = await res.json();
     if(data.success) { closeModal('createModal'); loadInitData(); openChat(data.room_id, t, n); }
 }
 
-// تابع باز کردن چت (رندر آیکون در محیط امن جاوا اسکریپت)
+// تابع ایمن شده (پردازش عکس داخل این تابع انجام میشود تا از باگ کوتیشن جلوگیری شود)
 function openChat(roomId, type, title, targetUser = null) {
     document.querySelectorAll('.chat-item').forEach(c => c.classList.remove('active'));
     let activeItem = document.querySelector(`.chat-item[data-room="${roomId}"]`);
     if(activeItem) activeItem.classList.add('active');
 
-    targetUserForDM = targetUser; cancelSelection(); cancelReply(); editMsgId = null;
+    targetUserForDM = targetUser; cancelSelection(); cancelReply(); editMsgId = null; lastDateStr = null;
     let realRoomId = roomId;
     if (type === 'private') { const users = [currentUser, roomId].sort(); realRoomId = `dm_${users.join('-')}`; }
     currentRoom = realRoomId;
@@ -221,9 +226,6 @@ function openChat(roomId, type, title, targetUser = null) {
     const inputArea = document.getElementById('input-container');
     if ((roomId === 'Announcements' || type === 'channel') && currentRole !== 'admin') inputArea.style.display = 'none';
     else inputArea.style.display = 'flex';
-    
-    if(type === 'private') document.getElementById('callBtn').style.display = 'flex';
-    else document.getElementById('callBtn').style.display = 'none';
 
     if (window.innerWidth <= 768) document.getElementById('sidebar').classList.add('hidden');
     if(ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({action: 'get_history', room: currentRoom}));
@@ -239,12 +241,15 @@ function openProfile() {
     
     let mediaH = '', filesH = '', audioH = '', linksH = '';
     document.querySelectorAll('.bubble').forEach(b => {
+        let msgId = b.parentElement.id; 
         let img = b.querySelector('img'); let vid = b.querySelector('video');
-        if(img) mediaH += `<img src="${img.src}" style="width:30%; height:80px; object-fit:cover; border-radius:8px; border:1px solid var(--border);">`;
-        if(vid) mediaH += `<video src="${vid.src}" style="width:30%; height:80px; object-fit:cover; border-radius:8px; border:1px solid var(--border);"></video>`;
+        if(img) mediaH += `<img src="${img.src}" onclick="closeModal('profileModal'); scrollToMsg('${msgId}')" style="width:30%; height:80px; object-fit:cover; border-radius:8px; border:1px solid var(--border); cursor:pointer;">`;
+        if(vid && !vid.classList.contains('video-msg')) mediaH += `<video src="${vid.src}" onclick="closeModal('profileModal'); scrollToMsg('${msgId}')" style="width:30%; height:80px; object-fit:cover; border-radius:8px; border:1px solid var(--border); cursor:pointer;"></video>`;
         
         let aud = b.querySelector('audio'); 
-        if(aud) audioH += `<div style="background:var(--bg-input); padding:10px; border-radius:12px; display:flex; align-items:center; gap:10px; width:100%; border:1px solid var(--border);"><div style="background:var(--c-blue); width:40px; height:40px; border-radius:50%; display:flex; justify-content:center; align-items:center; color:white; flex-shrink:0;">🎵</div><audio controls src="${aud.src}" style="height:35px; width:100%; outline:none;"></audio></div>`;
+        let vidMsg = b.querySelector('.video-msg');
+        if(aud) audioH += `<div style="background:var(--bg-input); padding:10px; border-radius:12px; display:flex; align-items:center; gap:10px; width:100%; border:1px solid var(--border);"><div onclick="closeModal('profileModal'); scrollToMsg('${msgId}')" style="background:var(--c-blue); width:40px; height:40px; border-radius:50%; display:flex; justify-content:center; align-items:center; color:white; flex-shrink:0; cursor:pointer;">🎵</div><audio controls src="${aud.src}" style="height:35px; width:100%; outline:none;"></audio></div>`;
+        if(vidMsg) audioH += `<video src="${vidMsg.src}" onclick="closeModal('profileModal'); scrollToMsg('${msgId}')" controls style="width:100px; height:100px; border-radius:50%; object-fit:cover; margin-bottom:5px; border:2px solid var(--c-blue); cursor:pointer;"></video>`; 
 
         let link = b.querySelector('.file-link');
         if(link) filesH += `<a href="${link.href}" class="file-link" download>${link.innerHTML}</a>`;
@@ -252,7 +257,7 @@ function openProfile() {
         let txt = b.querySelector('.msg-text-content');
         if(txt) {
             let urls = txt.innerText.match(/https?:\/\/[^\s]+/g);
-            if(urls) urls.forEach(u => linksH += `<a href="${u}" target="_blank" style="color:var(--c-blue); padding:10px; border-bottom:1px solid var(--border); display:block; border-radius:8px; background:var(--bg-input); margin-bottom:5px;">${u}</a>`);
+            if(urls) urls.forEach(u => linksH += `<a href="${u}" target="_blank" style="color:var(--c-blue); padding:10px; border-bottom:1px solid var(--border); display:block;">${u}</a>`);
         }
     });
     
@@ -283,7 +288,7 @@ function handleNotification(msg) {
     try { document.getElementById('notif-sound').play(); } catch(e){}
 
     if ("Notification" in window && Notification.permission === "granted" && document.hidden) {
-        new Notification(isDM ? msg.data.user : msg.room, { body: msg.data.msgType === 'text' ? msg.data.text : "پیام جدید رسانه‌ای" });
+        new Notification(isDM ? msg.data.user : msg.room, { body: msg.data.msgType === 'text' ? msg.data.text : "پیام جدید" });
     }
 }
 
@@ -296,10 +301,15 @@ function appendMessage(data) {
     const msgBox = document.getElementById('messages');
     
     let media = '';
-    // ویدیو مسیج مربعی و استاندارد
+    // ویدیو مسیج به سبک تلگرام (بدون کنترلر، دایره‌ای، و با کلیک صدا دار میشود)
     if (data.msgType === 'image') media = `<img src="${data.url}">`;
     else if (data.msgType === 'video') {
-        media = `<video controls playsinline style="max-width:100%; border-radius:12px; margin-top:5px; border:1px solid var(--border);" src="${data.url}"></video>`;
+        let isVideoMessage = data.url.includes('rec.webm') || data.url.includes('rec.mp4');
+        if (isVideoMessage) {
+            media = `<video class="video-msg" autoplay loop muted playsinline src="${data.url}" onclick="this.muted = !this.muted;"></video>`;
+        } else {
+            media = `<video controls playsinline style="max-width:100%; border-radius:12px; margin-top:5px; border:1px solid var(--border);" src="${data.url}"></video>`;
+        }
     }
     else if (data.msgType === 'audio') media = `<audio controls preload="metadata" src="${data.url}"></audio>`;
     else if (data.msgType === 'file') {
@@ -315,9 +325,22 @@ function appendMessage(data) {
 
     let safeText = encodeURIComponent(textContent);
 
+    // محاسبه تاریخ و ساعت تلگرامی
+    let dateObj = data.timestamp ? new Date(data.timestamp.replace(' ', 'T') + 'Z') : new Date();
+    let timeStr = dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+    let dateStr = dateObj.toLocaleDateString('fa-IR', { month: 'long', day: 'numeric' });
+    
+    if (dateStr !== lastDateStr) {
+        msgBox.insertAdjacentHTML('beforeend', `<div class="date-header"><span>${dateStr}</span></div>`);
+        lastDateStr = dateStr;
+    }
+
+    let isOnlyVidMsg = data.msgType === 'video' && (data.url.includes('rec.webm') || data.url.includes('rec.mp4')) && !textContent;
+    let bubbleClass = isOnlyVidMsg ? "bubble video-msg-bubble" : "bubble";
+
     const html = `
         <div class="msg-row ${isSelf ? 'out' : 'in'}" id="msg-${data.id}">
-            <div class="bubble" dir="auto" 
+            <div class="${bubbleClass}" dir="auto" 
                 oncontextmenu="openMsgMenu(event, '${data.id}', '${safeText}', '${data.user}')"
                 ontouchstart="startPress(event, '${data.id}', '${safeText}', '${data.user}')" 
                 ontouchend="cancelPress()" 
@@ -329,6 +352,7 @@ function appendMessage(data) {
                 <span class="msg-text-content">${textContent}</span>
                 ${media}
                 <div class="reactions-bar" id="reacts-${data.id}"></div>
+                <div class="msg-bottom-bar"><span class="msg-time">${timeStr}</span></div>
             </div>
         </div>`;
     
@@ -362,7 +386,6 @@ function openMsgMenu(e, id, textEncoded, sender) {
         x = e.clientX || (e.touches && e.touches[0].clientX) || x;
         y = e.clientY || (e.touches && e.touches[0].clientY) || y;
     }
-    
     if(x + 220 > window.innerWidth) x = window.innerWidth - 230;
     if(y + 250 > window.innerHeight) y = window.innerHeight - 260;
     menu.style.left = `${x}px`; menu.style.top = `${y}px`;
@@ -386,8 +409,7 @@ function doEdit() {
     editMsgId = contextMsgId;
     document.getElementById('msgInput').value = contextMsgText;
     document.getElementById('msgInput').focus();
-    checkInput();
-    closeContextMenu();
+    checkInput(); closeContextMenu();
 }
 
 function doSelect() { selectionMode = true; closeContextMenu(); toggleMsgSelection(contextMsgId); }
@@ -412,7 +434,7 @@ function cancelSelection() {
 function deleteSelected() { if(confirm(`حذف ${selectedMsgs.length} پیام برای همه؟`)) { ws.send(JSON.stringify({action: 'delete_msg', msg_ids: selectedMsgs})); cancelSelection(); } }
 function forwardSelected() { alert("امکان هدایت به زودی..."); cancelSelection(); }
 
-// --- Inputs & Recording (باگ کش شدن ویس با ID یکتا برطرف شد) ---
+// --- Inputs & Recording (باگ ویس کاملا برطرف شد) ---
 let mediaRecorder; let audioChunks = []; let isRecording = false; let isPaused = false;
 let recTimerInterval; let recSeconds = 0;
 
@@ -453,30 +475,30 @@ async function startRecord(type, btn) {
             const constraints = type === 'video' ? { audio: true, video: { facingMode: "user" } } : { audio: true };
             const stream = await navigator.mediaDevices.getUserMedia(constraints);
             
-            // Chunking interval added (500ms) for stability
+            // نمایش پیش‌نمایش در دایره تلگرامی
+            if (type === 'video') { const vidPrev = document.getElementById('videoPreview'); vidPrev.srcObject = stream; vidPrev.style.display = 'block'; }
+
             mediaRecorder = new MediaRecorder(stream);
             mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
             mediaRecorder.onstop = async () => {
+                if(type === 'video') { const vidPrev = document.getElementById('videoPreview'); vidPrev.style.display = 'none'; vidPrev.srcObject = null; }
                 stream.getTracks().forEach(t => t.stop());
+                
                 if(audioChunks.length > 0) {
                     const mime = type === 'video' ? 'video/webm' : 'audio/webm';
-                    
-                    // حل باگ ذخیره فایل یکسان: ساخت شناسه یکتا برای هر رکورد
-                    const uniqueId = Math.random().toString(36).substring(2, 9);
+                    // ایجاد نام کاملاً یونیک برای جلوگیری از کش شدن فایل در مرورگر
+                    const uniqueId = Math.random().toString(36).substring(2, 10);
                     const fileName = `rec_${uniqueId}.${type==='video'?'mp4':'webm'}`;
                     
-                    const fd = new FormData(); 
-                    fd.append('file', new File([new Blob(audioChunks, { type: mime })], fileName, { type: mime }));
+                    const fd = new FormData(); fd.append('file', new File([new Blob(audioChunks, { type: mime })], fileName, { type: mime }));
                     audioChunks = []; 
-                    
                     const res = await fetch('/api/upload', { method: 'POST', body: fd });
                     const data = await res.json();
                     if(data.url) ws.send(JSON.stringify({action: 'send_msg', room: currentRoom, user: currentUser, targetUser: targetUserForDM, msgType: type, url: data.url, replyTo: replyToMsg}));
                     cancelReply();
                 }
             };
-            mediaRecorder.start(500); // 500ms chunks
-            isRecording = true; isPaused = false;
+            mediaRecorder.start(500); isRecording = true; isPaused = false;
             
             document.getElementById('textInputBox').style.display = 'none';
             document.getElementById('attachBtn').style.display = 'none';
@@ -497,19 +519,12 @@ async function startRecord(type, btn) {
 
 function pauseResumeRecord() {
     const btn = document.getElementById('pauseRecBtn');
-    if(isPaused) { mediaRecorder.resume(); isPaused = false; btn.innerHTML = '<svg style="width:22px;fill:currentColor;"><use href="#icon-pause"></use></svg>'; btn.style.color = "var(--c-blue)";}
+    if(isPaused) { mediaRecorder.resume(); isPaused = false; btn.innerHTML = '<svg style="width:20px;fill:currentColor;"><use href="#icon-pause"></use></svg>'; btn.style.color = "var(--c-blue)";}
     else { mediaRecorder.pause(); isPaused = true; btn.innerHTML = '▶'; btn.style.color = "var(--c-red)";}
 }
 
-function cancelRecord() {
-    audioChunks = []; 
-    mediaRecorder.stop();
-    resetRecordUI();
-}
-
-function stopAndSendRecord() {
-    mediaRecorder.stop(); resetRecordUI();
-}
+function cancelRecord() { audioChunks = []; mediaRecorder.stop(); resetRecordUI(); }
+function stopAndSendRecord() { mediaRecorder.stop(); resetRecordUI(); }
 
 function resetRecordUI() {
     isRecording = false; clearInterval(recTimerInterval);
@@ -533,7 +548,6 @@ async function uploadFile() {
 
 // --- WebRTC Voice Call ---
 let localStreamCall; let peerConnection; let callTarget;
-
 const servers = { 
     'iceServers': [
         { 'urls': 'stun:stun.l.google.com:19302' },
@@ -552,13 +566,12 @@ async function startCall() {
     document.getElementById('callModal').style.display = 'flex';
     document.getElementById('callStatusText').innerText = "در حال تماس...";
     document.getElementById('callUserText').innerText = callTarget;
-    document.getElementById('callBtns').innerHTML = `<button class="icon-btn" onclick="endCall()" style="background:var(--c-red); color:white; width:60px; height:60px; font-size:24px;">✖</button>`;
+    document.getElementById('callBtns').innerHTML = `<button class="call-btn btn-rej" onclick="endCall()" style="background:var(--c-red); color:white;">✖</button>`;
     
     try {
         localStreamCall = await navigator.mediaDevices.getUserMedia({ audio: true });
         peerConnection = new RTCPeerConnection(servers);
         localStreamCall.getTracks().forEach(t => peerConnection.addTrack(t, localStreamCall));
-        
         peerConnection.onicecandidate = e => { if(e.candidate) ws.send(JSON.stringify({action: 'webrtc', type: 'ice', targetUser: callTarget, candidate: e.candidate, from: currentUser})); };
         peerConnection.ontrack = e => { document.getElementById('remoteAudio').srcObject = e.streams[0]; };
         
@@ -570,43 +583,32 @@ async function startCall() {
 
 function handleWebRTC(data) {
     if(data.targetUser !== currentUser) return;
-    
     if(data.type === 'offer') {
         callTarget = data.from;
         document.getElementById('callModal').style.display = 'flex';
         document.getElementById('callStatusText').innerText = "تماس ورودی...";
         document.getElementById('callUserText').innerText = callTarget;
-        document.getElementById('callBtns').innerHTML = `<button class="icon-btn" onclick='acceptCall(${JSON.stringify(data.offer)})' style="background:#52c41a; color:white; width:60px; height:60px; font-size:24px;">📞</button><button class="icon-btn" onclick="endCall()" style="background:var(--c-red); color:white; width:60px; height:60px; font-size:24px;">✖</button>`;
+        document.getElementById('callBtns').innerHTML = `<button class="call-btn btn-ans" onclick='acceptCall(${JSON.stringify(data.offer)})' style="background:#52c41a; color:white;">📞</button><button class="call-btn btn-rej" onclick="endCall()" style="background:var(--c-red); color:white;">✖</button>`;
         try { document.getElementById('notif-sound').play(); } catch(e){}
     }
-    else if(data.type === 'answer') {
-        peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
-        document.getElementById('callStatusText').innerText = "در حال مکالمه";
-    }
-    else if(data.type === 'ice') {
-        if(peerConnection) peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
-    }
-    else if(data.type === 'end') {
-        endCall(false);
-    }
+    else if(data.type === 'answer') { peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer)); document.getElementById('callStatusText').innerText = "در حال مکالمه"; }
+    else if(data.type === 'ice') { if(peerConnection) peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate)); }
+    else if(data.type === 'end') { endCall(false); }
 }
 
 async function acceptCall(offerData) {
     document.getElementById('callStatusText').innerText = "در حال اتصال...";
-    document.getElementById('callBtns').innerHTML = `<button class="icon-btn" onclick="endCall()" style="background:var(--c-red); color:white; width:60px; height:60px; font-size:24px;">✖</button>`;
-    
+    document.getElementById('callBtns').innerHTML = `<button class="call-btn btn-rej" onclick="endCall()" style="background:var(--c-red); color:white;">✖</button>`;
     try {
         localStreamCall = await navigator.mediaDevices.getUserMedia({ audio: true });
         peerConnection = new RTCPeerConnection(servers);
         localStreamCall.getTracks().forEach(t => peerConnection.addTrack(t, localStreamCall));
-        
         peerConnection.onicecandidate = e => { if(e.candidate) ws.send(JSON.stringify({action: 'webrtc', type: 'ice', targetUser: callTarget, candidate: e.candidate, from: currentUser})); };
         peerConnection.ontrack = e => { document.getElementById('remoteAudio').srcObject = e.streams[0]; };
         
         await peerConnection.setRemoteDescription(new RTCSessionDescription(offerData));
         const answer = await peerConnection.createAnswer();
         await peerConnection.setLocalDescription(answer);
-        
         ws.send(JSON.stringify({action: 'webrtc', type: 'answer', targetUser: callTarget, answer: answer, from: currentUser}));
         document.getElementById('callStatusText').innerText = "در حال مکالمه";
     } catch(err) { alert("عدم دسترسی به میکروفون!"); endCall(); }
