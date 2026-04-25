@@ -175,7 +175,7 @@
         #videoPreview { display: none; position: absolute; bottom: 90px; right: 20px; width: 200px; height: 200px; border-radius: 50%; object-fit: cover; border: 4px solid var(--c-red); box-shadow: 0 10px 30px rgba(0,0,0,0.8); z-index: 100; transform: scaleX(-1); background: #000; animation: scaleIn 0.3s ease;}
         [dir="rtl"] #videoPreview { right: auto; left: 20px; }
 
-        /* --- Context Menu (Fixed English Style) --- */
+        /* --- Context Menu --- */
         .context-menu { 
             position: fixed; background: var(--bg-panel); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
             border: 1px solid var(--border); border-radius: 16px; width: 220px; 
@@ -204,11 +204,11 @@
         #multiSelectBar button { background: transparent; color: var(--c-white); border: 1px solid var(--border); padding: 10px 18px; border-radius: 10px; cursor: pointer; transition: all 0.3s ease; font-weight: 600;}
         #multiSelectBar button:hover { background: var(--bg-input); transform: translateY(-2px);}
 
-        /* --- Input Area Fixes --- */
+        /* --- Input Area --- */
         .input-wrapper-container { background: var(--bg-panel); backdrop-filter: blur(16px); padding: 12px 20px; padding-bottom: max(12px, env(safe-area-inset-bottom)); display: flex; flex-direction: column; border-top: 1px solid var(--border); z-index: 10; flex-shrink: 0; width: 100%;}
         
-        #replyBar { display: none; background: var(--bg-input); border-right: 3px solid var(--c-blue); border-radius: 10px; padding: 10px 15px; margin-bottom: 12px; position: relative; animation: scaleIn 0.2s ease;}
-        [dir="rtl"] #replyBar { border-left: none; }
+        #replyBar { display: none; background: var(--bg-input); border-left: 3px solid var(--c-blue); border-radius: 10px; padding: 10px 15px; margin-bottom: 12px; position: relative; animation: scaleIn 0.2s ease;}
+        [dir="rtl"] #replyBar { border-left: none; border-right: 3px solid var(--c-blue); }
         
         .input-area-row { display: flex; align-items: flex-end; gap: 10px; width: 100%; flex-wrap: nowrap; }
         .input-box { flex: 1; background: var(--bg-input); border-radius: 20px; border: 1px solid var(--border); display: flex; align-items: center; padding: 0 8px; min-height: 50px; min-width: 0; transition: all 0.3s ease;}
@@ -224,7 +224,7 @@
         .rec-controls { display: none; align-items: center; flex: 1; justify-content: space-between; padding: 0 15px;}
         .rec-timer { color: var(--c-red); font-weight: bold; font-family: monospace; font-size: 16px; text-shadow: 0 0 10px var(--c-red-glow);}
 
-/* Call Modal Fixes */
+        /* Call Modal Fixes */
         #callModal { position: fixed; top:0; left:0; width:100%; height:100%; background: rgba(0,0,0,0.85); z-index: 9999; display: none; justify-content: center; align-items: center; backdrop-filter: blur(15px); }
         #callAvatar { width: 100px; height: 100px; border-radius: 50%; background: var(--c-blue); display: flex; justify-content: center; align-items: center; font-size: 40px; color: white; animation: pulseCall 1.5s infinite; box-shadow: 0 0 20px var(--c-blue-glow); }
         .call-btns { display: flex; gap: 25px; width: 100%; justify-content: center; margin-top: 10px; }
@@ -232,6 +232,7 @@
         .call-btn:hover { transform: scale(1.15); }
         .btn-ans { background: #10b981; box-shadow: 0 0 25px rgba(16, 185, 129, 0.5);}
         .btn-rej { background: var(--c-red); box-shadow: 0 0 25px var(--c-red-glow);}
+
         @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.05); } 100% { transform: scale(1); } }
         @keyframes pulseCall { 0% { box-shadow: 0 0 0 0 rgba(59,130,246,0.7); } 70% { box-shadow: 0 0 0 20px rgba(59,130,246,0); } 100% { box-shadow: 0 0 0 0 rgba(59,130,246,0); } }
 
@@ -396,11 +397,11 @@
         <button onclick="doDeleteMsg()" class="danger"><svg><use href="#icon-trash"></use></svg> <span>Delete</span></button>
     </div>
 
-    <div id="callModal" class="modal-overlay" style="flex-direction:column;">
-        <div class="glass-box" style="padding: 40px; border-radius: 24px; border: 1px solid var(--c-blue); text-align:center; width: 320px; animation: scaleIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);">
+    <div id="callModal">
+        <div class="glass-box" style="padding: 40px 30px; border-radius: 28px; border: 1px solid var(--c-blue); display: flex; flex-direction: column; align-items: center; width: 90%; max-width: 340px; animation: scaleIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); box-shadow: 0 20px 60px rgba(0,0,0,0.8);">
             <div id="callAvatar">📞</div>
-            <h3 id="callStatusText" style="color:var(--c-white); margin-bottom:10px; font-weight:700;">Incoming Call...</h3>
-            <p id="callUserText" style="color:var(--c-gray); margin-bottom:30px; font-size:14px;"></p>
+            <h3 id="callStatusText" style="color:var(--c-white); margin-top:25px; margin-bottom:5px; font-weight:800; font-size:22px; letter-spacing:1px;">Incoming Call...</h3>
+            <p id="callUserText" style="color:var(--c-gray); margin-bottom:30px; font-size:16px; font-weight:500;"></p>
             <audio id="remoteAudio" autoplay></audio>
             <div class="call-btns" id="callBtns">
                 <button class="call-btn btn-ans" onclick="acceptCall()">📞</button>
@@ -476,7 +477,7 @@
             </div>
             
             <div style="display:flex; justify-content:space-between; align-items:center; padding:12px 0; border-bottom:1px solid var(--border);">
-                <span style="font-weight:600;">Language</span>
+                <span style="font-weight:600;">Theme</span>
                 <select id="langSelect" onchange="changeLang(this.value)" style="width:130px; padding:8px; margin:0;">
                     <option value="en">English</option>
                     <option value="fa">فارسی</option>
@@ -502,6 +503,6 @@
     </div>
 
     <audio id="notif-sound" src="data:audio/mp3;base64,//NExAAAAANIAAAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq" preload="auto"></audio>
-    <script src="/static/script.js?v=1.0.6"></script>
+    <script src="/static/script.js?v=1.0.8"></script>
 </body>
 </html>
