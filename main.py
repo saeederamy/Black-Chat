@@ -2,6 +2,7 @@ import os
 import sqlite3
 import json
 import uuid
+import datetime
 import aiofiles
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, UploadFile, File, Form
 from fastapi.responses import FileResponse
@@ -28,7 +29,6 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS messages (msg_id TEXT PRIMARY KEY, room TEXT, user TEXT, msg_type TEXT, content TEXT, file_name TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
     c.execute('CREATE INDEX IF NOT EXISTS idx_room ON messages(room)')
     
-    # آپدیت‌های هوشمند دیتابیس
     try: c.execute("ALTER TABLE messages ADD COLUMN reply_to TEXT DEFAULT '{}'")
     except: pass
     try: c.execute("ALTER TABLE messages ADD COLUMN reactions TEXT DEFAULT '{}'")
@@ -205,8 +205,8 @@ async def websocket_endpoint(websocket: WebSocket, username: str, role: str):
             
             if action == "get_history":
                 room = msg.get("room")
-                c.execute("SELECT msg_id, user, msg_type, content, file_name, reply_to, reactions FROM messages WHERE room=? ORDER BY timestamp ASC", (room,))
-                history = [{"id": m[0], "user": m[1], "msgType": m[2], "text": m[3] if m[2]=='text' else '', "url": m[3] if m[2]!='text' else '', "fileName": m[4], "replyTo": json.loads(m[5]) if m[5] else None, "reactions": json.loads(m[6]) if m[6] else {}} for m in c.fetchall()]
+                c.execute("SELECT msg_id, user, msg_type, content, file_name, reply_to, reactions, timestamp FROM messages WHERE room=? ORDER BY timestamp ASC", (room,))
+                history = [{"id": m[0], "user": m[1], "msgType": m[2], "text": m[3] if m[2]=='text' else '', "url": m[3] if m[2]!='text' else '', "fileName": m[4], "replyTo": json.loads(m[5]) if m[5] else None, "reactions": json.loads(m[6]) if m[6] else {}, "timestamp": m[7]} for m in c.fetchall()]
                 await websocket.send_json({"type": "history", "room": room, "data": history})
 
             elif action == "delete_msg":
@@ -225,7 +225,7 @@ async def websocket_endpoint(websocket: WebSocket, username: str, role: str):
                 if row and (row[0] == username or role == 'admin'):
                     c.execute("UPDATE messages SET content=? WHERE msg_id=?", (new_text, msg_id))
                     await manager.broadcast({"type": "edited", "room": row[1], "msg_id": msg_id, "new_text": new_text})
-                        
+
             elif action == "react_msg":
                 msg_id, emoji = msg.get("msg_id"), msg.get("emoji")
                 c.execute("SELECT reactions, room FROM messages WHERE msg_id=?", (msg_id,))
@@ -257,17 +257,23 @@ async def websocket_endpoint(websocket: WebSocket, username: str, role: str):
                 msg_id = str(uuid.uuid4())
                 reply_to = json.dumps(msg.get('replyTo', {}))
                 
+                # ثبت زمان دقیق برای نمایش در کلاینت
+                now_str = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+                
                 msg_payload = {
                     "id": msg_id, "user": msg['user'], "msgType": msg['msgType'], 
                     "text": msg.get('text',''), "url": msg.get('url',''), 
                     "fileName": msg.get('fileName',''), "roomMembers": room_members,
-                    "replyTo": msg.get('replyTo', None), "reactions": {}
+                    "replyTo": msg.get('replyTo', None), "reactions": {}, "timestamp": now_str
                 }
                 
-                c.execute("INSERT INTO messages (msg_id, room, user, msg_type, content, file_name, reply_to, reactions) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", 
-                          (msg_id, room, msg['user'], msg['msgType'], msg.get('text', msg.get('url', '')), msg.get('fileName', ''), reply_to, '{}'))
+                c.execute("INSERT INTO messages (msg_id, room, user, msg_type, content, file_name, reply_to, reactions, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", 
+                          (msg_id, room, msg['user'], msg['msgType'], msg.get('text', msg.get('url', '')), msg.get('fileName', ''), reply_to, '{}', now_str))
                 
                 await manager.broadcast({"type": "new_msg", "room": room, "data": msg_payload})
+                
+            elif action == "webrtc":
+                await manager.broadcast({"type": "webrtc", "data": msg})
                 
             conn.commit()
             conn.close()
