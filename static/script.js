@@ -1,17 +1,36 @@
-const SERVER_CONFIG = {
-    turnDomain: window.location.hostname,   
-    turnPort: "3478",                 
-    turnUser: "user",            
-    turnPass: "pass"         
-};
+// SERVER_CONFIG removed: TURN/STUN settings are now fetched from /api/turn-config
 
 let currentUser = null; let currentRole = null; let currentRoom = null; let targetUserForDM = null; 
+let currentToken = localStorage.getItem('bc_token') || null;
+let myQuotaMB = 0; let myUsedBytes = 0;
 let ws = null; let currentLang = localStorage.getItem('lang') || 'fa'; let myContacts = [];
 let contextMsgId = null; let contextMsgText = null; let contextMsgSender = null;
 let replyToMsg = null; let selectionMode = false; let selectedMsgs = [];
 let editMsgId = null; 
 let autoDownload = true; 
 let lastDateStr = null; 
+let onlineUsers = [];
+
+// ---- API helper that always sends Authorization header ----
+async function apiFetch(url, options = {}) {
+    options.headers = options.headers || {};
+    if (currentToken) options.headers['Authorization'] = 'Bearer ' + currentToken;
+    return fetch(url, options);
+}
+async function apiJson(url, body) {
+    const res = await apiFetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body || {})
+    });
+    return res;
+}
+function fmtBytes(n) {
+    if (!n || n < 1024) return (n||0) + ' B';
+    if (n < 1024*1024) return (n/1024).toFixed(1) + ' KB';
+    if (n < 1024*1024*1024) return (n/(1024*1024)).toFixed(1) + ' MB';
+    return (n/(1024*1024*1024)).toFixed(2) + ' GB';
+}
 
 let savedTheme = localStorage.getItem('hub_theme') || 'dark';
 document.documentElement.setAttribute('data-theme', savedTheme);
@@ -36,28 +55,75 @@ function changeLang(lang) { currentLang = lang; localStorage.setItem('lang', lan
 function toggleAutoDl(state) { autoDownload = state; }
 function changeBg(url) { if(url.trim() === '') { localStorage.removeItem('chatBg'); document.getElementById('chatArea').style.backgroundImage = 'none'; } else { localStorage.setItem('chatBg', url); document.getElementById('chatArea').style.backgroundImage = `url('${url}')`; } }
 
-function requestNotificationAccess() {
-    if ("Notification" in window && Notification.permission === "default") {
-        Notification.requestPermission();
+// === PHASE 2: Service Worker Registration (must run early for mobile push) ===
+async function registerServiceWorker() {
+    if (!('serviceWorker' in navigator)) return null;
+    try {
+        const reg = await navigator.serviceWorker.register('/static/service-worker.js', { scope: '/' });
+        return reg;
+    } catch (e) {
+        console.warn('SW registration failed:', e);
+        return null;
     }
+}
+// Kick off registration immediately so it's ready by the time we need to show a notification
+registerServiceWorker();
+
+function requestNotificationAccess() {
+    if (!("Notification" in window)) return;
+    if (Notification.permission === "default") {
+        // Must be inside a user gesture; called from login button onclick & openChat
+        Notification.requestPermission().catch(() => {});
+    }
+}
+
+async function showSystemNotification(title, body, tag) {
+    if (!("Notification" in window) || Notification.permission !== "granted") return;
+    try {
+        const reg = navigator.serviceWorker ? await navigator.serviceWorker.getRegistration() : null;
+        const opts = {
+            body: body,
+            icon: '/static/icon-192.png',
+            badge: '/static/icon-192.png',
+            tag: tag || ('bc-' + Date.now()),
+            renotify: true,
+            silent: false,
+            vibrate: [120, 60, 120],
+        };
+        if (reg && reg.showNotification) {
+            await reg.showNotification(title, opts);
+        } else {
+            // Fallback for desktop
+            new Notification(title, opts);
+        }
+    } catch (e) { console.warn('Notification error:', e); }
 }
 
 window.onload = () => {
     const s_usr = localStorage.getItem('bc_user');
     const s_role = localStorage.getItem('bc_role');
-    if (s_usr && s_role) {
-        currentUser = s_usr; currentRole = s_role;
+    const s_tok = localStorage.getItem('bc_token');
+    if (s_usr && s_role && s_tok) {
+        currentUser = s_usr; currentRole = s_role; currentToken = s_tok;
         document.getElementById('login-wrapper').style.display = 'none';
         document.getElementById('app').style.display = 'flex';
         initWebSocket(); loadInitData();
     }
 };
 
-function doLogout() { localStorage.removeItem('bc_user'); localStorage.removeItem('bc_role'); location.reload(); }
+function doLogout() {
+    apiFetch('/api/logout', {method:'POST'}).catch(()=>{});
+    localStorage.removeItem('bc_user'); localStorage.removeItem('bc_role'); localStorage.removeItem('bc_token');
+    location.reload();
+}
 
 async function login() {
     const u = document.getElementById('username').value.trim(); const p = document.getElementById('password').value.trim();
     if (!u || !p) return;
+
+    // IMPORTANT: must be inside the click gesture, BEFORE any await
+    requestNotificationAccess();
+
     try {
         const res = await fetch('/api/login', { method: 'POST', body: JSON.stringify({username: u, password: p}), headers: {'Content-Type': 'application/json'} });
         if (!res.ok) {
@@ -67,11 +133,12 @@ async function login() {
         }
         const data = await res.json();
         if (data.success) {
-            currentUser = data.username; currentRole = data.role;
-            localStorage.setItem('bc_user', currentUser); localStorage.setItem('bc_role', currentRole);
-            
-            requestNotificationAccess(); 
-            
+            currentUser = data.username; currentRole = data.role; currentToken = data.token;
+            myQuotaMB = data.quota_mb || 0; myUsedBytes = data.used_bytes || 0;
+            localStorage.setItem('bc_user', currentUser);
+            localStorage.setItem('bc_role', currentRole);
+            localStorage.setItem('bc_token', currentToken);
+
             document.getElementById('login-wrapper').style.display = 'none'; 
             document.getElementById('app').style.display = 'flex';
             initWebSocket(); loadInitData();
@@ -81,7 +148,7 @@ async function login() {
 
 function initWebSocket() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    ws = new WebSocket(`${protocol}//${window.location.host}/ws/${currentUser}/${currentRole}`);
+    ws = new WebSocket(`${protocol}//${window.location.host}/ws/${currentUser}/${currentRole}/${currentToken}`);
     ws.onopen = () => { if (currentRoom) ws.send(JSON.stringify({action: 'get_history', room: currentRoom})); };
     ws.onmessage = async (event) => {
         const msg = JSON.parse(event.data);
@@ -113,18 +180,30 @@ function initWebSocket() {
         }
         else if (msg.type === 'reaction_updated') { if(msg.room === currentRoom) updateReactionUI(msg.msg_id, msg.reactions); }
         else if (msg.type === 'webrtc') { handleWebRTC(msg.data); }
+        else if (msg.type === 'presence') { onlineUsers = msg.online || []; }
+        else if (msg.type === 'pong') { /* keepalive */ }
     };
-    ws.onclose = () => { setTimeout(initWebSocket, 2000); };
+    ws.onclose = (ev) => {
+        // 4401 = invalid token
+        if (ev.code === 4401) {
+            localStorage.removeItem('bc_token'); localStorage.removeItem('bc_user'); localStorage.removeItem('bc_role');
+            location.reload();
+            return;
+        }
+        setTimeout(initWebSocket, 2000);
+    };
     setInterval(() => { if(ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({action: 'ping'})); }, 15000);
 }
 
 let userAvatars = {};
 
 async function loadInitData() {
-    const res = await fetch('/api/action', { method: 'POST', body: JSON.stringify({action: 'get_init_data', user: currentUser}), headers: {'Content-Type': 'application/json'} });
+    const res = await apiJson('/api/action', {action: 'get_init_data', user: currentUser});
     const data = await res.json();
     myContacts = data.contacts; 
     if(data.all_avatars) userAvatars = data.all_avatars;
+    if(data.quota_mb) myQuotaMB = data.quota_mb;
+    if(data.used_bytes != null) myUsedBytes = data.used_bytes;
     
     if(data.avatar) { document.getElementById('my-avatar').src = data.avatar; document.getElementById('my-avatar').style.display='block'; document.getElementById('my-initial').style.display='none'; }
 
@@ -150,7 +229,37 @@ async function loadInitData() {
     if(!currentRoom) openChat('Announcements', 'channel', 'Announcements');
 }
 
-function openModal(id) { document.getElementById(id).style.display = 'flex'; }
+function openModal(id) {
+    document.getElementById(id).style.display = 'flex';
+    if (id === 'settingsModal') {
+        // Show admin entry button only for admin
+        const adminRow = document.getElementById('admin-entry-row');
+        if (adminRow) adminRow.style.display = (currentRole === 'admin') ? 'block' : 'none';
+        // Sync the Enter-to-send checkbox
+        const ets = document.getElementById('enterSendToggle');
+        if (ets) ets.checked = getEnterToSend();
+        // Refresh quota and active sessions
+        refreshMyQuota();
+        if (typeof fetchIPs === 'function') fetchIPs();
+    }
+}
+
+async function refreshMyQuota() {
+    try {
+        const res = await apiFetch('/api/quota');
+        if (!res.ok) return;
+        const d = await res.json();
+        myQuotaMB = d.quota_mb; myUsedBytes = d.used_bytes;
+        const txt = document.getElementById('my-storage-info');
+        const bar = document.getElementById('my-storage-bar');
+        if (txt) txt.innerText = `${d.used_mb} MB / ${d.quota_mb} MB used  ·  ${d.remaining_mb} MB free`;
+        if (bar) {
+            const pct = d.quota_mb > 0 ? Math.min(100, (d.used_bytes / (d.quota_mb*1024*1024) * 100)) : 0;
+            bar.style.width = pct + '%';
+            bar.style.background = pct > 90 ? 'var(--c-red)' : 'var(--c-blue)';
+        }
+    } catch(e) {}
+}
 function closeModal(id) { document.getElementById(id).style.display = 'none'; }
 function closeContextMenu() { document.getElementById('msgContextMenu').style.display = 'none'; }
 
@@ -177,27 +286,27 @@ function switchCreateTab(tab) {
 }
 
 function searchChat() {
-    let q = document.getElementById('searchInput').value.toLowerCase();
+    let q = document.getElementById('sidebarSearchInput').value.toLowerCase();
     document.querySelectorAll('.chat-item').forEach(i => { i.style.display = i.querySelector('.chat-name').innerText.toLowerCase().includes(q) ? 'flex' : 'none'; });
 }
 
 async function fetchIPs() {
-    const res = await fetch('/api/action', { method: 'POST', body: JSON.stringify({action: 'get_ips', user: currentUser}), headers: {'Content-Type': 'application/json'} });
+    const res = await apiJson('/api/action', {action: 'get_ips', user: currentUser});
     const data = await res.json();
     document.getElementById('ipList').innerHTML = data.ips.map(i => `<div style="border-bottom:1px solid var(--border); padding:8px 0;">🌐 ${i.ip} <br><span style="color:var(--c-gray); font-size:11px;">${i.date}</span></div>`).join('');
 }
 
 async function uploadAvatar() {
     const file = document.getElementById('avatarInput').files[0]; if (!file) return;
-    const fd = new FormData(); fd.append('file', file); fd.append('username', currentUser);
-    const res = await fetch('/api/upload_avatar', { method: 'POST', body: fd });
+    const fd = new FormData(); fd.append('file', file);
+    const res = await apiFetch('/api/upload_avatar', { method: 'POST', body: fd });
     const data = await res.json();
     if (data.success) { document.getElementById('my-avatar').src = data.url; document.getElementById('my-avatar').style.display = 'block'; document.getElementById('my-initial').style.display = 'none'; }
 }
 
 async function submitContact() {
     const t = document.getElementById('contactUsername').value.trim(); if(!t) return;
-    const res = await fetch('/api/action', { method: 'POST', body: JSON.stringify({action:'add_contact', owner: currentUser, target: t}), headers: {'Content-Type': 'application/json'} });
+    const res = await apiJson('/api/action', {action:'add_contact', owner: currentUser, target: t});
     const data = await res.json();
     if(data.success) { closeModal('createModal'); loadInitData(); openChat(data.target, 'private', data.target, data.target); } else alert(data.msg);
 }
@@ -205,7 +314,7 @@ async function submitContact() {
 async function submitCreation() {
     const n = document.getElementById('creationName').value.trim(); const t = document.getElementById('creationType').value || 'group'; if(!n) return;
     let members = []; document.querySelectorAll('#groupMembersList input:checked').forEach(chk => members.push(chk.value));
-    const res = await fetch('/api/action', { method: 'POST', body: JSON.stringify({action:'create_room', type: t, name: n, user: currentUser, members: members}), headers: {'Content-Type': 'application/json'} });
+    const res = await apiJson('/api/action', {action:'create_room', type: t, name: n, user: currentUser, members: members});
     const data = await res.json();
     if(data.success) { closeModal('createModal'); loadInitData(); openChat(data.room_id, t, n); }
 }
@@ -245,8 +354,26 @@ function openChat(roomId, type, title, targetUser = null) {
     if ((roomId === 'Announcements' || type === 'channel') && currentRole !== 'admin') inputArea.style.display = 'none';
     else inputArea.style.display = 'flex';
     
-    if(type === 'private') document.getElementById('callBtn').style.display = 'flex';
-    else document.getElementById('callBtn').style.display = 'none';
+    if(type === 'private') {
+        document.getElementById('callBtn').style.display = 'flex';
+        const vBtn = document.getElementById('videoCallBtn');
+        if (vBtn) vBtn.style.display = 'flex';
+        const gBtn = document.getElementById('groupSettingsBtn');
+        if (gBtn) gBtn.style.display = 'none';
+    } else {
+        document.getElementById('callBtn').style.display = 'none';
+        const vBtn = document.getElementById('videoCallBtn');
+        if (vBtn) vBtn.style.display = 'none';
+        const gBtn = document.getElementById('groupSettingsBtn');
+        // Show group settings only for custom rooms (rm_)
+        if (gBtn) gBtn.style.display = (typeof roomId === 'string' && roomId.startsWith('rm_')) ? 'flex' : 'none';
+    }
+
+    // Hide search bar when switching chats
+    const sb = document.getElementById('searchBar');
+    const sr = document.getElementById('searchResults');
+    if (sb) sb.style.display = 'none';
+    if (sr) sr.style.display = 'none';
 
     if (window.innerWidth <= 768) document.getElementById('sidebar').classList.add('hidden');
     if(ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({action: 'get_history', room: currentRoom}));
@@ -316,21 +443,8 @@ function handleNotification(msg) {
     try { document.getElementById('notif-sound').play(); } catch(e){}
 
     if ("Notification" in window && Notification.permission === "granted") {
-        let notifBody = msg.data.msgType === 'text' ? msg.data.text : "New Message 🖼️🎤";
-        
-        if (navigator.serviceWorker) {
-            navigator.serviceWorker.getRegistration().then(function(reg) {
-                if (reg) {
-                    reg.showNotification(sender, { body: notifBody });
-                } else {
-                    new Notification(sender, { body: notifBody });
-                }
-            }).catch(() => {
-                new Notification(sender, { body: notifBody });
-            });
-        } else {
-            new Notification(sender, { body: notifBody });
-        }
+        let notifBody = msg.data.msgType === 'text' ? msg.data.text : "New Message 📎";
+        showSystemNotification(sender, notifBody, 'msg-' + room);
     }
 }
 
@@ -529,7 +643,51 @@ function handleSendText() {
         input.value = ''; cancelReply(); checkInput(); 
     }
 }
-document.getElementById('msgInput')?.addEventListener('keypress', (e) => { if(e.key === 'Enter') handleSendText(); });
+// === PHASE 2: Mobile-friendly input handling ===
+// Detect if we're on mobile/touch device
+function isMobileDevice() {
+    return ('ontouchstart' in window) || (navigator.maxTouchPoints > 0) || /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+}
+
+// Whether Enter sends the message; user can toggle in settings.
+// Default: desktop = Enter sends, Shift+Enter newline; mobile = Enter newline, button sends.
+let enterToSend = localStorage.getItem('enterToSend');
+if (enterToSend === null) {
+    enterToSend = isMobileDevice() ? 'false' : 'true';
+    localStorage.setItem('enterToSend', enterToSend);
+}
+function setEnterToSend(val) {
+    enterToSend = val ? 'true' : 'false';
+    localStorage.setItem('enterToSend', enterToSend);
+}
+function getEnterToSend() { return enterToSend === 'true'; }
+
+function handleInputKey(e) {
+    if (e.key !== 'Enter') return;
+    // On mobile, never auto-send unless user enabled it; let Enter create newline
+    if (e.shiftKey) return; // Shift+Enter always = newline
+    if (e.ctrlKey || e.metaKey) {
+        // Ctrl+Enter / Cmd+Enter always sends
+        e.preventDefault();
+        handleSendText();
+        return;
+    }
+    if (getEnterToSend()) {
+        e.preventDefault();
+        handleSendText();
+    }
+    // else: let default newline happen
+}
+
+function autoResize(el) {
+    if (!el) return;
+    el.style.height = 'auto';
+    const max = 140;
+    el.style.height = Math.min(el.scrollHeight, max) + 'px';
+}
+
+// Keep the OLD keypress for safety (no-op since onkeydown handles it now via inline)
+// Removed the unsafe Enter-always-sends listener that was here before
 
 function updateTimer() {
     if(!isPaused) { recSeconds++; let m = String(Math.floor(recSeconds / 60)).padStart(2, '0'); let s = String(recSeconds % 60).padStart(2, '0'); document.getElementById('recTimer').innerText = `${m}:${s}`; }
@@ -559,9 +717,14 @@ async function startRecord(type, btn) {
                     fd.append('file', new File([new Blob(audioChunks, { type: mime })], fileName, { type: mime }));
                     audioChunks = []; 
                     
-                    const res = await fetch('/api/upload', { method: 'POST', body: fd });
+                    const res = await apiFetch('/api/upload', { method: 'POST', body: fd });
                     const data = await res.json();
-                    if(data.url) ws.send(JSON.stringify({action: 'send_msg', room: currentRoom, user: currentUser, targetUser: targetUserForDM, msgType: type, url: data.url, replyTo: replyToMsg}));
+                    if (data.error || !data.url) {
+                        alert("Upload failed: " + (data.detail || data.error || "Unknown error"));
+                        return;
+                    }
+                    if (data.used_bytes != null) myUsedBytes = data.used_bytes;
+                    ws.send(JSON.stringify({action: 'send_msg', room: currentRoom, user: currentUser, targetUser: targetUserForDM, msgType: type, url: data.url, replyTo: replyToMsg}));
                     cancelReply();
                 }
             };
@@ -607,119 +770,1378 @@ function resetRecordUI() {
 
 async function uploadFile() {
     const file = document.getElementById('fileInput').files[0]; if (!file) return;
+
+    // Quick client-side quota check
+    if (myQuotaMB > 0) {
+        const remaining = myQuotaMB * 1024 * 1024 - myUsedBytes;
+        if (file.size > remaining) {
+            alert(`Quota exceeded.\nRemaining: ${fmtBytes(Math.max(0, remaining))}\nFile size: ${fmtBytes(file.size)}`);
+            document.getElementById('fileInput').value = '';
+            return;
+        }
+    }
+
     const fd = new FormData(); fd.append('file', file);
-    const res = await fetch('/api/upload', { method: 'POST', body: fd });
+    const res = await apiFetch('/api/upload', { method: 'POST', body: fd });
+    if (!res.ok) {
+        try { const e = await res.json(); alert("Upload failed: " + (e.detail || res.status)); }
+        catch { alert("Upload failed: " + res.status); }
+        document.getElementById('fileInput').value = '';
+        return;
+    }
     const data = await res.json();
+    if (data.used_bytes != null) myUsedBytes = data.used_bytes;
     if (data.url) { ws.send(JSON.stringify({action: 'send_msg', room: currentRoom, user: currentUser, targetUser: targetUserForDM, msgType: data.type, url: data.url, fileName: data.name, replyTo: replyToMsg})); cancelReply(); }
+    document.getElementById('fileInput').value = '';
 }
 
-// --- WebRTC Voice Call ---
-let localStreamCall; let peerConnection; let callTarget;
+// =====================================================================
+// WebRTC — Voice + Video Calls (1-to-1)
+// =====================================================================
+// State
+let localStreamCall = null;
+let remoteStreamCall = null;
+let peerConnection = null;
+let callTarget = null;
+let callMode = 'audio';      // 'audio' | 'video'
+let callDirection = null;    // 'outgoing' | 'incoming'
+let callState = 'idle';      // 'idle' | 'ringing' | 'connecting' | 'in-call'
+let isMuted = false;
+let isCameraOff = false;
+let currentFacingMode = 'user';   // 'user' | 'environment'
+let cachedIceServers = null;
+let pendingIceCandidates = [];    // ICE candidates that arrived before remoteDescription was set
+let callStartedAt = null;
+let callTimerInterval = null;
+let ringtoneAudio = null;
 
-const servers = { 
-    'iceServers': [
-        { 'urls': 'stun:stun.l.google.com:19302' },
-        { 
-            'urls': `turn:${SERVER_CONFIG.turnDomain}:${SERVER_CONFIG.turnPort}`,
-            'username': SERVER_CONFIG.turnUser,
-            'credential': SERVER_CONFIG.turnPass
+async function getIceServers() {
+    if (cachedIceServers) return cachedIceServers;
+    try {
+        const res = await apiFetch('/api/turn-config');
+        if (res.ok) {
+            const data = await res.json();
+            cachedIceServers = data.iceServers;
+            return cachedIceServers;
         }
-    ],
-    'iceTransportPolicy': 'all'
-};
+    } catch (e) { console.warn('Failed to get TURN config:', e); }
+    // Fallback: free Google STUN
+    cachedIceServers = [
+        { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }
+    ];
+    return cachedIceServers;
+}
 
-async function startCall() {
-    if(window.location.protocol !== 'https:' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-        alert("⚠️ Voice Call requires HTTPS (SSL) to securely access your microphone. Please use a secure connection.");
+function ensureSecureContext() {
+    const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    if (window.location.protocol !== 'https:' && !isLocalhost) {
+        alert("⚠️ Calls require HTTPS to access microphone/camera.\nPlease use a secure (https://) connection.");
+        return false;
+    }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        alert("Your browser does not support media devices.");
+        return false;
+    }
+    return true;
+}
+
+function getMediaConstraints(mode, facing) {
+    if (mode === 'video') {
+        return {
+            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+            video: { facingMode: facing || 'user', width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 24 } }
+        };
+    }
+    return {
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        video: false
+    };
+}
+
+// Public entry points
+async function startCall() { await initiateCall('audio'); }
+async function startVideoCall() { await initiateCall('video'); }
+
+async function initiateCall(mode) {
+    if (callState !== 'idle') {
+        alert('Already in a call');
+        return;
+    }
+    if (!ensureSecureContext()) return;
+    if (!targetUserForDM) {
+        alert('Open a private chat first to start a call');
         return;
     }
 
-    if(!targetUserForDM) return;
     callTarget = targetUserForDM;
-    document.getElementById('callModal').style.display = 'flex';
-    document.getElementById('callStatusText').innerText = "Calling...";
-    document.getElementById('callUserText').innerText = callTarget;
-    document.getElementById('callBtns').innerHTML = `<button class="call-btn btn-rej" onclick="endCall()" style="background:var(--c-red); color:white;">✖</button>`;
-    
-    try {
-        // حذف اکو و تنظیمات ویژه میکروفون موبایل
-        localStreamCall = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-        peerConnection = new RTCPeerConnection(servers);
-        localStreamCall.getTracks().forEach(t => peerConnection.addTrack(t, localStreamCall));
-        
-        peerConnection.onicecandidate = e => { if(e.candidate) ws.send(JSON.stringify({action: 'webrtc', type: 'ice', targetUser: callTarget, candidate: e.candidate, from: currentUser})); };
-        peerConnection.ontrack = e => { 
-            const remoteAudio = document.getElementById('remoteAudio');
-            remoteAudio.srcObject = e.streams[0]; 
-            remoteAudio.play().catch(err => console.log("Audio blocked by mobile:", err));
-        };
-        
-        const offer = await peerConnection.createOffer();
-        await peerConnection.setLocalDescription(offer);
-        ws.send(JSON.stringify({action: 'webrtc', type: 'offer', targetUser: callTarget, offer: offer, from: currentUser}));
-    } catch(err) { alert("Microphone access blocked!"); endCall(false); }
-}
+    callMode = mode;
+    callDirection = 'outgoing';
+    callState = 'ringing';
+    pendingIceCandidates = [];
 
-function handleWebRTC(data) {
-    if(data.targetUser !== currentUser) return;
-    
-    if(data.type === 'offer') {
-        callTarget = data.from;
-        document.getElementById('callModal').style.display = 'flex';
-        document.getElementById('callStatusText').innerText = "Incoming Call...";
-        document.getElementById('callUserText').innerText = callTarget;
-        document.getElementById('callBtns').innerHTML = `<button class="call-btn btn-ans" onclick='acceptCall(${JSON.stringify(data.offer)})' style="background:#10b981; color:white;">📞</button><button class="call-btn btn-rej" onclick="endCall()" style="background:var(--c-red); color:white;">✖</button>`;
-        try { document.getElementById('notif-sound').play(); } catch(e){}
-    }
-    else if(data.type === 'answer') {
-        peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
-        document.getElementById('callStatusText').innerText = "In Call";
-    }
-    else if(data.type === 'ice') {
-        if(peerConnection) peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
-    }
-    else if(data.type === 'end') {
+    showCallUI({ title: callTarget, status: mode === 'video' ? 'Video calling...' : 'Calling...', mode });
+
+    try {
+        const constraints = getMediaConstraints(mode, currentFacingMode);
+        localStreamCall = await navigator.mediaDevices.getUserMedia(constraints);
+        attachLocalVideo();
+
+        const iceServers = await getIceServers();
+        peerConnection = new RTCPeerConnection({ iceServers, iceTransportPolicy: 'all' });
+        bindPeerEvents();
+        localStreamCall.getTracks().forEach(t => peerConnection.addTrack(t, localStreamCall));
+
+        const offer = await peerConnection.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: mode === 'video' });
+        await peerConnection.setLocalDescription(offer);
+
+        ws.send(JSON.stringify({
+            action: 'webrtc', type: 'offer', mode: mode,
+            targetUser: callTarget, offer: offer, from: currentUser
+        }));
+    } catch (err) {
+        console.error('Call start error:', err);
+        const msg = (err && err.name === 'NotAllowedError')
+            ? "Permission denied for microphone/camera."
+            : "Could not start call: " + (err.message || err);
+        alert(msg);
         endCall(false);
     }
 }
 
-async function acceptCall(offerData) {
-    if(window.location.protocol !== 'https:' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-        alert("⚠️ Voice Call requires HTTPS (SSL) to securely access your microphone. Please use a secure connection.");
+function bindPeerEvents() {
+    peerConnection.onicecandidate = (e) => {
+        if (e.candidate && callTarget) {
+            ws.send(JSON.stringify({
+                action: 'webrtc', type: 'ice', targetUser: callTarget,
+                candidate: e.candidate, from: currentUser
+            }));
+        }
+    };
+    peerConnection.ontrack = (e) => {
+        if (!remoteStreamCall) remoteStreamCall = new MediaStream();
+        e.streams[0].getTracks().forEach(t => {
+            try { remoteStreamCall.addTrack(t); } catch {}
+        });
+        attachRemoteMedia();
+    };
+    peerConnection.oniceconnectionstatechange = () => {
+        const st = peerConnection ? peerConnection.iceConnectionState : '';
+        console.log('[WebRTC] ICE state:', st);
+        const stEl = document.getElementById('callStatusText');
+        if (st === 'connected' || st === 'completed') {
+            if (callState !== 'in-call') {
+                callState = 'in-call';
+                callStartedAt = Date.now();
+                if (callTimerInterval) clearInterval(callTimerInterval);
+                callTimerInterval = setInterval(updateCallDuration, 1000);
+                stopRingtone();
+            }
+            if (stEl) stEl.innerText = formatCallDuration();
+        } else if (st === 'disconnected' || st === 'failed') {
+            if (stEl) stEl.innerText = 'Connection lost';
+            if (st === 'failed') setTimeout(() => endCall(true), 2000);
+        }
+    };
+}
+
+function attachLocalVideo() {
+    const lv = document.getElementById('localVideo');
+    if (lv && callMode === 'video') {
+        lv.srcObject = localStreamCall;
+        lv.style.display = 'block';
+        try { lv.play().catch(()=>{}); } catch {}
+    } else if (lv) {
+        lv.style.display = 'none';
+    }
+}
+
+function attachRemoteMedia() {
+    const remoteVideo = document.getElementById('remoteVideo');
+    const remoteAudio = document.getElementById('remoteAudio');
+    if (callMode === 'video' && remoteVideo) {
+        remoteVideo.srcObject = remoteStreamCall;
+        remoteVideo.style.display = 'block';
+        try { remoteVideo.play().catch(()=>{}); } catch {}
+    }
+    if (remoteAudio) {
+        remoteAudio.srcObject = remoteStreamCall;
+        try { remoteAudio.play().catch(()=>{}); } catch {}
+    }
+}
+
+function handleWebRTC(data) {
+    if (data.targetUser !== currentUser) return;
+
+    if (data.type === 'offer') {
+        if (callState !== 'idle') {
+            // already in a call - reject quietly
+            ws.send(JSON.stringify({ action: 'webrtc', type: 'busy', targetUser: data.from, from: currentUser }));
+            return;
+        }
+        callTarget = data.from;
+        callMode = data.mode || 'audio';
+        callDirection = 'incoming';
+        callState = 'ringing';
+        pendingIceCandidates = [];
+        // store offer for accept
+        window._pendingOffer = data.offer;
+        showCallUI({
+            title: callTarget,
+            status: callMode === 'video' ? 'Incoming video call' : 'Incoming voice call',
+            mode: callMode,
+            incoming: true,
+        });
+        playRingtone();
+    }
+    else if (data.type === 'answer') {
+        if (peerConnection && peerConnection.signalingState !== 'stable') {
+            peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer))
+                .then(flushPendingIce).catch(e => console.error('Set answer failed:', e));
+        }
+        const stEl = document.getElementById('callStatusText');
+        if (stEl) stEl.innerText = 'Connecting...';
+    }
+    else if (data.type === 'ice') {
+        if (peerConnection && peerConnection.remoteDescription) {
+            peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(e => console.warn('ICE add failed:', e));
+        } else {
+            // Buffer until remote description is set
+            pendingIceCandidates.push(data.candidate);
+        }
+    }
+    else if (data.type === 'busy') {
+        const stEl = document.getElementById('callStatusText');
+        if (stEl) stEl.innerText = 'User is busy';
+        setTimeout(() => endCall(false), 2000);
+    }
+    else if (data.type === 'end') {
+        endCall(false);
+    }
+}
+
+async function flushPendingIce() {
+    if (!peerConnection) return;
+    while (pendingIceCandidates.length > 0) {
+        const c = pendingIceCandidates.shift();
+        try { await peerConnection.addIceCandidate(new RTCIceCandidate(c)); } catch (e) { console.warn(e); }
+    }
+}
+
+async function acceptCall() {
+    if (!ensureSecureContext()) { endCall(true); return; }
+    const offerData = window._pendingOffer;
+    if (!offerData) { endCall(true); return; }
+    delete window._pendingOffer;
+
+    stopRingtone();
+    callState = 'connecting';
+    const stEl = document.getElementById('callStatusText');
+    if (stEl) stEl.innerText = 'Connecting...';
+    setInCallButtons();
+
+    try {
+        const constraints = getMediaConstraints(callMode, currentFacingMode);
+        localStreamCall = await navigator.mediaDevices.getUserMedia(constraints);
+        attachLocalVideo();
+
+        const iceServers = await getIceServers();
+        peerConnection = new RTCPeerConnection({ iceServers, iceTransportPolicy: 'all' });
+        bindPeerEvents();
+        localStreamCall.getTracks().forEach(t => peerConnection.addTrack(t, localStreamCall));
+
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(offerData));
+        await flushPendingIce();
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
+
+        ws.send(JSON.stringify({
+            action: 'webrtc', type: 'answer',
+            targetUser: callTarget, answer: answer, from: currentUser
+        }));
+    } catch (err) {
+        console.error('Accept error:', err);
+        const msg = (err && err.name === 'NotAllowedError')
+            ? "Permission denied for microphone/camera."
+            : "Could not accept call: " + (err.message || err);
+        alert(msg);
         endCall(true);
+    }
+}
+
+function rejectCall() { endCall(true); }
+
+function endCall(notifyOther = true) {
+    stopRingtone();
+    if (callTimerInterval) { clearInterval(callTimerInterval); callTimerInterval = null; }
+
+    if (peerConnection) {
+        try { peerConnection.close(); } catch {}
+        peerConnection = null;
+    }
+    if (localStreamCall) {
+        try { localStreamCall.getTracks().forEach(t => t.stop()); } catch {}
+        localStreamCall = null;
+    }
+    remoteStreamCall = null;
+
+    const remoteAudio = document.getElementById('remoteAudio');
+    const remoteVideo = document.getElementById('remoteVideo');
+    const localVideo = document.getElementById('localVideo');
+    if (remoteAudio) remoteAudio.srcObject = null;
+    if (remoteVideo) { remoteVideo.srcObject = null; remoteVideo.style.display = 'none'; }
+    if (localVideo) { localVideo.srcObject = null; localVideo.style.display = 'none'; }
+
+    if (notifyOther && callTarget && ws && ws.readyState === WebSocket.OPEN) {
+        try {
+            ws.send(JSON.stringify({ action: 'webrtc', type: 'end', targetUser: callTarget, from: currentUser }));
+        } catch {}
+    }
+
+    document.getElementById('callModal').style.display = 'none';
+    callTarget = null;
+    callMode = 'audio';
+    callDirection = null;
+    callState = 'idle';
+    isMuted = false;
+    isCameraOff = false;
+    pendingIceCandidates = [];
+    callStartedAt = null;
+}
+
+// =================== In-call controls ===================
+function toggleMute() {
+    if (!localStreamCall) return;
+    isMuted = !isMuted;
+    localStreamCall.getAudioTracks().forEach(t => t.enabled = !isMuted);
+    const btn = document.getElementById('callMuteBtn');
+    if (btn) {
+        btn.classList.toggle('active', isMuted);
+        btn.title = isMuted ? 'Unmute' : 'Mute';
+        btn.innerHTML = isMuted
+            ? '<svg viewBox="0 0 24 24" style="width:24px;fill:currentColor;"><path d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zM15 11.16L9 5.18V5c0-1.66 1.34-3 3-3s3 1.34 3 3v6.16zM4.27 3L3 4.27l6.01 6.01V11c0 1.66 1.33 3 2.99 3 .22 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52-2.76 0-5.3-2.1-5.3-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c.91-.13 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z"/></svg>'
+            : '<svg viewBox="0 0 24 24" style="width:24px;fill:currentColor;"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/><path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>';
+    }
+}
+
+function toggleCamera() {
+    if (!localStreamCall) return;
+    if (callMode !== 'video') {
+        alert('Camera is only available in video calls');
+        return;
+    }
+    isCameraOff = !isCameraOff;
+    localStreamCall.getVideoTracks().forEach(t => t.enabled = !isCameraOff);
+    const btn = document.getElementById('callCameraBtn');
+    if (btn) {
+        btn.classList.toggle('active', isCameraOff);
+        btn.title = isCameraOff ? 'Camera On' : 'Camera Off';
+    }
+    const lv = document.getElementById('localVideo');
+    if (lv) lv.style.display = isCameraOff ? 'none' : 'block';
+}
+
+async function switchCamera() {
+    if (!localStreamCall || callMode !== 'video') return;
+    const newFacing = currentFacingMode === 'user' ? 'environment' : 'user';
+    try {
+        const newStream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: { facingMode: newFacing, width: { ideal: 640 }, height: { ideal: 480 } }
+        });
+        const newVideoTrack = newStream.getVideoTracks()[0];
+        if (!newVideoTrack) return;
+        // Replace sender track
+        const sender = peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
+        if (sender) await sender.replaceTrack(newVideoTrack);
+        // Stop old video track, attach new
+        localStreamCall.getVideoTracks().forEach(t => { try { t.stop(); } catch {} localStreamCall.removeTrack(t); });
+        localStreamCall.addTrack(newVideoTrack);
+        attachLocalVideo();
+        currentFacingMode = newFacing;
+    } catch (err) {
+        console.error('Camera switch failed:', err);
+        alert('Could not switch camera: ' + (err.message || err));
+    }
+}
+
+// =================== Call UI ===================
+function showCallUI({ title, status, mode, incoming = false }) {
+    const modal = document.getElementById('callModal');
+    if (!modal) return;
+    modal.style.display = 'flex';
+
+    const t = document.getElementById('callUserText');
+    if (t) t.innerText = title || '';
+    const s = document.getElementById('callStatusText');
+    if (s) s.innerText = status || '';
+
+    // Avatar
+    const av = document.getElementById('callAvatar');
+    if (av) {
+        const url = (userAvatars && userAvatars[title]) || '';
+        if (url) {
+            av.innerHTML = `<img src="${url}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;">`;
+        } else {
+            av.innerHTML = `<span style="font-size:54px;font-weight:700;">${(title||'?').charAt(0).toUpperCase()}</span>`;
+        }
+    }
+
+    // Show video container only in video mode
+    const vc = document.getElementById('callVideoContainer');
+    if (vc) vc.style.display = (mode === 'video') ? 'block' : 'none';
+
+    if (incoming) {
+        setIncomingButtons();
+    } else {
+        setOutgoingButtons();
+    }
+}
+
+function setIncomingButtons() {
+    const btns = document.getElementById('callBtns');
+    if (!btns) return;
+    btns.innerHTML = `
+        <button class="call-btn answer-btn" onclick="acceptCall()" title="Answer">
+            <svg viewBox="0 0 24 24" style="width:28px;fill:currentColor;"><path d="M20.01 15.38c-1.23 0-2.42-.2-3.53-.56a.977.977 0 0 0-1.01.24l-1.57 1.97c-2.83-1.35-5.48-3.9-6.89-6.83l1.95-1.66c.27-.28.35-.67.24-1.02-.37-1.11-.56-2.3-.56-3.53 0-.54-.45-.99-.99-.99H4.19C3.65 3 3 3.24 3 3.99 3 13.28 10.73 21 20.01 21c.71 0 .99-.63.99-1.18v-3.45c0-.54-.45-.99-.99-.99z"/></svg>
+        </button>
+        <button class="call-btn reject-btn" onclick="rejectCall()" title="Decline">
+            <svg viewBox="0 0 24 24" style="width:28px;fill:currentColor;transform:rotate(135deg);"><path d="M20.01 15.38c-1.23 0-2.42-.2-3.53-.56a.977.977 0 0 0-1.01.24l-1.57 1.97c-2.83-1.35-5.48-3.9-6.89-6.83l1.95-1.66c.27-.28.35-.67.24-1.02-.37-1.11-.56-2.3-.56-3.53 0-.54-.45-.99-.99-.99H4.19C3.65 3 3 3.24 3 3.99 3 13.28 10.73 21 20.01 21c.71 0 .99-.63.99-1.18v-3.45c0-.54-.45-.99-.99-.99z"/></svg>
+        </button>
+    `;
+}
+
+function setOutgoingButtons() {
+    const btns = document.getElementById('callBtns');
+    if (!btns) return;
+    btns.innerHTML = `
+        <button class="call-btn reject-btn" onclick="endCall()" title="End call">
+            <svg viewBox="0 0 24 24" style="width:28px;fill:currentColor;transform:rotate(135deg);"><path d="M20.01 15.38c-1.23 0-2.42-.2-3.53-.56a.977.977 0 0 0-1.01.24l-1.57 1.97c-2.83-1.35-5.48-3.9-6.89-6.83l1.95-1.66c.27-.28.35-.67.24-1.02-.37-1.11-.56-2.3-.56-3.53 0-.54-.45-.99-.99-.99H4.19C3.65 3 3 3.24 3 3.99 3 13.28 10.73 21 20.01 21c.71 0 .99-.63.99-1.18v-3.45c0-.54-.45-.99-.99-.99z"/></svg>
+        </button>
+    `;
+}
+
+function setInCallButtons() {
+    const btns = document.getElementById('callBtns');
+    if (!btns) return;
+    const isVideo = callMode === 'video';
+    btns.innerHTML = `
+        <button class="call-btn ctrl-btn" id="callMuteBtn" onclick="toggleMute()" title="Mute">
+            <svg viewBox="0 0 24 24" style="width:24px;fill:currentColor;"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/><path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>
+        </button>
+        ${isVideo ? `
+        <button class="call-btn ctrl-btn" id="callCameraBtn" onclick="toggleCamera()" title="Camera Off">
+            <svg viewBox="0 0 24 24" style="width:24px;fill:currentColor;"><path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/></svg>
+        </button>
+        <button class="call-btn ctrl-btn" id="callSwitchBtn" onclick="switchCamera()" title="Switch Camera">
+            <svg viewBox="0 0 24 24" style="width:24px;fill:currentColor;"><path d="M9.4 10.5l4.77-8.26C13.47 2.09 12.75 2 12 2c-2.4 0-4.6.85-6.32 2.25l3.66 6.35.06-.1zM21.54 9c-.92-2.92-3.15-5.26-6-6.34L11.88 9h9.66zm.26 1h-7.49l.29.5 4.76 8.25C21 16.97 22 14.61 22 12c0-.69-.07-1.35-.2-2zM8.54 12l-3.9-6.75C3.01 7.03 2 9.39 2 12c0 .69.07 1.35.2 2h7.49l-1.15-2zm-6.08 3c.92 2.92 3.15 5.26 6 6.34L12.12 15H2.46zm11.27 0l-3.9 6.76c.7.15 1.42.24 2.17.24 2.4 0 4.6-.85 6.32-2.25l-3.66-6.35-.93 1.6z"/></svg>
+        </button>
+        ` : ''}
+        <button class="call-btn reject-btn" onclick="endCall()" title="End call">
+            <svg viewBox="0 0 24 24" style="width:28px;fill:currentColor;transform:rotate(135deg);"><path d="M20.01 15.38c-1.23 0-2.42-.2-3.53-.56a.977.977 0 0 0-1.01.24l-1.57 1.97c-2.83-1.35-5.48-3.9-6.89-6.83l1.95-1.66c.27-.28.35-.67.24-1.02-.37-1.11-.56-2.3-.56-3.53 0-.54-.45-.99-.99-.99H4.19C3.65 3 3 3.24 3 3.99 3 13.28 10.73 21 20.01 21c.71 0 .99-.63.99-1.18v-3.45c0-.54-.45-.99-.99-.99z"/></svg>
+        </button>
+    `;
+}
+
+function formatCallDuration() {
+    if (!callStartedAt) return '';
+    const sec = Math.floor((Date.now() - callStartedAt) / 1000);
+    const m = String(Math.floor(sec / 60)).padStart(2, '0');
+    const s = String(sec % 60).padStart(2, '0');
+    return `${m}:${s}`;
+}
+function updateCallDuration() {
+    const stEl = document.getElementById('callStatusText');
+    if (stEl) stEl.innerText = formatCallDuration();
+    // Switch buttons to in-call mode if not already
+    if (callState === 'in-call' && !document.getElementById('callMuteBtn')) {
+        setInCallButtons();
+    }
+}
+
+function playRingtone() {
+    try {
+        const r = document.getElementById('notif-sound');
+        if (!r) return;
+        ringtoneAudio = r;
+        ringtoneAudio.loop = true;
+        ringtoneAudio.play().catch(()=>{});
+    } catch {}
+}
+function stopRingtone() {
+    if (ringtoneAudio) {
+        try { ringtoneAudio.pause(); ringtoneAudio.currentTime = 0; ringtoneAudio.loop = false; } catch {}
+        ringtoneAudio = null;
+    }
+}
+
+// ============================================================
+// ADMIN PANEL
+// ============================================================
+async function openAdminPanel() {
+    if (currentRole !== 'admin') { alert('Admin only'); return; }
+    closeModal('settingsModal');
+    document.getElementById('adminModal').style.display = 'flex';
+    switchAdminTab('users');
+}
+function closeAdminPanel() { document.getElementById('adminModal').style.display = 'none'; }
+
+function switchAdminTab(tab) {
+    document.querySelectorAll('.admin-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.admin-pane').forEach(p => p.style.display = 'none');
+    const tabBtn = document.querySelector(`.admin-tab[data-tab="${tab}"]`);
+    if (tabBtn) tabBtn.classList.add('active');
+    const pane = document.getElementById('admin-pane-' + tab);
+    if (pane) pane.style.display = 'block';
+    if (tab === 'users') loadAdminUsers();
+    if (tab === 'stats') loadAdminStats();
+    if (tab === 'turn') loadAdminTurn();
+    if (tab === 'updates') loadAdminBackups();
+}
+
+async function loadAdminTurn() {
+    const box = document.getElementById('admin-turn-content');
+    if (!box) return;
+    box.innerHTML = '<div style="padding:20px; text-align:center; color:var(--c-gray);">Loading...</div>';
+    try {
+        const res = await apiFetch('/api/admin/turn');
+        if (!res.ok) { box.innerHTML = '<div style="color:var(--c-red); padding:10px;">Failed: '+res.status+'</div>'; return; }
+        const d = await res.json();
+        const dot = (ok) => `<span style="display:inline-block; width:10px; height:10px; border-radius:50%; background:${ok?'#22c55e':'#64748b'}; margin-right:8px; vertical-align:middle;"></span>`;
+        const yes = '<span style="color:#22c55e; font-weight:700;">YES</span>';
+        const no = '<span style="color:var(--c-red); font-weight:700;">NO</span>';
+        box.innerHTML = `
+        <div class="stat-card">
+            <div class="stat-label">Service Status</div>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-top:6px;">
+                <span style="font-size:16px;">${dot(d.running)}${d.running?'Running':'Stopped'}</span>
+                <span style="font-size:13px; color:var(--c-gray);">Configured: ${d.configured?yes:no}</span>
+            </div>
+        </div>
+        ${d.configured ? `
+        <div class="stat-card" style="margin-top:12px;">
+            <div class="stat-label">TURN Credentials</div>
+            <table style="width:100%; font-size:13px; border-collapse:collapse; color:var(--c-text);">
+                <tr><td style="padding:6px 0; color:var(--c-gray);">Host:</td><td style="text-align:right; font-family:monospace;">${escapeHtml(d.host)}</td></tr>
+                <tr><td style="padding:6px 0; color:var(--c-gray);">Port:</td><td style="text-align:right; font-family:monospace;">${escapeHtml(d.port)}</td></tr>
+                <tr><td style="padding:6px 0; color:var(--c-gray);">TLS Port:</td><td style="text-align:right; font-family:monospace;">${escapeHtml(d.tls_port)}</td></tr>
+                <tr><td style="padding:6px 0; color:var(--c-gray);">Username:</td><td style="text-align:right; font-family:monospace;">${escapeHtml(d.user)}</td></tr>
+                <tr><td style="padding:6px 0; color:var(--c-gray);">Password:</td><td style="text-align:right; font-family:monospace; word-break:break-all;">${escapeHtml(d.password)}</td></tr>
+                <tr><td style="padding:6px 0; color:var(--c-gray);">Realm:</td><td style="text-align:right; font-family:monospace;">${escapeHtml(d.realm)}</td></tr>
+            </table>
+        </div>` : `
+        <div class="stat-card" style="margin-top:12px; border:1px solid var(--c-orange);">
+            <div style="color:var(--c-orange); font-weight:700; margin-bottom:6px;">⚠️ TURN not configured</div>
+            <div style="font-size:13px; color:var(--c-gray);">Calls between users on different networks may fail without TURN. Run <code style="background:#000; padding:2px 6px; border-radius:4px;">black-chat</code> on the server and choose option 10 to install coturn.</div>
+        </div>`}
+        <div class="stat-card" style="margin-top:12px;">
+            <div class="stat-label">ICE Servers (sent to clients)</div>
+            <pre style="margin-top:8px; padding:10px; background:#000; color:#7dd3fc; border-radius:8px; font-size:11px; overflow-x:auto;">${escapeHtml(JSON.stringify(d.ice_servers, null, 2))}</pre>
+        </div>`;
+    } catch(e) { box.innerHTML = '<div style="color:var(--c-red); padding:10px;">Error: '+e.message+'</div>'; }
+}
+
+async function adminTurnRestart() {
+    if (!confirm('Restart coturn service?')) return;
+    const res = await apiJson('/api/admin/turn/restart', {});
+    if (res.ok) {
+        alert('Restart issued. Reloading TURN status...');
+        setTimeout(loadAdminTurn, 2000);
+    } else {
+        try { const e = await res.json(); alert('Failed: ' + (e.detail || 'unknown')); } catch { alert('Failed'); }
+    }
+}
+
+async function loadAdminUsers() {
+    const box = document.getElementById('admin-users-list');
+    box.innerHTML = '<div style="padding:20px; text-align:center; color:var(--c-gray);">Loading...</div>';
+    try {
+        const res = await apiFetch('/api/admin/users');
+        if (!res.ok) { box.innerHTML = '<div style="color:var(--c-red); padding:10px;">Failed: '+res.status+'</div>'; return; }
+        const data = await res.json();
+        if (!data.users.length) { box.innerHTML = '<div style="padding:20px; color:var(--c-gray); text-align:center;">No users</div>'; return; }
+        box.innerHTML = data.users.map(u => {
+            const usedMB = (u.used_bytes/(1024*1024)).toFixed(1);
+            const pct = u.quota_mb > 0 ? Math.min(100, (u.used_bytes / (u.quota_mb*1024*1024) * 100)) : 0;
+            const onlineDot = u.online ? '<span style="display:inline-block; width:8px; height:8px; background:#22c55e; border-radius:50%; margin-right:6px;"></span>' : '<span style="display:inline-block; width:8px; height:8px; background:#64748b; border-radius:50%; margin-right:6px;"></span>';
+            return `
+            <div class="admin-user-row" style="padding:14px; background:var(--bg-input); border-radius:12px; margin-bottom:10px; border:1px solid var(--border);">
+              <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+                <div>
+                  <div style="font-weight:700; font-size:15px;">${onlineDot}${escapeHtml(u.username)} <span style="font-size:11px; padding:2px 8px; background:${u.role==='admin'?'var(--c-red)':'var(--c-blue)'}; border-radius:8px; color:white; margin-right:6px;">${u.role}</span></div>
+                  <div style="font-size:12px; color:var(--c-gray); margin-top:4px;">Used: ${usedMB} MB / ${u.quota_mb} MB</div>
+                  <div style="height:5px; background:rgba(255,255,255,0.1); border-radius:10px; margin-top:6px; width:200px; max-width:100%;">
+                    <div style="height:100%; width:${pct}%; background:${pct>90?'var(--c-red)':'var(--c-blue)'}; border-radius:10px;"></div>
+                  </div>
+                </div>
+                <div style="display:flex; gap:6px;">
+                  <button onclick="adminEditUser('${escapeAttr(u.username)}', ${u.quota_mb}, '${u.role}')" style="padding:8px 12px; background:var(--c-blue); color:white; border:none; border-radius:8px; cursor:pointer; font-size:12px;">Edit</button>
+                  <button onclick="adminDeleteUser('${escapeAttr(u.username)}')" style="padding:8px 12px; background:var(--c-red); color:white; border:none; border-radius:8px; cursor:pointer; font-size:12px;">Delete</button>
+                </div>
+              </div>
+            </div>`;
+        }).join('');
+    } catch(e) { box.innerHTML = '<div style="color:var(--c-red); padding:10px;">Error: '+e.message+'</div>'; }
+}
+
+function escapeHtml(s) { return String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function escapeAttr(s) { return String(s||'').replace(/'/g, "\\'").replace(/"/g, '\\"'); }
+
+async function adminAddUser() {
+    const username = document.getElementById('admin-new-username').value.trim();
+    const password = document.getElementById('admin-new-password').value.trim();
+    const role = document.getElementById('admin-new-role').value;
+    const quota = parseInt(document.getElementById('admin-new-quota').value) || 500;
+    if (!username || !password) { alert('Username and password required'); return; }
+    const res = await apiJson('/api/admin/users/add', { username, password, role, quota_mb: quota });
+    if (res.ok) {
+        document.getElementById('admin-new-username').value = '';
+        document.getElementById('admin-new-password').value = '';
+        document.getElementById('admin-new-quota').value = '500';
+        loadAdminUsers();
+    } else {
+        try { const e = await res.json(); alert(e.detail || 'Failed'); } catch { alert('Failed'); }
+    }
+}
+
+async function adminEditUser(username, currentQuota, currentR) {
+    const newPass = prompt(`New password for "${username}" (leave empty to keep):`, '');
+    const newQuota = prompt(`Quota in MB for "${username}":`, currentQuota);
+    const newRole = prompt(`Role for "${username}" (admin/user):`, currentR);
+    if (newQuota === null) return;
+    const body = { username };
+    if (newPass && newPass.trim()) body.password = newPass.trim();
+    if (newQuota) body.quota_mb = parseInt(newQuota) || currentQuota;
+    if (newRole && (newRole === 'admin' || newRole === 'user')) body.role = newRole;
+    const res = await apiJson('/api/admin/users/update', body);
+    if (res.ok) loadAdminUsers();
+    else { try { const e = await res.json(); alert(e.detail || 'Failed'); } catch { alert('Failed'); } }
+}
+
+async function adminDeleteUser(username) {
+    if (!confirm(`Delete user "${username}"?`)) return;
+    const res = await apiJson('/api/admin/users/delete', { username });
+    if (res.ok) loadAdminUsers();
+    else { try { const e = await res.json(); alert(e.detail || 'Failed'); } catch { alert('Failed'); } }
+}
+
+async function loadAdminStats() {
+    const box = document.getElementById('admin-stats-content');
+    box.innerHTML = '<div style="padding:20px; text-align:center; color:var(--c-gray);">Loading...</div>';
+    try {
+        const res = await apiFetch('/api/admin/stats');
+        const d = await res.json();
+        const diskPct = d.disk_total ? (d.disk_used / d.disk_total * 100).toFixed(1) : 0;
+        box.innerHTML = `
+        <div class="stat-card">
+          <div class="stat-label">Online Users</div>
+          <div class="stat-value">${d.online_count} <span style="font-size:13px; color:var(--c-gray);">/ ${d.users_count}</span></div>
+          ${d.online_users.length ? `<div style="font-size:11px; color:var(--c-gray); margin-top:6px;">${d.online_users.map(u=>escapeHtml(u)).join(', ')}</div>` : ''}
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Total Messages</div>
+          <div class="stat-value">${d.messages_count.toLocaleString()}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Uploaded Files</div>
+          <div class="stat-value">${d.uploads_files.toLocaleString()} <span style="font-size:13px; color:var(--c-gray);">(${fmtBytes(d.uploads_bytes)})</span></div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Server Disk</div>
+          <div class="stat-value">${fmtBytes(d.disk_used)} / ${fmtBytes(d.disk_total)}</div>
+          <div style="height:6px; background:rgba(255,255,255,0.1); border-radius:10px; margin-top:8px;">
+            <div style="height:100%; width:${diskPct}%; background:${diskPct>85?'var(--c-red)':'var(--c-blue)'}; border-radius:10px;"></div>
+          </div>
+          <div style="font-size:11px; color:var(--c-gray); margin-top:4px;">${diskPct}% used | ${fmtBytes(d.disk_free)} free</div>
+        </div>`;
+    } catch(e) { box.innerHTML = '<div style="color:var(--c-red); padding:10px;">Error: '+e.message+'</div>'; }
+}
+
+async function loadAdminBackups() {
+    const box = document.getElementById('admin-backups-list');
+    box.innerHTML = '<div style="padding:20px; text-align:center; color:var(--c-gray);">Loading...</div>';
+    try {
+        const res = await apiFetch('/api/admin/backups');
+        const data = await res.json();
+        if (!data.backups.length) { box.innerHTML = '<div style="padding:20px; color:var(--c-gray); text-align:center;">No backups</div>'; return; }
+        box.innerHTML = data.backups.map(b => `
+          <div style="padding:12px; background:var(--bg-input); border-radius:10px; margin-bottom:8px; border:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+            <div>
+              <div style="font-weight:600; font-size:13px;">${escapeHtml(b.name)}</div>
+              <div style="font-size:11px; color:var(--c-gray);">${new Date(b.created).toLocaleString()} · ${fmtBytes(b.size_bytes)}</div>
+            </div>
+            <button onclick="adminRollback('${escapeAttr(b.name)}')" style="padding:8px 14px; background:var(--c-orange); color:white; border:none; border-radius:8px; cursor:pointer; font-size:12px; font-weight:600;">↶ Rollback</button>
+          </div>`).join('');
+    } catch(e) { box.innerHTML = '<div style="color:var(--c-red); padding:10px;">Error: '+e.message+'</div>'; }
+}
+
+async function adminCreateBackup() {
+    if (!confirm('Create a backup now?')) return;
+    const res = await apiJson('/api/admin/backup', {});
+    if (res.ok) { alert('Backup created'); loadAdminBackups(); }
+    else alert('Backup failed');
+}
+
+async function adminUpdateApp() {
+    if (!confirm('Update the app from GitHub?\n\nA backup will be created automatically.\nThe service will restart after.')) return;
+    const btn = document.getElementById('admin-update-btn');
+    if (btn) { btn.disabled = true; btn.innerText = 'Updating...'; }
+    try {
+        const res = await apiJson('/api/admin/update', {});
+        const d = await res.json();
+        if (res.ok && d.success) {
+            alert('✅ Update applied!\nBackup: ' + d.backup + '\n\nThe page will reload in ~5 seconds.');
+            setTimeout(() => location.reload(), 5000);
+        } else {
+            alert('Update failed: ' + (d.detail || 'unknown'));
+        }
+    } catch(e) { alert('Update error: ' + e.message); }
+    finally { if (btn) { btn.disabled = false; btn.innerText = '🔄 Update Now'; } }
+}
+
+async function adminRollback(name) {
+    if (!confirm('Rollback to backup:\n' + name + '\n\nA safety backup of the current state will be made first.\nThe service will restart after.')) return;
+    const res = await apiJson('/api/admin/rollback', { name });
+    if (res.ok) {
+        alert('✅ Rollback complete. Reloading in ~5 seconds.');
+        setTimeout(() => location.reload(), 5000);
+    } else {
+        try { const e = await res.json(); alert('Rollback failed: ' + (e.detail || 'unknown')); } catch { alert('Rollback failed'); }
+    }
+}
+
+async function adminRestartService() {
+    if (!confirm('Restart the service now?')) return;
+    await apiJson('/api/admin/restart', {});
+    alert('Restart issued. Reloading in 5 seconds.');
+    setTimeout(() => location.reload(), 5000);
+}
+
+// =====================================================================
+// PHASE 4: Typing indicator, Read receipts, Online/Last seen,
+// Smart auto-scroll, Scroll-to-bottom button, Swipe to reply
+// =====================================================================
+
+// ---- State ----
+let lastSeenMap = {};                 // username -> ISO timestamp
+let typingUsers = {};                 // room -> { user: timestamp }
+let typingClearTimer = null;
+let myTypingState = false;
+let myTypingDebounce = null;
+let unreadCount = 0;
+let isNearBottom = true;
+
+// ---- Typing dots HTML ----
+function typingDotsHTML() {
+    return '<span class="typing-dots-container"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span>';
+}
+
+// ---- Update chat header status (online / last seen / typing) ----
+function refreshHeaderStatus() {
+    const statusEl = document.getElementById('room-status');
+    if (!statusEl || !currentRoom) return;
+
+    // Channel/group: keep their original status
+    if (currentRoom === 'Announcements') {
+        statusEl.innerText = translations[currentLang].system_channel || 'System Announcements';
+        return;
+    }
+    if (currentRoom.startsWith('rm_')) {
+        // Group: show typing user(s) if any
+        const typers = typingUsers[currentRoom] ? Object.keys(typingUsers[currentRoom]) : [];
+        if (typers.length > 0) {
+            const names = typers.slice(0, 2).join(', ');
+            statusEl.innerHTML = `<span style="color:var(--c-blue);">${escapeHtml(names)} typing</span>${typingDotsHTML()}`;
+        } else {
+            statusEl.innerText = translations[currentLang].group || 'Private Group';
+        }
         return;
     }
 
-    document.getElementById('callStatusText').innerText = "Connecting...";
-    document.getElementById('callBtns').innerHTML = `<button class="call-btn btn-rej" onclick="endCall()" style="background:var(--c-red); color:white;">✖</button>`;
-    
-    try {
-        localStreamCall = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-        peerConnection = new RTCPeerConnection(servers);
-        localStreamCall.getTracks().forEach(t => peerConnection.addTrack(t, localStreamCall));
-        
-        peerConnection.onicecandidate = e => { if(e.candidate) ws.send(JSON.stringify({action: 'webrtc', type: 'ice', targetUser: callTarget, candidate: e.candidate, from: currentUser})); };
-        peerConnection.ontrack = e => { 
-            const remoteAudio = document.getElementById('remoteAudio');
-            remoteAudio.srcObject = e.streams[0]; 
-            remoteAudio.play().catch(err => console.log("Audio blocked by mobile:", err));
-        };
-        
-        await peerConnection.setRemoteDescription(new RTCSessionDescription(offerData));
-        const answer = await peerConnection.createAnswer();
-        await peerConnection.setLocalDescription(answer);
-        
-        ws.send(JSON.stringify({action: 'webrtc', type: 'answer', targetUser: callTarget, answer: answer, from: currentUser}));
-        document.getElementById('callStatusText').innerText = "In Call";
-    } catch(err) { alert("Microphone access blocked!"); endCall(); }
+    // Private DM
+    if (!targetUserForDM) {
+        statusEl.innerText = '';
+        return;
+    }
+    // Typing has highest priority
+    if (typingUsers[currentRoom] && Object.keys(typingUsers[currentRoom]).length > 0) {
+        statusEl.innerHTML = `<span style="color:var(--c-blue);">typing</span>${typingDotsHTML()}`;
+        return;
+    }
+    // Online?
+    if (onlineUsers && onlineUsers.includes(targetUserForDM)) {
+        statusEl.innerHTML = '<span style="color:#4dcd5e;">● online</span>';
+        return;
+    }
+    // Last seen
+    const ls = lastSeenMap[targetUserForDM];
+    if (ls) {
+        statusEl.innerText = 'last seen ' + formatLastSeen(ls);
+    } else {
+        statusEl.innerText = 'offline';
+    }
 }
 
-function endCall(notifyOther = true) {
-    if(peerConnection) peerConnection.close();
-    if(localStreamCall) localStreamCall.getTracks().forEach(t => t.stop());
-    peerConnection = null; localStreamCall = null;
-    document.getElementById('callModal').style.display = 'none';
-    document.getElementById('remoteAudio').srcObject = null;
-    if(notifyOther && callTarget) ws.send(JSON.stringify({action: 'webrtc', type: 'end', targetUser: callTarget, from: currentUser}));
-    callTarget = null;
+function formatLastSeen(iso) {
+    try {
+        // Backend stores in UTC without timezone marker - assume UTC
+        const d = new Date(iso.replace(' ', 'T') + 'Z');
+        const now = Date.now();
+        const diffSec = Math.floor((now - d.getTime()) / 1000);
+        if (diffSec < 60) return 'just now';
+        if (diffSec < 3600) return Math.floor(diffSec / 60) + ' min ago';
+        if (diffSec < 86400) return Math.floor(diffSec / 3600) + 'h ago';
+        if (diffSec < 7 * 86400) return Math.floor(diffSec / 86400) + 'd ago';
+        return d.toLocaleDateString();
+    } catch { return ''; }
 }
+
+// ---- Send our own typing signal ----
+function notifyTyping() {
+    if (!ws || ws.readyState !== WebSocket.OPEN || !currentRoom) return;
+    if (currentRoom === 'Announcements') return;
+    if (!myTypingState) {
+        myTypingState = true;
+        ws.send(JSON.stringify({ action: 'typing', room: currentRoom, state: 'typing' }));
+    }
+    if (myTypingDebounce) clearTimeout(myTypingDebounce);
+    myTypingDebounce = setTimeout(() => {
+        myTypingState = false;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ action: 'typing', room: currentRoom, state: 'stopped' }));
+        }
+    }, 3000);
+}
+
+// ---- Handle incoming typing signals ----
+function handleTypingSignal(msg) {
+    if (!msg.room || !msg.user || msg.user === currentUser) return;
+    typingUsers[msg.room] = typingUsers[msg.room] || {};
+    if (msg.state === 'stopped') {
+        delete typingUsers[msg.room][msg.user];
+        if (Object.keys(typingUsers[msg.room]).length === 0) delete typingUsers[msg.room];
+    } else {
+        typingUsers[msg.room][msg.user] = Date.now();
+    }
+    if (msg.room === currentRoom) refreshHeaderStatus();
+
+    // Auto-clear stale typing after 5s
+    if (typingClearTimer) clearTimeout(typingClearTimer);
+    typingClearTimer = setTimeout(() => {
+        const now = Date.now();
+        Object.keys(typingUsers).forEach(room => {
+            Object.keys(typingUsers[room]).forEach(user => {
+                if (now - typingUsers[room][user] > 5000) delete typingUsers[room][user];
+            });
+            if (Object.keys(typingUsers[room]).length === 0) delete typingUsers[room];
+        });
+        refreshHeaderStatus();
+    }, 5000);
+}
+
+// ---- Read receipts ----
+function markCurrentRoomAsRead() {
+    if (!ws || ws.readyState !== WebSocket.OPEN || !currentRoom) return;
+    if (!document.hasFocus || !document.hasFocus()) return;
+    ws.send(JSON.stringify({ action: 'read_messages', room: currentRoom }));
+}
+
+function applyReadReceipt(msg) {
+    // msg.msg_ids_per_sender: { senderUser: [msgIds...] }
+    if (!msg.msg_ids_per_sender) return;
+    if (msg.room !== currentRoom) return;
+    const myMsgs = msg.msg_ids_per_sender[currentUser] || [];
+    myMsgs.forEach(id => {
+        const el = document.getElementById('msg-' + id);
+        if (!el) return;
+        let ticks = el.querySelector('.msg-ticks');
+        if (!ticks) {
+            // No ticks yet (e.g. attached after history load) — try to add them
+            attachTicksToBubble(el, { readBy: ['someone'] });
+            ticks = el.querySelector('.msg-ticks');
+        }
+        if (ticks) {
+            ticks.classList.add('read');
+            ticks.innerHTML = '<svg viewBox="0 0 24 24"><path d="M.41 13.41L6 19l1.41-1.42L1.83 12 .41 13.41zM22.24 5.58L11.66 16.17 7.5 12l-1.41 1.41L11.66 19l12-12-1.42-1.42zM18 7l-1.41-1.42-6.35 6.35 1.42 1.41L18 7z"/></svg>';
+        }
+    });
+}
+
+// ---- Smart scroll ----
+function scrollMessagesToBottom(force = false) {
+    const box = document.getElementById('messages');
+    if (!box) return;
+    if (force || isNearBottom) {
+        box.scrollTop = box.scrollHeight;
+        unreadCount = 0;
+        updateScrollBottomBtn();
+    }
+}
+
+function updateScrollBottomBtn() {
+    const btn = document.getElementById('scrollBottomBtn');
+    if (!btn) return;
+    if (isNearBottom) {
+        btn.style.display = 'none';
+    } else {
+        btn.style.display = 'flex';
+        const dot = document.getElementById('unreadDot');
+        if (dot) {
+            if (unreadCount > 0) {
+                dot.style.display = 'flex';
+                dot.innerText = unreadCount > 99 ? '99+' : String(unreadCount);
+            } else {
+                dot.style.display = 'none';
+            }
+        }
+    }
+}
+
+function attachMessagesScrollListener() {
+    const box = document.getElementById('messages');
+    if (!box || box._scrollAttached) return;
+    box._scrollAttached = true;
+    box.addEventListener('scroll', () => {
+        const nearBottom = (box.scrollHeight - box.scrollTop - box.clientHeight) < 80;
+        isNearBottom = nearBottom;
+        if (nearBottom) {
+            unreadCount = 0;
+            markCurrentRoomAsRead();
+        }
+        updateScrollBottomBtn();
+    }, { passive: true });
+}
+
+// ---- Hook into existing message append ----
+// We patch by saving the original appendMessage and wrapping it
+const __origAppendMessage = (typeof appendMessage === 'function') ? appendMessage : null;
+if (__origAppendMessage) {
+    window.appendMessage = function(data) {
+        const wasNearBottom = isNearBottom;
+        __origAppendMessage(data);
+
+        // After appending, decide auto-scroll
+        if (data.user === currentUser) {
+            // My own message: always scroll
+            scrollMessagesToBottom(true);
+        } else if (wasNearBottom) {
+            scrollMessagesToBottom(true);
+            // Mark as read if focused
+            markCurrentRoomAsRead();
+        } else {
+            // I'm scrolled up; track unread
+            unreadCount++;
+            updateScrollBottomBtn();
+        }
+
+        // Add ticks to outgoing message bubble (post-render)
+        try {
+            const el = document.getElementById('msg-' + data.id);
+            if (el && data.user === currentUser) {
+                attachTicksToBubble(el, data);
+            }
+        } catch {}
+    };
+}
+
+function attachTicksToBubble(el, data) {
+    if (!el) return;
+    const bottomBar = el.querySelector('.msg-bottom-bar');
+    const bubble = el.querySelector('.bubble');
+    if (!bubble) return;
+    if (el.querySelector('.msg-ticks')) return;
+    const ticksSpan = document.createElement('span');
+    ticksSpan.className = 'msg-ticks';
+    const isRead = (data.readBy && data.readBy.length > 0);
+    if (isRead) ticksSpan.classList.add('read');
+    ticksSpan.innerHTML = isRead
+        ? '<svg viewBox="0 0 24 24"><path d="M.41 13.41L6 19l1.41-1.42L1.83 12 .41 13.41zM22.24 5.58L11.66 16.17 7.5 12l-1.41 1.41L11.66 19l12-12-1.42-1.42zM18 7l-1.41-1.42-6.35 6.35 1.42 1.41L18 7z"/></svg>'
+        : '<svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>';
+    if (bottomBar) bottomBar.appendChild(ticksSpan);
+    else bubble.appendChild(ticksSpan);
+}
+
+// ---- Enhance openChat: refresh header status when chat opens ----
+const __origOpenChat = (typeof openChat === 'function') ? openChat : null;
+if (__origOpenChat) {
+    window.openChat = function(roomId, type, title, targetUser = null) {
+        __origOpenChat(roomId, type, title, targetUser);
+        unreadCount = 0;
+        isNearBottom = true;
+        // Reset typing state for this room
+        typingUsers[currentRoom] = {};
+        setTimeout(() => {
+            attachMessagesScrollListener();
+            refreshHeaderStatus();
+            updateScrollBottomBtn();
+            // Mark history as read after a short delay
+            setTimeout(markCurrentRoomAsRead, 600);
+        }, 50);
+    };
+}
+
+// ---- Hook WS events for typing/presence/read_receipt ----
+const __origWsHook = window.__phase4WsHook || false;
+if (!__origWsHook) {
+    window.__phase4WsHook = true;
+    // Wrap WebSocket onmessage by intercepting initWebSocket
+    const __origInitWS = (typeof initWebSocket === 'function') ? initWebSocket : null;
+    if (__origInitWS) {
+        window.initWebSocket = function() {
+            __origInitWS();
+            // After ws is created, augment its onmessage
+            if (!ws) return;
+            const prevOnMessage = ws.onmessage;
+            ws.onmessage = async function(event) {
+                if (prevOnMessage) await prevOnMessage(event);
+                try {
+                    const m = JSON.parse(event.data);
+                    if (m.type === 'typing') handleTypingSignal(m);
+                    else if (m.type === 'presence') {
+                        onlineUsers = m.online || [];
+                        if (m.last_seen) lastSeenMap = m.last_seen;
+                        refreshHeaderStatus();
+                    }
+                    else if (m.type === 'read_receipt') {
+                        applyReadReceipt(m);
+                    }
+                    else if (m.type === 'history') {
+                        // Mark as read after history loads
+                        setTimeout(markCurrentRoomAsRead, 400);
+                    }
+                } catch {}
+            };
+        };
+    }
+}
+
+// ---- Hook into message input for typing notify ----
+function setupTypingHook() {
+    const inp = document.getElementById('msgInput');
+    if (!inp || inp._typingHooked) return;
+    inp._typingHooked = true;
+    inp.addEventListener('input', () => {
+        if (inp.value.length > 0) notifyTyping();
+    });
+}
+// Try to attach on DOMContentLoaded and on each openChat
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', setupTypingHook);
+} else {
+    setupTypingHook();
+}
+
+// ---- Mark as read when window regains focus ----
+window.addEventListener('focus', () => {
+    setTimeout(markCurrentRoomAsRead, 200);
+});
+document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+        setTimeout(markCurrentRoomAsRead, 200);
+    }
+});
+
+// ---- Periodic header refresh (for "last seen X min ago" updates) ----
+setInterval(refreshHeaderStatus, 30000);
+
+// ---- Swipe-to-reply on touch devices ----
+function setupSwipeReply() {
+    const messages = document.getElementById('messages');
+    if (!messages || messages._swipeHooked) return;
+    messages._swipeHooked = true;
+
+    let startX = 0, startY = 0, curBubble = null, dragging = false;
+
+    messages.addEventListener('touchstart', (e) => {
+        if (selectionMode) return;
+        const t = e.targetTouches[0];
+        startX = t.clientX; startY = t.clientY;
+        curBubble = e.target.closest('.bubble');
+        dragging = false;
+    }, { passive: true });
+
+    messages.addEventListener('touchmove', (e) => {
+        if (!curBubble || selectionMode) return;
+        const t = e.targetTouches[0];
+        const dx = t.clientX - startX;
+        const dy = t.clientY - startY;
+        // Horizontal drag dominates
+        if (!dragging && Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy)) dragging = true;
+        if (dragging) {
+            // Limit drag
+            const offset = Math.max(-80, Math.min(80, dx));
+            curBubble.style.transform = `translateX(${offset}px)`;
+            curBubble.style.transition = 'none';
+        }
+    }, { passive: true });
+
+    messages.addEventListener('touchend', () => {
+        if (!curBubble) return;
+        const transform = curBubble.style.transform;
+        const match = transform && transform.match(/-?\d+/);
+        const offset = match ? parseInt(match[0]) : 0;
+        curBubble.style.transition = 'transform 0.2s';
+        curBubble.style.transform = '';
+        // If swiped enough, trigger reply
+        if (Math.abs(offset) > 50) {
+            const wrapper = curBubble.parentElement;
+            if (wrapper && wrapper.id && wrapper.id.startsWith('msg-')) {
+                const id = wrapper.id.replace('msg-', '');
+                const textEl = curBubble.querySelector('.msg-text-content');
+                const text = textEl ? textEl.innerText : '';
+                const senderEl = wrapper.querySelector('.bubble-sender, .sender-name');
+                const sender = senderEl ? senderEl.innerText : (curBubble.classList.contains('bubble-me') ? currentUser : '');
+                if (typeof contextMsgId !== 'undefined') {
+                    contextMsgId = id; contextMsgText = text; contextMsgSender = sender;
+                    if (typeof doReply === 'function') doReply();
+                }
+            }
+        }
+        curBubble = null; dragging = false;
+    }, { passive: true });
+}
+// Run after openChat/setup
+setInterval(setupSwipeReply, 1500);
+
+// =====================================================================
+// PHASE 4 — Group management & message search
+// =====================================================================
+let currentGroupMembers = null;  // { members, owner, all_users }
+
+async function openGroupSettings() {
+    if (!currentRoom || !currentRoom.startsWith('rm_')) return;
+    document.getElementById('groupSettingsModal').style.display = 'flex';
+    await loadGroupMembers();
+}
+
+async function loadGroupMembers() {
+    const list = document.getElementById('group-members-list');
+    list.innerHTML = '<div style="padding:20px; text-align:center; color:var(--c-gray);">Loading...</div>';
+    try {
+        const res = await apiJson('/api/action', { action: 'get_room_members', room_id: currentRoom });
+        const data = await res.json();
+        if (!data.success) {
+            list.innerHTML = `<div style="padding:14px; color:var(--c-red);">${escapeHtml(data.msg||'Error')}</div>`;
+            return;
+        }
+        currentGroupMembers = data;
+        const owner = data.owner;
+        const isOwner = owner === currentUser;
+        const groupName = document.getElementById('room-title').innerText || 'Group';
+
+        document.getElementById('group-info-bar').innerHTML =
+            `<strong style="color:var(--c-white);">${escapeHtml(groupName)}</strong><br>${data.members.length} member${data.members.length===1?'':'s'} · Owner: <strong style="color:var(--c-white);">${escapeHtml(owner)}</strong>`;
+
+        // Add member section: only for owner
+        const addSection = document.getElementById('group-add-member');
+        if (isOwner) {
+            addSection.style.display = 'block';
+            const sel = document.getElementById('group-add-select');
+            const candidates = (data.all_users || []).filter(u => !data.members.includes(u));
+            sel.innerHTML = candidates.length
+                ? candidates.map(u => `<option value="${escapeAttr(u)}">${escapeHtml(u)}</option>`).join('')
+                : '<option value="">— No users to add —</option>';
+        } else {
+            addSection.style.display = 'none';
+        }
+
+        // Members list
+        list.innerHTML = data.members.map(m => {
+            const isMemOwner = m === owner;
+            const canRemove = isOwner && !isMemOwner;
+            return `
+            <div style="display:flex; justify-content:space-between; align-items:center; padding:12px 14px; background:var(--bg-input); border-radius:12px; margin-bottom:8px; border:1px solid var(--border);">
+                <div style="display:flex; align-items:center; gap:12px;">
+                    <div class="avatar" style="width:40px; height:40px; font-size:16px; background:${isMemOwner?'var(--c-orange)':'var(--c-blue)'};">${escapeHtml((m||'?').charAt(0).toUpperCase())}</div>
+                    <div>
+                        <div style="font-weight:600;">${escapeHtml(m)}${m===currentUser?' <span style="font-size:11px; color:var(--c-gray);">(you)</span>':''}</div>
+                        ${isMemOwner ? '<div style="font-size:11px; color:var(--c-orange); font-weight:600;">OWNER</div>' : (onlineUsers.includes(m) ? '<div style="font-size:11px; color:#4dcd5e;">● online</div>' : '<div style="font-size:11px; color:var(--c-gray);">offline</div>')}
+                    </div>
+                </div>
+                ${canRemove ? `<button onclick="removeGroupMember('${escapeAttr(m)}')" style="padding:6px 12px; background:transparent; color:var(--c-red); border:1px solid var(--c-red); border-radius:8px; cursor:pointer; font-size:12px;">Remove</button>` : ''}
+            </div>`;
+        }).join('');
+
+        // Owner danger zone vs member leave
+        document.getElementById('group-danger-zone').style.display = isOwner ? 'block' : 'none';
+        document.getElementById('group-leave-zone').style.display = isOwner ? 'none' : 'block';
+    } catch(e) {
+        list.innerHTML = `<div style="padding:14px; color:var(--c-red);">${escapeHtml(e.message)}</div>`;
+    }
+}
+
+async function addGroupMember() {
+    const sel = document.getElementById('group-add-select');
+    const target = sel.value;
+    if (!target) return;
+    const res = await apiJson('/api/action', { action: 'add_room_member', room_id: currentRoom, target });
+    const data = await res.json();
+    if (data.success) {
+        await loadGroupMembers();
+    } else {
+        alert(data.msg || 'Failed');
+    }
+}
+
+async function removeGroupMember(target) {
+    if (!confirm(`Remove "${target}" from the group?`)) return;
+    const res = await apiJson('/api/action', { action: 'remove_room_member', room_id: currentRoom, target });
+    const data = await res.json();
+    if (data.success) {
+        await loadGroupMembers();
+    } else {
+        alert(data.msg || 'Failed');
+    }
+}
+
+async function leaveCurrentGroup() {
+    if (!confirm('Are you sure you want to leave this group?')) return;
+    const res = await apiJson('/api/action', { action: 'remove_room_member', room_id: currentRoom, target: currentUser });
+    const data = await res.json();
+    if (data.success) {
+        closeModal('groupSettingsModal');
+        currentRoom = null;
+        targetUserForDM = null;
+        document.getElementById('sidebar').classList.remove('hidden');
+        if (typeof loadInitData === 'function') loadInitData();
+    } else {
+        alert(data.msg || 'Failed');
+    }
+}
+
+async function deleteCurrentGroup() {
+    if (!confirm('⚠️ This will permanently delete the group, all messages, and remove all members. Continue?')) return;
+    const res = await apiJson('/api/action', { action: 'delete_room', room_id: currentRoom });
+    const data = await res.json();
+    if (data.success) {
+        closeModal('groupSettingsModal');
+        currentRoom = null;
+        targetUserForDM = null;
+        document.getElementById('sidebar').classList.remove('hidden');
+        if (typeof loadInitData === 'function') loadInitData();
+    } else {
+        alert(data.msg || 'Failed');
+    }
+}
+
+// =====================================================================
+// Message Search
+// =====================================================================
+let searchDebounceTimer = null;
+
+function openSearchBar() {
+    if (!currentRoom) return;
+    const sb = document.getElementById('searchBar');
+    sb.style.display = 'flex';
+    const inp = document.getElementById('searchInput');
+    inp.value = '';
+    setTimeout(() => inp.focus(), 50);
+    document.getElementById('searchResults').style.display = 'none';
+    if (!inp._searchHooked) {
+        inp._searchHooked = true;
+        inp.addEventListener('input', handleSearchInput);
+        inp.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSearchBar(); });
+    }
+}
+
+function closeSearchBar() {
+    document.getElementById('searchBar').style.display = 'none';
+    document.getElementById('searchResults').style.display = 'none';
+    document.getElementById('searchInput').value = '';
+}
+
+function handleSearchInput() {
+    const q = document.getElementById('searchInput').value.trim();
+    if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+    if (q.length < 2) {
+        document.getElementById('searchResults').style.display = 'none';
+        return;
+    }
+    searchDebounceTimer = setTimeout(() => doSearch(q), 350);
+}
+
+async function doSearch(q) {
+    const box = document.getElementById('searchResults');
+    box.style.display = 'block';
+    box.innerHTML = '<div style="padding:24px; text-align:center; color:var(--c-gray);">Searching...</div>';
+    try {
+        const res = await apiJson('/api/action', { action: 'search_messages', room: currentRoom, q });
+        const data = await res.json();
+        if (!data.success && data.msg) {
+            box.innerHTML = `<div style="padding:14px; color:var(--c-red);">${escapeHtml(data.msg)}</div>`;
+            return;
+        }
+        const results = data.results || [];
+        if (!results.length) {
+            box.innerHTML = `<div style="padding:24px; text-align:center; color:var(--c-gray);">No messages found for "<strong>${escapeHtml(q)}</strong>"</div>`;
+            return;
+        }
+        const lower = q.toLowerCase();
+        box.innerHTML = `<div style="padding:8px 14px; font-size:12px; color:var(--c-gray); font-weight:600;">${results.length} result${results.length===1?'':'s'}</div>` + results.map(r => {
+            const text = r.text || '';
+            // Highlight match
+            const idx = text.toLowerCase().indexOf(lower);
+            let highlighted;
+            if (idx >= 0) {
+                highlighted = escapeHtml(text.substring(0, idx)) +
+                    '<mark style="background:var(--c-blue); color:white; padding:1px 3px; border-radius:3px;">' + escapeHtml(text.substring(idx, idx+q.length)) + '</mark>' +
+                    escapeHtml(text.substring(idx+q.length));
+            } else {
+                highlighted = escapeHtml(text);
+            }
+            return `
+            <div onclick="jumpToSearchResult('${escapeAttr(r.id)}')" style="padding:12px 14px; margin:4px 8px; background:var(--bg-input); border-radius:10px; cursor:pointer; border:1px solid var(--border);">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                    <strong style="color:var(--c-blue); font-size:13px;">${escapeHtml(r.user)}</strong>
+                    <span style="font-size:11px; color:var(--c-gray);">${escapeHtml(formatSearchTimestamp(r.timestamp))}</span>
+                </div>
+                <div style="font-size:13px; color:var(--c-text, var(--c-white)); line-height:1.5; word-break:break-word;">${highlighted}</div>
+            </div>`;
+        }).join('');
+    } catch(e) {
+        box.innerHTML = `<div style="padding:14px; color:var(--c-red);">${escapeHtml(e.message)}</div>`;
+    }
+}
+
+function formatSearchTimestamp(iso) {
+    try {
+        const d = new Date(iso.replace(' ', 'T') + 'Z');
+        const now = new Date();
+        const sameDay = d.toDateString() === now.toDateString();
+        if (sameDay) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        return d.toLocaleDateString();
+    } catch { return ''; }
+}
+
+function jumpToSearchResult(msgId) {
+    closeSearchBar();
+    setTimeout(() => {
+        const el = document.getElementById('msg-' + msgId);
+        if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            const bubble = el.querySelector('.bubble');
+            if (bubble) {
+                bubble.style.transition = 'box-shadow 0.5s';
+                bubble.style.boxShadow = '0 0 0 3px var(--c-blue)';
+                setTimeout(() => { bubble.style.boxShadow = ''; }, 1800);
+            }
+        }
+    }, 100);
+}
+
+// =====================================================================
+// Phase 4 — i18n additions (best-effort, only used if translations object exists)
+// =====================================================================
+try {
+    if (typeof translations === 'object') {
+        Object.assign(translations.en || {}, {
+            online: 'online', offline: 'offline', typing: 'typing',
+            search_msgs_ph: 'Search messages...', no_results: 'No messages found',
+            group_members: 'Group Members', add_member: 'Add Member', leave_group: 'Leave Group', delete_group: 'Delete Group',
+        });
+        Object.assign(translations.fa || {}, {
+            online: 'آنلاین', offline: 'آفلاین', typing: 'در حال تایپ',
+            search_msgs_ph: 'جستجو در پیام‌ها...', no_results: 'پیامی یافت نشد',
+            group_members: 'اعضای گروه', add_member: 'افزودن عضو', leave_group: 'خروج از گروه', delete_group: 'حذف گروه',
+        });
+    }
+} catch {}
