@@ -55,13 +55,17 @@ function install_app() {
         curl -sL "$REPO_URL/main.py" -o "$INSTALL_DIR/main.py"
         curl -sL "$REPO_URL/templates/index.html" -o "$INSTALL_DIR/templates/index.html"
         curl -sL "$REPO_URL/static/script.js" -o "$INSTALL_DIR/static/script.js"
+        curl -sL "$REPO_URL/static/service-worker.js" -o "$INSTALL_DIR/static/service-worker.js"
+        curl -sL "$REPO_URL/static/manifest.json" -o "$INSTALL_DIR/static/manifest.json"
+        curl -sL "$REPO_URL/static/icon-192.png" -o "$INSTALL_DIR/static/icon-192.png"
+        curl -sL "$REPO_URL/static/icon-512.png" -o "$INSTALL_DIR/static/icon-512.png"
         curl -sL "$REPO_URL/install.sh" -o "$INSTALL_DIR/install.sh"
     fi
     
     cd $INSTALL_DIR
 
     echo "APP_PORT=$APP_PORT" > $ENV_FILE
-    echo "$ADMIN_USER:$ADMIN_PASS:admin" > $USERS_FILE
+    echo "$ADMIN_USER:$ADMIN_PASS:admin:5000" > $USERS_FILE
 
     echo -e "${CYAN}Setting up Python Environment (FastAPI)...${RESET}"
     python3 -m venv venv
@@ -100,12 +104,16 @@ function update_app() {
     curl -sL "$REPO_URL/main.py" -o "$INSTALL_DIR/main.py"
     curl -sL "$REPO_URL/templates/index.html" -o "$INSTALL_DIR/templates/index.html"
     curl -sL "$REPO_URL/static/script.js" -o "$INSTALL_DIR/static/script.js"
+    curl -sL "$REPO_URL/static/service-worker.js" -o "$INSTALL_DIR/static/service-worker.js"
+    curl -sL "$REPO_URL/static/manifest.json" -o "$INSTALL_DIR/static/manifest.json"
+    curl -sL "$REPO_URL/static/icon-192.png" -o "$INSTALL_DIR/static/icon-192.png"
+    curl -sL "$REPO_URL/static/icon-512.png" -o "$INSTALL_DIR/static/icon-512.png"
     curl -sL "$REPO_URL/install.sh" -o "$INSTALL_DIR/install.sh"
     chmod +x "$INSTALL_DIR/install.sh"
     
-    # [حل باگ بزرگ کش مرورگر]: اضافه کردن مُهر زمانی به فایل JS تا مرورگرها فایل جدید را بگیرند
+    # Cache-bust by adding timestamp to script.js reference in index.html
     TIMESTAMP=$(date +%s)
-    sed -i "s/script.js/script.js?v=$TIMESTAMP/g" "$INSTALL_DIR/templates/index.html"
+    sed -i "s|/static/script.js[^\"']*|/static/script.js?v=$TIMESTAMP|g" "$INSTALL_DIR/templates/index.html"
     
     if systemctl is-active --quiet $SERVICE_NAME; then
         systemctl restart $SERVICE_NAME
@@ -124,14 +132,17 @@ function add_user() {
     read -e -p "Enter Role (admin/user) [Default: user]: " NEW_ROLE
     NEW_ROLE=${NEW_ROLE:-user}
 
-    echo "$NEW_USER:$NEW_PASS:$NEW_ROLE" >> $USERS_FILE
-    echo -e "${GREEN}[✔] User '$NEW_USER' added!${RESET}"
+    read -e -p "Enter Quota in MB [Default: 500]: " NEW_QUOTA
+    NEW_QUOTA=${NEW_QUOTA:-500}
+
+    echo "$NEW_USER:$NEW_PASS:$NEW_ROLE:$NEW_QUOTA" >> $USERS_FILE
+    echo -e "${GREEN}[✔] User '$NEW_USER' added with ${NEW_QUOTA}MB quota!${RESET}"
 }
 
 function delete_user() {
     if [ ! -f "$USERS_FILE" ]; then echo -e "${RED}No users file found!${RESET}"; return; fi
     echo -e "${YELLOW}--- Current Users ---${RESET}"
-    cat $USERS_FILE | awk -F':' '{print "- "$1" ("$3")"}'
+    cat $USERS_FILE | awk -F':' '{q = ($4=="" ? "500" : $4); print "- "$1" (role: "$3", quota: "q"MB)"}'
     echo -e "---------------------"
     read -e -p "Enter Username to delete: " DEL_USER
     
@@ -216,6 +227,148 @@ EOF
     echo -e "${GREEN}[✔] Manual SSL Setup successfully applied!${RESET}"
 }
 
+function setup_turn() {
+    if [ ! -f "$ENV_FILE" ]; then echo -e "${RED}Not installed!${RESET}"; return; fi
+    source $ENV_FILE
+
+    echo -e "${WHITE}--- 🎙️  Setup coturn (TURN/STUN Server) ---${RESET}"
+    echo -e "${CYAN}This is required for voice/video calls between users on different networks.${RESET}"
+    echo ""
+
+    # Auto-detect public IP
+    PUB_IP=$(curl -s4 -m 5 ifconfig.me 2>/dev/null || curl -s4 -m 5 icanhazip.com 2>/dev/null || echo "")
+    echo -e "Detected public IP: ${YELLOW}${PUB_IP:-(could not auto-detect)}${RESET}"
+    read -e -p "Public IP for TURN server [Default: $PUB_IP]: " TURN_IP
+    TURN_IP=${TURN_IP:-$PUB_IP}
+    if [ -z "$TURN_IP" ]; then echo -e "${RED}Public IP is required!${RESET}"; return; fi
+
+    read -e -p "TURN listening port [Default: 3478]: " TURN_PORT
+    TURN_PORT=${TURN_PORT:-3478}
+    read -e -p "TURN TLS port [Default: 5349]: " TURN_TLS_PORT
+    TURN_TLS_PORT=${TURN_TLS_PORT:-5349}
+
+    # Generate random user/password
+    TURN_USER="bcuser_$(tr -dc 'a-z0-9' </dev/urandom | head -c6)"
+    TURN_PASS="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c24)"
+
+    REALM="${DOMAIN:-blackchat.local}"
+
+    echo -e "${CYAN}Installing coturn...${RESET}"
+    DEBIAN_FRONTEND=noninteractive apt update -qq
+    DEBIAN_FRONTEND=noninteractive apt install -y coturn
+
+    # Enable
+    sed -i 's/^#TURNSERVER_ENABLED=1/TURNSERVER_ENABLED=1/' /etc/default/coturn
+    grep -q '^TURNSERVER_ENABLED=1' /etc/default/coturn || echo 'TURNSERVER_ENABLED=1' >> /etc/default/coturn
+
+    # Backup old config if exists
+    if [ -f /etc/turnserver.conf ] && [ ! -f /etc/turnserver.conf.bak ]; then
+        cp /etc/turnserver.conf /etc/turnserver.conf.bak
+    fi
+
+    cat <<EOF > /etc/turnserver.conf
+# Black Chat coturn configuration
+listening-port=$TURN_PORT
+tls-listening-port=$TURN_TLS_PORT
+listening-ip=0.0.0.0
+external-ip=$TURN_IP
+relay-ip=$TURN_IP
+
+fingerprint
+lt-cred-mech
+realm=$REALM
+user=$TURN_USER:$TURN_PASS
+total-quota=100
+stale-nonce=600
+
+no-stdout-log
+log-file=/var/log/turnserver.log
+syslog
+no-loopback-peers
+no-multicast-peers
+
+# UDP relay range (open these ports in firewall)
+min-port=49152
+max-port=65535
+
+# Security
+no-cli
+EOF
+
+    # Open firewall ports if ufw is active
+    if command -v ufw >/dev/null 2>&1 && ufw status | grep -q "Status: active"; then
+        echo -e "${CYAN}Opening firewall ports...${RESET}"
+        ufw allow $TURN_PORT/tcp >/dev/null 2>&1
+        ufw allow $TURN_PORT/udp >/dev/null 2>&1
+        ufw allow $TURN_TLS_PORT/tcp >/dev/null 2>&1
+        ufw allow $TURN_TLS_PORT/udp >/dev/null 2>&1
+        ufw allow 49152:65535/udp >/dev/null 2>&1
+    fi
+
+    systemctl enable coturn >/dev/null 2>&1
+    systemctl restart coturn
+
+    sleep 2
+    if systemctl is-active --quiet coturn; then
+        echo -e "${GREEN}[✔] coturn is running!${RESET}"
+    else
+        echo -e "${RED}[!] coturn failed to start. Check 'systemctl status coturn' and /var/log/turnserver.log${RESET}"
+    fi
+
+    # Save credentials to .env (replace existing TURN_* lines)
+    sed -i '/^TURN_/d' $ENV_FILE
+    cat <<EOF >> $ENV_FILE
+TURN_HOST=$TURN_IP
+TURN_PORT=$TURN_PORT
+TURN_TLS_PORT=$TURN_TLS_PORT
+TURN_USER=$TURN_USER
+TURN_PASS=$TURN_PASS
+TURN_REALM=$REALM
+EOF
+    chmod 600 $ENV_FILE
+
+    # Restart Black Chat so it picks up the new env
+    if systemctl is-active --quiet $SERVICE_NAME; then
+        systemctl restart $SERVICE_NAME
+    fi
+
+    echo ""
+    echo -e "${GREEN}=========================================${RESET}"
+    echo -e "${GREEN} TURN credentials saved to $ENV_FILE${RESET}"
+    echo -e "${GREEN}=========================================${RESET}"
+    echo -e "Host:        ${YELLOW}$TURN_IP${RESET}"
+    echo -e "TURN port:   ${YELLOW}$TURN_PORT${RESET}  (TCP+UDP)"
+    echo -e "TLS port:    ${YELLOW}$TURN_TLS_PORT${RESET}"
+    echo -e "Username:    ${YELLOW}$TURN_USER${RESET}"
+    echo -e "Password:    ${YELLOW}$TURN_PASS${RESET}"
+    echo -e "Realm:       ${YELLOW}$REALM${RESET}"
+    echo -e "${GREEN}=========================================${RESET}"
+    echo -e "${CYAN}Important: Open these ports on your cloud firewall:${RESET}"
+    echo -e "  - $TURN_PORT/tcp, $TURN_PORT/udp"
+    echo -e "  - $TURN_TLS_PORT/tcp, $TURN_TLS_PORT/udp"
+    echo -e "  - 49152-65535/udp (relay range)"
+    echo ""
+}
+
+function turn_status() {
+    if [ ! -f "$ENV_FILE" ]; then echo -e "${RED}Not installed!${RESET}"; return; fi
+    source $ENV_FILE
+    echo -e "${WHITE}--- 🎙️  TURN Server Status ---${RESET}"
+    if systemctl is-active --quiet coturn; then
+        echo -e "Service: ${GREEN}▶ RUNNING${RESET}"
+    else
+        echo -e "Service: ${RED}🛑 STOPPED${RESET}"
+    fi
+    echo -e "Host:    ${YELLOW}${TURN_HOST:-not configured}${RESET}"
+    echo -e "Port:    ${YELLOW}${TURN_PORT:-not configured}${RESET}"
+    echo -e "User:    ${YELLOW}${TURN_USER:-not configured}${RESET}"
+    echo ""
+    echo -e "${CYAN}Recent log lines:${RESET}"
+    tail -n 10 /var/log/turnserver.log 2>/dev/null || echo "(no log)"
+    echo ""
+    read -p "Press Enter to return..."
+}
+
 function uninstall_app() {
     echo -e "${RED}⚠️ WARNING: This will delete the App, Database, and Chat Nginx block.${RESET}"
     echo -e "${CYAN}Don't worry! Your global Nginx installation and other server files are SAFE.${RESET}"
@@ -262,10 +415,12 @@ while true; do
     echo -e " ${YELLOW}7)${RESET} 🔐 Setup Nginx & Auto SSL (Certbot)"
     echo -e " ${YELLOW}8)${RESET} 🔐 Setup Nginx & Manual SSL"
     echo -e " ${YELLOW}9)${RESET} 🔑 Show Users & Info"
-    echo -e "${RED}10)${RESET} ☢️  Safe Uninstall (App Only)"
+    echo -e "${YELLOW}10)${RESET} 🎙️  Setup TURN Server (coturn) - for voice/video"
+    echo -e "${YELLOW}11)${RESET} 📡 TURN Status / Logs"
+    echo -e "${RED}12)${RESET} ☢️  Safe Uninstall (App Only)"
     echo -e "  ${RED}0)${RESET} ❌ Exit"
     echo -e "${GREEN}-----------------------------------------${RESET}"
-    read -e -p "Choose an option (0-10): " choice
+    read -e -p "Choose an option (0-12): " choice
 
     case $choice in
         1) install_app ; sleep 2 ;;
@@ -278,11 +433,13 @@ while true; do
         8) setup_ssl_manual ; sleep 2 ;;
         9) 
            echo -e "\n${CYAN}--- Registered Users ---${RESET}"
-           if [ -f "$USERS_FILE" ]; then cat $USERS_FILE | awk -F':' '{print "User: "$1" | Role: "$3}'; else echo "No users found."; fi
+           if [ -f "$USERS_FILE" ]; then cat $USERS_FILE | awk -F':' '{q = ($4=="" ? "500" : $4); print "User: "$1" | Role: "$3" | Quota: "q"MB"}'; else echo "No users found."; fi
            echo ""
            read -p "Press Enter to return..." 
            ;;
-        10) uninstall_app ; sleep 2 ;;
+        10) setup_turn ; sleep 2 ;;
+        11) turn_status ;;
+        12) uninstall_app ; sleep 2 ;;
         0) clear; exit 0 ;;
         *) echo -e "${RED}Invalid option!${RESET}" ; sleep 1 ;;
     esac
