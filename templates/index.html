@@ -2,41 +2,62 @@
 <html lang="fa" dir="rtl" data-theme="dark">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <meta name="theme-color" content="#0a0a0a">
-    <title>Black Chat | V 1.0.0</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#17212b" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="mobile-web-app-capable" content="yes">
+    <link rel="manifest" href="/static/manifest.json">
+    <link rel="apple-touch-icon" href="/static/icon-192.png">
+    <title>Black Chat</title>
     <style>
         :root {
-            --bg-base: #0a0a0a;       
-            --bg-panel: rgba(30, 30, 30, 0.6);      
-            --bg-input: rgba(0, 0, 0, 0.4);      
-            --border: rgba(255, 255, 255, 0.1);
-            --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
-            
-            --c-blue: #3b82f6;        
-            --c-blue-glow: rgba(59, 130, 246, 0.4);
-            --c-red: #ef4444;         
-            --c-red-glow: rgba(239, 68, 68, 0.4);
-            --c-orange: #f97316;      
-            --c-white: #f8fafc;
-            --c-gray: #94a3b8;
-            
-            --bubble-me: #3b82f6;
-            --bubble-other: rgba(255, 255, 255, 0.05);
+            /* Telegram-inspired dark + glassmorphism */
+            --bg-base: #0e1621;
+            --bg-panel: rgba(23, 33, 43, 0.72);
+            --bg-panel-solid: #17212b;
+            --bg-input: rgba(36, 47, 61, 0.65);
+            --bg-hover: rgba(255, 255, 255, 0.04);
+            --border: rgba(255, 255, 255, 0.08);
+            --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.45);
+
+            --c-blue: #3390ec;
+            --c-blue-hover: #4ea4f0;
+            --c-blue-glow: rgba(51, 144, 236, 0.35);
+            --c-red: #e53935;
+            --c-red-glow: rgba(229, 57, 53, 0.4);
+            --c-green: #4fae4e;
+            --c-orange: #f59f00;
+            --c-white: #ffffff;
+            --c-text: #f5f5f5;
+            --c-gray: #708499;
+            --c-gray-strong: #aab8c5;
+
+            --bubble-me: #3390ec;
+            --bubble-me-text: #ffffff;
+            --bubble-other: rgba(33, 47, 61, 0.92);
+            --bubble-other-text: #ffffff;
         }
 
         [data-theme="light"] {
-            --bg-base: #f8fafc; 
-            --bg-panel: rgba(255, 255, 255, 0.8); 
-            --bg-input: rgba(255, 255, 255, 0.9); 
-            --border: rgba(0, 0, 0, 0.1);
-            --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.05);
-            
-            --c-white: #0f172a; 
-            --c-gray: #475569; 
-            --bubble-me: #3b82f6; 
+            --bg-base: #f4f4f5;
+            --bg-panel: rgba(255, 255, 255, 0.85);
+            --bg-panel-solid: #ffffff;
+            --bg-input: rgba(0, 0, 0, 0.04);
+            --bg-hover: rgba(0, 0, 0, 0.04);
+            --border: rgba(0, 0, 0, 0.08);
+            --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.06);
+
+            --c-white: #0f172a;
+            --c-text: #0f172a;
+            --c-gray: #707991;
+            --c-gray-strong: #4a5567;
+
+            --bubble-me: #effdde;
+            --bubble-me-text: #0f172a;
             --bubble-other: #ffffff;
+            --bubble-other-text: #0f172a;
         }
 
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; outline: none; -webkit-tap-highlight-color: transparent;}
@@ -262,15 +283,158 @@
         .btn-confirm { background: var(--c-blue); color: #fff; box-shadow: 0 4px 15px var(--c-blue-glow);}
         .btn-confirm:hover { background: var(--c-blue-hover); transform: translateY(-2px);}
 
+        /* ============== PHASE 2: textarea + iOS fixes + reply bar polish ============== */
+        textarea#msgInput {
+            flex: 1;
+            background: transparent;
+            border: none;
+            color: var(--c-text);
+            font-size: 16px; /* min 16px on iOS prevents zoom on focus */
+            padding: 12px 8px;
+            min-width: 0;
+            resize: none;
+            overflow-y: auto;
+            max-height: 140px;     /* ~6 lines before scroll */
+            line-height: 1.4;
+            font-family: inherit;
+            outline: none;
+        }
+        textarea#msgInput::-webkit-scrollbar { width: 4px; }
+        textarea#msgInput::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+        .input-box { align-items: flex-end; }      /* keep send button bottom-aligned when textarea grows */
+        .input-area-row { align-items: flex-end; }
+
+        .reply-close-btn {
+            position: absolute; top: 6px; right: 6px;
+            background: transparent; border: none; color: var(--c-gray);
+            width: 28px; height: 28px; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer; transition: 0.2s;
+        }
+        .reply-close-btn:hover { background: var(--bg-input); color: var(--c-white); }
+        [dir="rtl"] .reply-close-btn { right: auto; left: 6px; }
+
+        .rec-controls {
+            flex: 1; background: var(--bg-input); border-radius: 24px;
+            border: 1px solid var(--border); align-items: center;
+            justify-content: space-between; padding: 0 8px; min-height: 50px;
+        }
+        .rec-timer { color: var(--c-red); font-weight: bold; font-family: monospace; font-size: 16px; }
+
+        /* ============== Telegram-style avatar gradients (auto by initial) ============== */
+        .avatar-color-1 { background: linear-gradient(135deg, #ff885e, #ff516a); }
+        .avatar-color-2 { background: linear-gradient(135deg, #ffcd6a, #ffa85c); }
+        .avatar-color-3 { background: linear-gradient(135deg, #82b1ff, #665fff); }
+        .avatar-color-4 { background: linear-gradient(135deg, #a0de7e, #54cb68); }
+        .avatar-color-5 { background: linear-gradient(135deg, #53edd6, #28c9b7); }
+        .avatar-color-6 { background: linear-gradient(135deg, #72d5fd, #2a9ef1); }
+        .avatar-color-7 { background: linear-gradient(135deg, #e0a2f3, #d669ed); }
+
+        /* ============== Bubble polish (Telegram-like) ============== */
+        .bubble { box-shadow: 0 1px 2px rgba(0,0,0,0.15); }
+        .msg-row.in .bubble { color: var(--bubble-other-text); }
+        .msg-row.out .bubble { color: var(--bubble-me-text); border-color: transparent; }
+        [data-theme="light"] .msg-row.in .bubble { box-shadow: 0 1px 2px rgba(0,0,0,0.05); border-color: rgba(0,0,0,0.04); }
+        [data-theme="light"] .msg-row.out .bubble { background: var(--bubble-me); color: #0f172a; }
+
+        /* ============== Sidebar mobile slide ============== */
+        .sidebar { transform: translateX(0); will-change: transform; }
+
+        /* ============== Online green dot on avatar ============== */
+        .avatar-wrap { position: relative; display: inline-block; flex-shrink: 0; }
+        .online-dot {
+            position: absolute; bottom: 2px; right: 2px;
+            width: 12px; height: 12px; background: var(--c-green);
+            border: 2px solid var(--bg-panel-solid); border-radius: 50%;
+            box-shadow: 0 0 6px rgba(79,174,78,0.6);
+        }
+
+        /* ============== iOS safe-area + dvh fix ============== */
+        body { height: 100dvh; min-height: -webkit-fill-available; }
+
+        /* ============== Mobile responsive (rewritten) ============== */
         @media (max-width: 768px) {
-            .sidebar { position: absolute; top:0; right:0; width: 100%; height: 100%; z-index: 50; }
+            .sidebar { position: absolute; top: 0; right: 0; width: 100%; height: 100%; z-index: 50; transform: translateX(0); }
             .sidebar.hidden { transform: translateX(100%); }
+            [dir="ltr"] .sidebar { right: auto; left: 0; }
+            [dir="ltr"] .sidebar.hidden { transform: translateX(-100%); }
+
             .back-btn { display: flex !important; }
-            .messages { padding: 15px; }
-            .bubble { max-width: 95%; }
-            #videoPreview { width: 160px; height: 160px; bottom: 85px; right: 10px;}
+            .messages { padding: 12px 10px; gap: 8px; }
+            .bubble { max-width: 85%; font-size: 15px; }
+            #videoPreview { width: 140px; height: 140px; bottom: 80px; right: 10px; }
             [dir="rtl"] #videoPreview { left: 10px; right: auto; }
-            .context-menu { width: 90%; left: 5% !important; right: auto !important; bottom: 100px; top: auto !important; }
+
+            .context-menu {
+                position: fixed !important;
+                bottom: 16px !important;
+                top: auto !important;
+                left: 8px !important;
+                right: 8px !important;
+                width: auto !important;
+                max-width: none;
+            }
+
+            .chat-header { padding: 0 12px; gap: 10px; height: 60px; }
+            .sidebar-header { padding: 10px 8px; gap: 6px; height: 60px; }
+            .icon-btn { width: 38px; height: 38px; }
+            .new-chat-btn { width: 38px; height: 38px; }
+
+            .input-wrapper-container { padding: 8px 10px; padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+            .input-area-row { gap: 6px; }
+            .action-btn { width: 42px; height: 42px; }
+
+            /* Modal full-bleed on mobile */
+            .modal-box { max-width: 100% !important; width: 100% !important; max-height: 90vh; border-radius: 18px 18px 0 0 !important; margin: 0; padding: 22px 18px; }
+            .modal-overlay { align-items: flex-end !important; }
+        }
+
+        @media (max-width: 380px) {
+            .action-btn { width: 38px; height: 38px; }
+            .input-area-row { gap: 4px; }
+            textarea#msgInput { font-size: 16px; padding: 10px 6px; }
+        }
+
+        /* ============== Scrollbar styling ============== */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 8px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+
+        /* ============== Typing indicator ============== */
+        .typing-bar {
+            font-size: 13px; color: var(--c-blue); font-style: italic;
+            padding: 4px 12px; min-height: 18px; transition: opacity 0.2s;
+        }
+        .typing-dots-container {
+            display: inline-flex; gap: 3px; align-items: center; margin-left: 4px;
+        }
+        .typing-dots-container .dot {
+            width: 5px; height: 5px; border-radius: 50%; background: currentColor;
+            animation: typingBounce 1.2s infinite;
+        }
+        .typing-dots-container .dot:nth-child(2) { animation-delay: 0.2s; }
+        .typing-dots-container .dot:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes typingBounce {
+            0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+            30% { transform: translateY(-3px); opacity: 1; }
+        }
+
+        /* ============== Read receipts (ticks) ============== */
+        .msg-ticks {
+            display: inline-flex; align-items: center; vertical-align: middle;
+            margin-left: 4px; opacity: 0.85;
+        }
+        .msg-ticks svg { width: 14px; height: 14px; fill: currentColor; }
+        .msg-row.out .msg-ticks { color: rgba(255,255,255,0.7); }
+        .msg-row.out .msg-ticks.read { color: #4fc3f7; }
+        .msg-row.in .msg-ticks { display: none; } /* never show on incoming */
+
+        .msg-meta {
+            display: inline-flex; align-items: center;
+            font-size: 10px; opacity: 0.7;
+            margin-left: 6px; white-space: nowrap;
         }
     </style>
 </head>
@@ -291,6 +455,15 @@
         <symbol id="icon-check" viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></symbol>
         <symbol id="icon-trash" viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></symbol>
         <symbol id="icon-edit" viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></symbol>
+        <symbol id="icon-menu" viewBox="0 0 24 24"><path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/></symbol>
+        <symbol id="icon-settings" viewBox="0 0 24 24"><path d="M19.43 12.98c.04-.32.07-.64.07-.98 0-.34-.03-.66-.07-.98l2.11-1.65c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.3-.61-.22l-2.49 1c-.52-.4-1.08-.73-1.69-.98l-.38-2.65C14.46 2.18 14.25 2 14 2h-4c-.25 0-.46.18-.49.42l-.38 2.65c-.61.25-1.17.59-1.69.98l-2.49-1c-.23-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64l2.11 1.65c-.04.32-.07.65-.07.98 0 .33.03.66.07.98l-2.11 1.65c-.19.15-.24.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65c.03.24.24.42.49.42h4c.25 0 .46-.18.49-.42l.38-2.65c.61-.25 1.17-.59 1.69-.98l2.49 1c.23.09.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.65zM12 15.5c-1.93 0-3.5-1.57-3.5-3.5s1.57-3.5 3.5-3.5 3.5 1.57 3.5 3.5-1.57 3.5-3.5 3.5z"/></symbol>
+        <symbol id="icon-moon" viewBox="0 0 24 24"><path d="M12.3 4.9c.4-.2.4-.8 0-1-1-.4-2.1-.6-3.3-.6-5 0-9 4-9 9s4 9 9 9c4.5 0 8.2-3.3 8.9-7.6.1-.5-.5-.8-.9-.5-1 .7-2.2 1.1-3.5 1.1-3.3 0-6-2.7-6-6 0-1.7.7-3.2 1.8-4.4z"/></symbol>
+        <symbol id="icon-sun" viewBox="0 0 24 24"><path d="M12 7c-2.76 0-5 2.24-5 5s2.24 5 5 5 5-2.24 5-5-2.24-5-5-5zM2 13h2c.55 0 1-.45 1-1s-.45-1-1-1H2c-.55 0-1 .45-1 1s.45 1 1 1zm18 0h2c.55 0 1-.45 1-1s-.45-1-1-1h-2c-.55 0-1 .45-1 1s.45 1 1 1zM11 2v2c0 .55.45 1 1 1s1-.45 1-1V2c0-.55-.45-1-1-1s-1 .45-1 1zm0 18v2c0 .55.45 1 1 1s1-.45 1-1v-2c0-.55-.45-1-1-1s-1 .45-1 1zM5.99 4.58c-.39-.39-1.03-.39-1.41 0-.39.39-.39 1.03 0 1.41l1.06 1.06c.39.39 1.03.39 1.41 0s.39-1.03 0-1.41L5.99 4.58zm12.37 12.37c-.39-.39-1.03-.39-1.41 0-.39.39-.39 1.03 0 1.41l1.06 1.06c.39.39 1.03.39 1.41 0 .39-.39.39-1.03 0-1.41l-1.06-1.06zm1.06-10.96c.39-.39.39-1.03 0-1.41-.39-.39-1.03-.39-1.41 0l-1.06 1.06c-.39.39-.39 1.03 0 1.41s1.03.39 1.41 0l1.06-1.06zM7.05 18.36c.39-.39.39-1.03 0-1.41-.39-.39-1.03-.39-1.41 0l-1.06 1.06c-.39.39-.39 1.03 0 1.41s1.03.39 1.41 0l1.06-1.06z"/></symbol>
+        <symbol id="icon-pencil" viewBox="0 0 24 24"><path d="M12 17h-1.41l5.04-5.04 1.41 1.41L12.41 17zm7.85-7.85l-1.41 1.41-1.41-1.41 1.41-1.41 1.41 1.41zM3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25z"/></symbol>
+        <symbol id="icon-emoji" viewBox="0 0 24 24"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm3.5-9c.83 0 1.5-.67 1.5-1.5S16.33 8 15.5 8 14 8.67 14 9.5s.67 1.5 1.5 1.5zm-7 0c.83 0 1.5-.67 1.5-1.5S9.33 8 8.5 8 7 8.67 7 9.5 7.67 11 8.5 11zm3.5 6.5c2.33 0 4.31-1.46 5.11-3.5H6.89c.8 2.04 2.78 3.5 5.11 3.5z"/></symbol>
+        <symbol id="icon-close" viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></symbol>
+        <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></symbol>
+        <symbol id="icon-checkmark-double" viewBox="0 0 24 24"><path d="M.41 13.41L6 19l1.41-1.42L1.83 12 .41 13.41zM22.24 5.58L11.66 16.17 7.5 12l-1.41 1.41L11.66 19l12-12-1.42-1.42zM18 7l-1.41-1.42-6.35 6.35 1.42 1.41L18 7z"/></symbol>
     </svg>
 
     <div id="login-wrapper">
@@ -309,12 +482,13 @@
     <div id="app">
         <div class="sidebar glass-box" id="sidebar">
             <div class="sidebar-header">
-                <button class="icon-btn" onclick="openModal('settingsModal')" title="Settings">⚙️</button>
-                <button class="icon-btn" onclick="toggleTheme()" title="Theme">🌓</button>
+                <button class="icon-btn" onclick="openModal('settingsModal')" title="Settings"><svg style="width:22px;fill:currentColor;"><use href="#icon-menu"></use></svg></button>
+                <button class="icon-btn" onclick="toggleTheme()" title="Theme" id="themeBtn"><svg style="width:22px;fill:currentColor;"><use href="#icon-moon"></use></svg></button>
                 <div class="search-box">
-                    <input type="text" id="searchInput" placeholder="Search..." onkeyup="searchChat()">
+                    <svg style="width:18px;height:18px;fill:var(--c-gray);flex-shrink:0;"><use href="#icon-search"></use></svg>
+                    <input type="text" id="sidebarSearchInput" placeholder="Search" data-i18n-ph="search_ph" onkeyup="searchChat()">
                 </div>
-                <button class="new-chat-btn" onclick="openCreateModal()" title="New Chat">➕</button>
+                <button class="new-chat-btn" onclick="openCreateModal()" title="New Chat"><svg style="width:22px;fill:currentColor;"><use href="#icon-plus"></use></svg></button>
             </div>
             <div class="chat-list" id="chat-list"></div>
         </div>
@@ -327,10 +501,25 @@
                     <h3 id="room-title" style="font-size:16px; font-weight:700;"></h3>
                     <span id="room-status" style="font-size:13px; color:var(--c-blue);"></span>
                 </div>
-                <button class="icon-btn" id="callBtn" onclick="startCall(); event.stopPropagation();" style="display:none; color:var(--c-blue);"><svg style="width:24px;fill:currentColor;"><use href="#icon-call"></use></svg></button>
+                <button class="icon-btn" id="searchMsgBtn" onclick="openSearchBar(); event.stopPropagation();" title="Search in chat"><svg style="width:22px;fill:currentColor;"><use href="#icon-search"></use></svg></button>
+                <button class="icon-btn" id="videoCallBtn" onclick="startVideoCall(); event.stopPropagation();" style="display:none; color:var(--c-blue);" title="Video call"><svg style="width:24px;fill:currentColor;"><use href="#icon-cam"></use></svg></button>
+                <button class="icon-btn" id="callBtn" onclick="startCall(); event.stopPropagation();" style="display:none; color:var(--c-blue);" title="Voice call"><svg style="width:24px;fill:currentColor;"><use href="#icon-call"></use></svg></button>
+                <button class="icon-btn" id="groupSettingsBtn" onclick="openGroupSettings(); event.stopPropagation();" style="display:none;" title="Group members"><svg style="width:22px;fill:currentColor;" viewBox="0 0 24 24"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg></button>
             </div>
+
+            <!-- Search bar (slides in when opened) -->
+            <div id="searchBar" style="display:none; padding:10px 14px; background:var(--bg-panel); border-bottom:1px solid var(--border); gap:10px; align-items:center;">
+                <input id="searchInput" type="text" placeholder="Search messages..." style="flex:1; padding:10px 14px; background:var(--bg-input); border:1px solid var(--border); border-radius:20px; color:var(--c-white); font-size:14px;">
+                <button class="icon-btn" onclick="closeSearchBar()" title="Close"><svg style="width:20px;fill:currentColor;"><use href="#icon-close"></use></svg></button>
+            </div>
+            <div id="searchResults" style="display:none; flex:1; overflow-y:auto; background:var(--bg-base); padding:8px;"></div>
             
             <div class="messages" id="messages"></div>
+
+            <button id="scrollBottomBtn" onclick="scrollMessagesToBottom(true)" title="Jump to latest" style="display:none; position:absolute; bottom:90px; right:18px; width:44px; height:44px; border-radius:50%; background:var(--bg-panel); backdrop-filter:blur(12px); border:1px solid var(--border); color:var(--c-white); cursor:pointer; z-index:5; box-shadow:0 4px 16px rgba(0,0,0,0.4); display:none; align-items:center; justify-content:center;">
+                <svg viewBox="0 0 24 24" style="width:20px; fill:currentColor;"><path d="M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z"/></svg>
+                <span id="unreadDot" style="position:absolute; top:-2px; right:-2px; min-width:18px; height:18px; padding:0 4px; background:var(--c-red); color:white; border-radius:9px; font-size:10px; font-weight:700; display:none; align-items:center; justify-content:center;"></span>
+            </button>
             
             <video id="videoPreview" autoplay muted playsinline></video>
 
@@ -347,34 +536,34 @@
                 <div id="replyBar">
                     <div style="color:var(--c-blue); font-size:13px; font-weight:bold;" id="replySender"></div>
                     <div style="color:var(--c-gray); font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" id="replyText"></div>
-                    <span onclick="cancelReply()" style="position:absolute; right:12px; top:12px; cursor:pointer; color:var(--c-gray); font-size:18px;">✖</span>
+                    <button onclick="cancelReply()" class="reply-close-btn" aria-label="Cancel reply"><svg style="width:18px;fill:currentColor;"><use href="#icon-close"></use></svg></button>
                 </div>
                 
                 <div class="input-area-row">
                     <input type="file" id="fileInput" style="display:none" onchange="uploadFile()">
-                    <button class="action-btn" onclick="document.getElementById('fileInput').click()" id="attachBtn">
+                    <button class="action-btn" onclick="document.getElementById('fileInput').click()" id="attachBtn" aria-label="Attach file">
                         <svg style="width:22px;fill:currentColor;"><use href="#icon-attach"></use></svg>
                     </button>
                     
                     <div class="input-box" id="textInputBox">
-                        <input type="text" id="msgInput" placeholder="Type a message..." autocomplete="off" oninput="checkInput()">
+                        <textarea id="msgInput" placeholder="Message" autocomplete="off" rows="1" data-i18n-ph="type_ph" oninput="checkInput(); autoResize(this);" onkeydown="handleInputKey(event)"></textarea>
                     </div>
                     
-                    <div class="rec-controls" id="recControls" style="display:none; flex:1; background:var(--bg-input); border-radius:24px; border:1px solid var(--border); align-items:center; justify-content:space-between; padding:0 8px; min-height:50px;">
-                        <button class="action-btn" onclick="cancelRecord()" style="color:var(--c-gray);"><svg style="width:20px;fill:currentColor;"><use href="#icon-trash"></use></svg></button>
-                        <span class="rec-timer" id="recTimer" dir="ltr" style="color:var(--c-red); font-weight:bold; font-family:monospace; font-size:16px;">00:00</span>
-                        <button class="action-btn" id="pauseRecBtn" onclick="pauseResumeRecord()" style="color:var(--c-blue);">
+                    <div class="rec-controls" id="recControls" style="display:none;">
+                        <button class="action-btn" onclick="cancelRecord()" style="color:var(--c-gray);" aria-label="Cancel recording"><svg style="width:20px;fill:currentColor;"><use href="#icon-trash"></use></svg></button>
+                        <span class="rec-timer" id="recTimer" dir="ltr">00:00</span>
+                        <button class="action-btn" id="pauseRecBtn" onclick="pauseResumeRecord()" style="color:var(--c-blue);" aria-label="Pause">
                             <svg style="width:20px;fill:currentColor;"><use href="#icon-pause"></use></svg>
                         </button>
                     </div>
                     
-                    <button class="action-btn" id="actionVideoBtn" onclick="startRecord('video', this)" title="Video Message">
+                    <button class="action-btn" id="actionVideoBtn" onclick="startRecord('video', this)" title="Video Message" aria-label="Video message">
                         <svg style="width:22px;fill:currentColor;"><use href="#icon-cam"></use></svg>
                     </button>
-                    <button class="action-btn" id="actionMicBtn" onclick="startRecord('audio', this)" title="Voice Message">
+                    <button class="action-btn" id="actionMicBtn" onclick="startRecord('audio', this)" title="Voice Message" aria-label="Voice message">
                         <svg style="width:22px;fill:currentColor;"><use href="#icon-mic"></use></svg>
                     </button>
-                    <button class="action-btn send" id="actionSendBtn" onclick="handleSendText()" title="Send" style="display:none;">
+                    <button class="action-btn send" id="actionSendBtn" onclick="handleSendText()" title="Send" style="display:none;" aria-label="Send">
                         <svg style="width:22px;fill:currentColor;"><use href="#icon-send"></use></svg>
                     </button>
                 </div>
@@ -398,17 +587,53 @@
     </div>
 
     <div id="callModal">
-        <div class="glass-box" style="padding: 40px 30px; border-radius: 28px; border: 1px solid var(--c-blue); display: flex; flex-direction: column; align-items: center; width: 90%; max-width: 340px; animation: scaleIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); box-shadow: 0 20px 60px rgba(0,0,0,0.8);">
-            <div id="callAvatar">📞</div>
-            <h3 id="callStatusText" style="color:var(--c-white); margin-top:25px; margin-bottom:5px; font-weight:800; font-size:22px; letter-spacing:1px;">Incoming Call...</h3>
-            <p id="callUserText" style="color:var(--c-gray); margin-bottom:30px; font-size:16px; font-weight:500;"></p>
-            <audio id="remoteAudio" autoplay></audio>
-            <div class="call-btns" id="callBtns">
-                <button class="call-btn btn-ans" onclick="acceptCall()">📞</button>
-                <button class="call-btn btn-rej" onclick="endCall()">✖</button>
+        <div id="callPanel" style="position:relative; padding: 40px 30px; border-radius: 28px; display: flex; flex-direction: column; align-items: center; width: 92%; max-width: 380px; animation: scaleIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); box-shadow: 0 20px 60px rgba(0,0,0,0.8); background: rgba(20,28,38,0.95); backdrop-filter: blur(24px); border: 1px solid rgba(255,255,255,0.08);">
+
+            <!-- Remote video (full panel) -->
+            <div id="callVideoContainer" style="display:none; position:absolute; top:0; left:0; width:100%; height:100%; border-radius:28px; overflow:hidden; z-index:0; background:#000;">
+                <video id="remoteVideo" autoplay playsinline style="width:100%; height:100%; object-fit:cover; display:none;"></video>
+                <video id="localVideo" autoplay playsinline muted style="display:none; position:absolute; bottom:120px; right:14px; width:120px; height:160px; border-radius:14px; object-fit:cover; border:2px solid rgba(255,255,255,0.4); transform:scaleX(-1); box-shadow:0 6px 20px rgba(0,0,0,0.5); z-index:2;"></video>
+                <div style="position:absolute; inset:0; background:linear-gradient(to bottom, rgba(0,0,0,0.4) 0%, rgba(0,0,0,0) 30%, rgba(0,0,0,0) 60%, rgba(0,0,0,0.7) 100%); pointer-events:none;"></div>
             </div>
+
+            <!-- Audio-only / pre-connect view -->
+            <div id="callAvatar" style="width:120px; height:120px; border-radius:50%; background:linear-gradient(135deg, var(--c-blue), #2b5278); display:flex; justify-content:center; align-items:center; font-size:48px; color:white; animation:pulseCall 1.5s infinite; box-shadow:0 0 30px var(--c-blue-glow); position:relative; z-index:1; overflow:hidden;">📞</div>
+
+            <h3 id="callUserText" style="color:var(--c-white); margin-top:22px; margin-bottom:6px; font-weight:700; font-size:22px; position:relative; z-index:1;"></h3>
+            <p id="callStatusText" style="color:var(--c-gray-strong, var(--c-gray)); margin-bottom:30px; font-size:14px; font-weight:500; position:relative; z-index:1;"></p>
+
+            <audio id="remoteAudio" autoplay playsinline></audio>
+
+            <div class="call-btns" id="callBtns" style="position:relative; z-index:1; display:flex; gap:14px; justify-content:center; flex-wrap:wrap;"></div>
         </div>
     </div>
+
+    <style>
+        /* Phase 3: Call UI buttons (Telegram-style) */
+        #callModal .call-btn {
+            width: 64px; height: 64px; border-radius: 50%;
+            border: none; cursor: pointer; color: white;
+            display: flex; justify-content: center; align-items: center;
+            transition: transform 0.2s, box-shadow 0.2s, background 0.2s;
+            background: rgba(255,255,255,0.12);
+            backdrop-filter: blur(10px);
+        }
+        #callModal .call-btn:hover { transform: scale(1.05); }
+        #callModal .call-btn:active { transform: scale(0.95); }
+        #callModal .call-btn.answer-btn { background: #22c55e; box-shadow: 0 6px 20px rgba(34,197,94,0.5); }
+        #callModal .call-btn.reject-btn { background: var(--c-red); box-shadow: 0 6px 20px var(--c-red-glow); }
+        #callModal .call-btn.ctrl-btn.active { background: rgba(255,255,255,0.4); color: #ff5252; }
+        #callModal .call-btn.ctrl-btn { width: 56px; height: 56px; }
+
+        @keyframes pulseCall { 0%,100% { box-shadow: 0 0 30px var(--c-blue-glow); } 50% { box-shadow: 0 0 50px var(--c-blue-glow); transform:scale(1.04); } }
+
+        @media (max-width: 600px) {
+            #callPanel { width: 100% !important; max-width: 100% !important; height: 100dvh; border-radius: 0 !important; padding: 60px 20px !important; }
+            #callVideoContainer { border-radius: 0 !important; }
+            #callModal .call-btn { width: 60px; height: 60px; }
+            #callModal #localVideo { width: 100px !important; height: 140px !important; bottom: 130px !important; }
+        }
+    </style>
 
     <div class="modal-overlay" id="createModal">
         <div class="modal-box glass-box">
@@ -465,6 +690,34 @@
         </div>
     </div>
 
+    <!-- ====================== GROUP SETTINGS MODAL ====================== -->
+    <div class="modal-overlay" id="groupSettingsModal">
+        <div class="modal-box glass-box" style="max-width:480px; width:95%; max-height:88vh; overflow-y:auto;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+                <h2 style="font-weight:700; font-size:18px;">👥 Group Members</h2>
+                <button onclick="closeModal('groupSettingsModal')" style="background:transparent; border:none; color:var(--c-white); font-size:22px; cursor:pointer;">✕</button>
+            </div>
+            <div id="group-info-bar" style="background:var(--bg-input); padding:14px; border-radius:12px; margin-bottom:14px; font-size:13px; color:var(--c-gray);"></div>
+
+            <div id="group-add-member" style="display:none; background:var(--bg-input); border:1px solid var(--border); border-radius:12px; padding:14px; margin-bottom:14px;">
+                <div style="font-weight:700; margin-bottom:10px; font-size:14px;">➕ Add Member</div>
+                <div style="display:flex; gap:8px;">
+                    <select id="group-add-select" style="flex:1; padding:10px; background:var(--bg-base); border:1px solid var(--border); color:var(--c-white); border-radius:10px;"></select>
+                    <button onclick="addGroupMember()" style="padding:10px 16px; background:var(--c-blue); color:white; border:none; border-radius:10px; cursor:pointer; font-weight:700;">Add</button>
+                </div>
+            </div>
+
+            <div id="group-members-list"></div>
+
+            <div id="group-danger-zone" style="display:none; margin-top:18px; padding-top:14px; border-top:1px solid var(--border);">
+                <button onclick="deleteCurrentGroup()" style="width:100%; padding:12px; background:transparent; color:var(--c-red); border:1px solid var(--c-red); border-radius:10px; cursor:pointer; font-weight:700;">🗑️ Delete Group</button>
+            </div>
+            <div id="group-leave-zone" style="display:none; margin-top:14px;">
+                <button onclick="leaveCurrentGroup()" style="width:100%; padding:12px; background:transparent; color:var(--c-orange); border:1px solid var(--c-orange); border-radius:10px; cursor:pointer; font-weight:700;">🚪 Leave Group</button>
+            </div>
+        </div>
+    </div>
+
     <div class="modal-overlay" id="settingsModal">
         <div class="modal-box glass-box" style="max-width: 450px;">
             <div style="text-align:center; margin-bottom:25px;">
@@ -487,9 +740,26 @@
                 <span style="font-weight:600;">Auto-Download Media</span>
                 <input type="checkbox" id="autoDlToggle" style="width:auto; transform:scale(1.5); cursor:pointer;" checked onchange="toggleAutoDl(this.checked)">
             </div>
+            <div style="display:flex; justify-content:space-between; align-items:center; padding:12px 0; border-bottom:1px solid var(--border);">
+                <div>
+                    <div style="font-weight:600;">Send by Enter</div>
+                    <div style="font-size:12px; color:var(--c-gray); margin-top:2px;">Off: Enter creates new line, button sends</div>
+                </div>
+                <input type="checkbox" id="enterSendToggle" style="width:auto; transform:scale(1.5); cursor:pointer;" onchange="setEnterToSend(this.checked)">
+            </div>
             <div style="padding:12px 0; border-bottom:1px solid var(--border);">
                 <span style="display:block; margin-bottom:10px; font-weight:600; text-align:left;">Chat Wallpaper URL</span>
                 <input type="text" id="bgInput" placeholder="https://..." onchange="changeBg(this.value)" dir="ltr">
+            </div>
+            <div style="padding:12px 0; border-bottom:1px solid var(--border);">
+                <span style="display:block; margin-bottom:8px; font-weight:600; text-align:left;">Storage</span>
+                <div id="my-storage-info" style="font-size:13px; color:var(--c-gray); text-align:left;">—</div>
+                <div style="height:6px; background:rgba(255,255,255,0.1); border-radius:10px; margin-top:6px;">
+                    <div id="my-storage-bar" style="height:100%; width:0%; background:var(--c-blue); border-radius:10px; transition:width 0.3s;"></div>
+                </div>
+            </div>
+            <div id="admin-entry-row" style="display:none; padding:12px 0; border-bottom:1px solid var(--border);">
+                <button onclick="openAdminPanel()" style="width:100%; padding:14px; background:linear-gradient(135deg, #ef4444, #f97316); color:white; border:none; border-radius:12px; cursor:pointer; font-weight:700; font-size:14px; box-shadow:0 4px 15px var(--c-red-glow);">⚙️ Admin Panel</button>
             </div>
             <div style="margin-top:15px;">
                 <span style="font-size:13px; color:var(--c-gray); font-weight:600; display:block; text-align:left;">Active Sessions</span>
@@ -501,6 +771,87 @@
             </div>
         </div>
     </div>
+
+    <!-- ====================== ADMIN PANEL ====================== -->
+    <div class="modal-overlay" id="adminModal">
+        <div class="modal-box glass-box" style="max-width:680px; width:95%; max-height:90vh; overflow-y:auto;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:18px;">
+                <h2 style="font-weight:800; font-size:20px;">⚙️ Admin Panel</h2>
+                <button onclick="closeAdminPanel()" style="background:transparent; border:none; color:var(--c-white); font-size:22px; cursor:pointer;">✕</button>
+            </div>
+
+            <div style="display:flex; gap:6px; border-bottom:1px solid var(--border); margin-bottom:18px; flex-wrap:wrap;">
+                <button class="admin-tab active" data-tab="users" onclick="switchAdminTab('users')" style="padding:10px 16px; background:transparent; border:none; color:var(--c-white); cursor:pointer; font-weight:600; border-bottom:2px solid var(--c-blue);">👥 Users</button>
+                <button class="admin-tab" data-tab="stats" onclick="switchAdminTab('stats')" style="padding:10px 16px; background:transparent; border:none; color:var(--c-gray); cursor:pointer; font-weight:600; border-bottom:2px solid transparent;">📊 Stats</button>
+                <button class="admin-tab" data-tab="turn" onclick="switchAdminTab('turn')" style="padding:10px 16px; background:transparent; border:none; color:var(--c-gray); cursor:pointer; font-weight:600; border-bottom:2px solid transparent;">🎙️ TURN</button>
+                <button class="admin-tab" data-tab="updates" onclick="switchAdminTab('updates')" style="padding:10px 16px; background:transparent; border:none; color:var(--c-gray); cursor:pointer; font-weight:600; border-bottom:2px solid transparent;">🔄 Updates</button>
+            </div>
+
+            <!-- USERS TAB -->
+            <div class="admin-pane" id="admin-pane-users">
+                <div style="background:var(--bg-input); border:1px solid var(--border); border-radius:14px; padding:14px; margin-bottom:16px;">
+                    <div style="font-weight:700; margin-bottom:10px;">➕ Add New User</div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:8px;">
+                        <input id="admin-new-username" placeholder="Username" style="padding:12px; background:var(--bg-base); border:1px solid var(--border); color:var(--c-white); border-radius:10px;">
+                        <input id="admin-new-password" type="text" placeholder="Password" style="padding:12px; background:var(--bg-base); border:1px solid var(--border); color:var(--c-white); border-radius:10px;">
+                    </div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:8px;">
+                        <select id="admin-new-role" style="padding:12px; background:var(--bg-base); border:1px solid var(--border); color:var(--c-white); border-radius:10px;">
+                            <option value="user">user</option>
+                            <option value="admin">admin</option>
+                        </select>
+                        <input id="admin-new-quota" type="number" min="1" placeholder="Quota MB" value="500" style="padding:12px; background:var(--bg-base); border:1px solid var(--border); color:var(--c-white); border-radius:10px;">
+                    </div>
+                    <button onclick="adminAddUser()" style="width:100%; padding:12px; background:var(--c-blue); color:white; border:none; border-radius:10px; cursor:pointer; font-weight:700;">Add User</button>
+                </div>
+                <div id="admin-users-list"></div>
+            </div>
+
+            <!-- STATS TAB -->
+            <div class="admin-pane" id="admin-pane-stats" style="display:none;">
+                <div id="admin-stats-content" style="display:grid; gap:12px;"></div>
+                <button onclick="loadAdminStats()" style="width:100%; padding:12px; background:var(--bg-input); color:var(--c-white); border:1px solid var(--border); border-radius:10px; cursor:pointer; margin-top:12px;">🔄 Refresh</button>
+            </div>
+
+            <!-- TURN TAB -->
+            <div class="admin-pane" id="admin-pane-turn" style="display:none;">
+                <div id="admin-turn-content"></div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:14px;">
+                    <button onclick="loadAdminTurn()" style="padding:12px; background:var(--bg-input); color:var(--c-white); border:1px solid var(--border); border-radius:10px; cursor:pointer; font-weight:600;">🔄 Refresh</button>
+                    <button onclick="adminTurnRestart()" style="padding:12px; background:var(--bg-input); color:var(--c-white); border:1px solid var(--border); border-radius:10px; cursor:pointer; font-weight:600;">🔁 Restart coturn</button>
+                </div>
+                <div style="margin-top:14px; padding:12px; background:var(--bg-input); border-radius:10px; font-size:12px; color:var(--c-gray); line-height:1.6;">
+                    <strong style="color:var(--c-white);">How to install:</strong><br>
+                    SSH to your server, run <code style="background:#000; padding:2px 6px; border-radius:4px;">black-chat</code> and choose option <strong>10) Setup TURN Server</strong>. The script auto-installs coturn and saves credentials.
+                </div>
+            </div>
+
+            <!-- UPDATES TAB -->
+            <div class="admin-pane" id="admin-pane-updates" style="display:none;">
+                <div style="background:var(--bg-input); border:1px solid var(--border); border-radius:14px; padding:16px; margin-bottom:14px;">
+                    <div style="font-weight:700; font-size:15px; margin-bottom:6px;">🔄 Update from GitHub</div>
+                    <div style="font-size:12px; color:var(--c-gray); margin-bottom:12px;">Pulls latest main.py / index.html / script.js / install.sh from the repository. A backup is created automatically before applying. Service restarts after ~3s.</div>
+                    <button id="admin-update-btn" onclick="adminUpdateApp()" style="width:100%; padding:13px; background:linear-gradient(135deg, var(--c-blue), #2563eb); color:white; border:none; border-radius:10px; cursor:pointer; font-weight:700;">🔄 Update Now</button>
+                </div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:14px;">
+                    <button onclick="adminCreateBackup()" style="padding:12px; background:var(--bg-input); color:var(--c-white); border:1px solid var(--border); border-radius:10px; cursor:pointer; font-weight:600;">💾 Manual Backup</button>
+                    <button onclick="adminRestartService()" style="padding:12px; background:var(--bg-input); color:var(--c-white); border:1px solid var(--border); border-radius:10px; cursor:pointer; font-weight:600;">🔁 Restart Service</button>
+                </div>
+                <div style="font-weight:700; font-size:14px; margin-bottom:8px;">📦 Backups (latest 5)</div>
+                <div id="admin-backups-list"></div>
+            </div>
+        </div>
+    </div>
+
+    <style>
+        .stat-card { background:var(--bg-input); border:1px solid var(--border); border-radius:14px; padding:16px; }
+        .stat-label { font-size:12px; color:var(--c-gray); text-transform:uppercase; letter-spacing:1px; margin-bottom:6px; font-weight:600; }
+        .stat-value { font-size:22px; font-weight:800; color:var(--c-white); }
+        @media (max-width: 600px) {
+            .admin-user-row > div { flex-direction:column !important; align-items:flex-start !important; }
+        }
+    </style>
+
 
     <audio id="notif-sound" src="data:audio/mp3;base64,//NExAAAAANIAAAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq" preload="auto"></audio>
     <script src="/static/script.js?v=1.1.0"></script>
