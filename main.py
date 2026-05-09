@@ -75,6 +75,17 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS room_members (room_id TEXT, user TEXT, UNIQUE(room_id, user))''')
     c.execute('''CREATE TABLE IF NOT EXISTS user_uploads (id INTEGER PRIMARY KEY AUTOINCREMENT, user TEXT, file_path TEXT, file_size INTEGER, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)''')
     c.execute('CREATE INDEX IF NOT EXISTS idx_uploads_user ON user_uploads(user)')
+
+    # Phase 4 extras: pinned messages
+    c.execute('''CREATE TABLE IF NOT EXISTS pinned_messages (
+        room TEXT,
+        msg_id TEXT,
+        pinned_by TEXT,
+        pinned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (room, msg_id)
+    )''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_pinned_room ON pinned_messages(room)')
+
     conn.commit()
     conn.close()
 
@@ -981,6 +992,38 @@ def get_message_reads(msg_ids):
     except Exception: pass
     return out
 
+def get_pinned_for_room(room):
+    """Returns list of pinned msgs (joined with messages table) for a room."""
+    out = []
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("""
+            SELECT p.msg_id, p.pinned_by, p.pinned_at, m.user, m.msg_type, m.content, m.file_name, m.timestamp
+            FROM pinned_messages p
+            LEFT JOIN messages m ON m.msg_id = p.msg_id
+            WHERE p.room = ?
+            ORDER BY p.pinned_at DESC
+        """, (room,))
+        for row in c.fetchall():
+            mid, pinned_by, pinned_at, user, msg_type, content, file_name, ts = row
+            if not user:
+                # Original message was deleted - skip orphaned pin
+                continue
+            out.append({
+                "id": mid, "user": user, "msgType": msg_type,
+                "text": content if msg_type == 'text' else '',
+                "url": content if msg_type != 'text' else '',
+                "fileName": file_name,
+                "timestamp": ts,
+                "pinnedBy": pinned_by,
+                "pinnedAt": pinned_at,
+            })
+        conn.close()
+    except Exception:
+        pass
+    return out
+
 def mark_messages_read(reader, room, until_msg_id=None):
     """Mark all messages in `room` from other senders as read by `reader`.
     Returns list of (msg_id, sender) of newly-read messages."""
@@ -1152,6 +1195,11 @@ async def websocket_endpoint(websocket: WebSocket, username: str, role: str, tok
                     "fileName": msg.get('fileName',''), "roomMembers": room_members,
                     "replyTo": msg.get('replyTo', None), "reactions": {}, "timestamp": now_str
                 }
+                # Phase 4: forward album metadata if present (not stored in DB)
+                if msg.get('albumId'):
+                    msg_payload['albumId'] = msg.get('albumId')
+                    msg_payload['albumIndex'] = msg.get('albumIndex', 0)
+                    msg_payload['albumTotal'] = msg.get('albumTotal', 1)
                 c.execute("INSERT INTO messages (msg_id, room, user, msg_type, content, file_name, reply_to, reactions, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                           (msg_id, room, msg['user'], msg['msgType'], msg.get('text', msg.get('url', '')), msg.get('fileName', ''), reply_to, '{}', now_str))
                 await manager.broadcast({"type": "new_msg", "room": room, "data": msg_payload})
@@ -1187,6 +1235,69 @@ async def websocket_endpoint(websocket: WebSocket, username: str, role: str, tok
                             "reader": username,
                             "msg_ids_per_sender": senders,
                         })
+
+            elif action == "pin_msg":
+                msg_id = msg.get("msg_id")
+                # find the room of this message
+                c.execute("SELECT room FROM messages WHERE msg_id=?", (msg_id,))
+                row = c.fetchone()
+                if row:
+                    room = row[0]
+                    # Authorization: admin everywhere, group owner in groups, anyone in DM
+                    can_pin = False
+                    if role == 'admin':
+                        can_pin = True
+                    elif room.startswith('rm_'):
+                        c.execute("SELECT owner FROM custom_rooms WHERE room_id=?", (room,))
+                        owner_row = c.fetchone()
+                        if owner_row and owner_row[0] == username:
+                            can_pin = True
+                    elif room.startswith('dm_'):
+                        # Both participants can pin in a DM
+                        pair = room[3:].split("-")
+                        if username in pair:
+                            can_pin = True
+                    if can_pin:
+                        c.execute("INSERT OR IGNORE INTO pinned_messages (room, msg_id, pinned_by) VALUES (?, ?, ?)", (room, msg_id, username))
+                        conn.commit()
+                        await manager.broadcast({
+                            "type": "pinned_changed", "room": room,
+                            "pinned": get_pinned_for_room(room),
+                        })
+
+            elif action == "unpin_msg":
+                msg_id = msg.get("msg_id")
+                c.execute("SELECT room FROM messages WHERE msg_id=?", (msg_id,))
+                row = c.fetchone()
+                if row:
+                    room = row[0]
+                    can_unpin = False
+                    if role == 'admin':
+                        can_unpin = True
+                    elif room.startswith('rm_'):
+                        c.execute("SELECT owner FROM custom_rooms WHERE room_id=?", (room,))
+                        owner_row = c.fetchone()
+                        if owner_row and owner_row[0] == username:
+                            can_unpin = True
+                    elif room.startswith('dm_'):
+                        pair = room[3:].split("-")
+                        if username in pair:
+                            can_unpin = True
+                    if can_unpin:
+                        c.execute("DELETE FROM pinned_messages WHERE msg_id=?", (msg_id,))
+                        conn.commit()
+                        await manager.broadcast({
+                            "type": "pinned_changed", "room": row[0],
+                            "pinned": get_pinned_for_room(row[0]),
+                        })
+
+            elif action == "get_pinned":
+                room = msg.get("room")
+                if room:
+                    await websocket.send_json({
+                        "type": "pinned_changed", "room": room,
+                        "pinned": get_pinned_for_room(room),
+                    })
 
             conn.commit()
             conn.close()
