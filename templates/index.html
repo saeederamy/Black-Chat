@@ -196,6 +196,130 @@
         #videoPreview { display: none; position: absolute; bottom: 90px; right: 20px; width: 200px; height: 200px; border-radius: 50%; object-fit: cover; border: 4px solid var(--c-red); box-shadow: 0 10px 30px rgba(0,0,0,0.8); z-index: 100; transform: scaleX(-1); background: #000; animation: scaleIn 0.3s ease;}
         [dir="rtl"] #videoPreview { right: auto; left: 20px; }
 
+        /* ===== Phase 4 extras: collage / date dividers / better bubbles ===== */
+        /* Date divider in messages */
+        .date-divider {
+            display: flex;
+            justify-content: center;
+            margin: 18px 0 10px 0;
+            position: sticky;
+            top: 8px;
+            z-index: 4;
+            pointer-events: none;
+        }
+        .date-divider span {
+            background: rgba(0,0,0,0.55);
+            color: white;
+            font-size: 12px;
+            font-weight: 600;
+            padding: 5px 14px;
+            border-radius: 14px;
+            backdrop-filter: blur(8px);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+        }
+        [data-theme="light"] .date-divider span { background: rgba(0,0,0,0.4); }
+
+        /* Image album / collage layouts */
+        .album {
+            display: grid;
+            gap: 3px;
+            border-radius: 14px;
+            overflow: hidden;
+            margin-top: 5px;
+            max-width: 320px;
+        }
+        .album.album-2 { grid-template-columns: 1fr 1fr; }
+        .album.album-3 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+        .album.album-3 .album-item:first-child { grid-row: span 2; }
+        .album.album-4 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+        .album.album-many { grid-template-columns: 1fr 1fr 1fr; }
+        .album-item {
+            width: 100%;
+            aspect-ratio: 1 / 1;
+            object-fit: cover;
+            cursor: pointer;
+            transition: transform 0.15s, opacity 0.15s;
+            background: rgba(0,0,0,0.2);
+            position: relative;
+        }
+        .album-item:hover { opacity: 0.92; }
+        .album-item.with-overlay {
+            position: relative;
+        }
+        .album-overlay-count {
+            position: absolute;
+            inset: 0;
+            background: rgba(0,0,0,0.55);
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 28px;
+            font-weight: 700;
+            cursor: pointer;
+        }
+
+        /* Telegram-style bubble tails */
+        .msg-row.out .bubble.has-tail::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            right: -6px;
+            width: 12px;
+            height: 14px;
+            background: var(--bubble-me);
+            clip-path: polygon(0 0, 100% 100%, 0 100%);
+        }
+        .msg-row.in .bubble.has-tail::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: -6px;
+            width: 12px;
+            height: 14px;
+            background: var(--bubble-other);
+            clip-path: polygon(100% 0, 100% 100%, 0 100%);
+        }
+        /* Hide tail when not first bubble in a stack */
+        .msg-row.same-sender + .msg-row .bubble { border-bottom-right-radius: 18px; border-bottom-left-radius: 18px; margin-top: 2px !important; }
+        .msg-row.same-sender + .msg-row.out .bubble { border-bottom-right-radius: 18px; }
+        .msg-row.same-sender + .msg-row.in .bubble { border-bottom-left-radius: 18px; }
+
+        /* Pinned bar tap state */
+        #pinnedBar:active { background: var(--bg-input); }
+
+        /* Lightbox for image preview when tapping album */
+        #lightbox {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.95);
+            z-index: 9998;
+            display: none;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+        }
+        #lightbox img, #lightbox video {
+            max-width: 95vw;
+            max-height: 95vh;
+            object-fit: contain;
+            border-radius: 8px;
+        }
+        #lightbox-close {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: rgba(0,0,0,0.5);
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 44px;
+            height: 44px;
+            font-size: 22px;
+            cursor: pointer;
+            z-index: 9999;
+        }
+
         /* --- Context Menu --- */
         .context-menu { 
             position: fixed; background: var(--bg-panel); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
@@ -258,8 +382,8 @@
         @keyframes pulseCall { 0% { box-shadow: 0 0 0 0 rgba(59,130,246,0.7); } 70% { box-shadow: 0 0 0 20px rgba(59,130,246,0); } 100% { box-shadow: 0 0 0 0 rgba(59,130,246,0); } }
 
         /* Modals & Profile */
-        .modal-overlay { position: fixed; top:0; left:0; width:100%; height:100%; background: rgba(0,0,0,0.8); z-index: 2000; display: none; justify-content: center; align-items: center; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);}
-        .modal-box { padding: 30px; border-radius: 20px; width: 90%; max-width: 420px; display: flex; flex-direction: column; gap: 18px; animation: scaleIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);}
+        .modal-overlay { position: fixed; top:0; left:0; width:100%; height:100%; background: rgba(0,0,0,0.8); z-index: 2000; display: none; justify-content: center; align-items: center; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); overflow-y: auto;}
+        .modal-box { padding: 30px; border-radius: 20px; width: 90%; max-width: 420px; display: flex; flex-direction: column; gap: 18px; animation: scaleIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); max-height: 90vh; overflow-y: auto; -webkit-overflow-scrolling: touch;}
         .modal-box input, .modal-box select { width: 100%; padding: 16px; background: var(--bg-input); border: 1px solid var(--border); color: var(--c-white); border-radius: 12px; font-size: 15px; transition: 0.3s;}
         .modal-box input:focus { border-color: var(--c-blue); }
         
@@ -385,9 +509,22 @@
             .input-area-row { gap: 6px; }
             .action-btn { width: 42px; height: 42px; }
 
-            /* Modal full-bleed on mobile */
-            .modal-box { max-width: 100% !important; width: 100% !important; max-height: 90vh; border-radius: 18px 18px 0 0 !important; margin: 0; padding: 22px 18px; }
-            .modal-overlay { align-items: flex-end !important; }
+            /* Modal bottom-sheet on mobile with proper scroll - FIX: keep buttons visible */
+            .modal-box {
+                max-width: 100% !important;
+                width: 100% !important;
+                max-height: 92dvh !important;          /* Dynamic viewport height for mobile browsers */
+                border-radius: 18px 18px 0 0 !important;
+                margin: 0;
+                padding: 22px 18px 28px 18px !important;  /* extra bottom padding so last button isn't cut off */
+                padding-bottom: calc(28px + env(safe-area-inset-bottom)) !important;
+                overflow-y: auto !important;
+                -webkit-overflow-scrolling: touch;
+                overscroll-behavior: contain;
+            }
+            .modal-overlay { align-items: flex-end !important; padding: 0 !important; }
+            /* Ensure last action button stays in view */
+            .modal-actions { position: sticky; bottom: 0; background: inherit; padding-top: 10px; margin-top: auto; }
         }
 
         @media (max-width: 380px) {
@@ -514,6 +651,17 @@
             </div>
             <div id="searchResults" style="display:none; flex:1; overflow-y:auto; background:var(--bg-base); padding:8px;"></div>
             
+            <!-- Pinned message bar (Telegram-style) -->
+            <div id="pinnedBar" style="display:none; padding:10px 14px; background:var(--bg-panel); border-bottom:1px solid var(--border); cursor:pointer; gap:10px; align-items:center; transition:0.2s;">
+                <div style="width:3px; height:32px; background:var(--c-blue); border-radius:2px; flex-shrink:0;"></div>
+                <div style="flex:1; min-width:0; overflow:hidden;">
+                    <div style="font-size:11px; color:var(--c-blue); font-weight:700;">📌 Pinned message <span id="pinnedCount" style="opacity:0.7;"></span></div>
+                    <div id="pinnedPreview" style="font-size:13px; color:var(--c-text, var(--c-white)); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"></div>
+                </div>
+                <button class="icon-btn" onclick="cyclePinned(); event.stopPropagation();" title="Next pinned" style="width:28px; height:28px; flex-shrink:0;"><svg viewBox="0 0 24 24" style="width:18px; fill:currentColor;"><path d="M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z"/></svg></button>
+                <button class="icon-btn" onclick="unpinCurrentPinned(); event.stopPropagation();" title="Unpin" style="width:28px; height:28px; flex-shrink:0; color:var(--c-red);"><svg viewBox="0 0 24 24" style="width:16px; fill:currentColor;"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></button>
+            </div>
+
             <div class="messages" id="messages"></div>
 
             <button id="scrollBottomBtn" onclick="scrollMessagesToBottom(true)" title="Jump to latest" style="display:none; position:absolute; bottom:90px; right:18px; width:44px; height:44px; border-radius:50%; background:var(--bg-panel); backdrop-filter:blur(12px); border:1px solid var(--border); color:var(--c-white); cursor:pointer; z-index:5; box-shadow:0 4px 16px rgba(0,0,0,0.4); display:none; align-items:center; justify-content:center;">
@@ -571,6 +719,12 @@
         </div>
     </div>
 
+    <!-- Lightbox for image/video preview -->
+    <div id="lightbox" onclick="closeLightbox()">
+        <button id="lightbox-close" onclick="event.stopPropagation(); closeLightbox();">✕</button>
+        <div id="lightbox-content" onclick="event.stopPropagation();"></div>
+    </div>
+
     <div id="msgContextMenu" class="context-menu glass-box" onclick="event.stopPropagation();">
         <div class="emoji-bar">
             <span onclick="sendReaction('👍')">👍</span>
@@ -582,6 +736,7 @@
         <button onclick="doReply()"><svg><use href="#icon-reply"></use></svg> <span>Reply</span></button>
         <button id="editBtnOption" onclick="doEdit()"><svg><use href="#icon-edit"></use></svg> <span>Edit</span></button>
         <button onclick="doCopy()"><svg><use href="#icon-copy"></use></svg> <span>Copy Text</span></button>
+        <button id="pinBtnOption" onclick="doPin()"><svg viewBox="0 0 24 24"><path d="M16 9V4l1 0c.55 0 1-.45 1-1s-.45-1-1-1H7c-.55 0-1 .45-1 1s.45 1 1 1l1 0v5c0 1.66-1.34 3-3 3v2h5.97v7l1 1 1-1v-7H19v-2c-1.66 0-3-1.34-3-3z"/></svg> <span id="pinBtnText">Pin</span></button>
         <button onclick="doSelect()"><svg><use href="#icon-check"></use></svg> <span>Select</span></button>
         <button onclick="doDeleteMsg()" class="danger"><svg><use href="#icon-trash"></use></svg> <span>Delete</span></button>
     </div>
@@ -854,6 +1009,7 @@
 
 
     <audio id="notif-sound" src="data:audio/mp3;base64,//NExAAAAANIAAAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq" preload="auto"></audio>
-    <script src="/static/script.js?v=1.1.0"></script>
+
+    <script src="/static/script.js?v=1.4.0"></script>
 </body>
 </html>
