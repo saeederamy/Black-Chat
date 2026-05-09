@@ -2145,3 +2145,503 @@ try {
         });
     }
 } catch {}
+
+// =====================================================================
+// Pinned messages
+// =====================================================================
+let pinnedMessages = [];     // current room's pinned list
+let pinnedIndex = 0;         // which one is showing in the bar
+
+function refreshPinnedBar() {
+    const bar = document.getElementById('pinnedBar');
+    if (!bar) return;
+    if (!pinnedMessages.length) {
+        bar.style.display = 'none';
+        return;
+    }
+    bar.style.display = 'flex';
+    pinnedIndex = pinnedIndex % pinnedMessages.length;
+    const p = pinnedMessages[pinnedIndex];
+    const preview = p.msgType === 'text'
+        ? (p.text || '').slice(0, 120)
+        : (p.msgType === 'image' ? '🖼️ Photo' : (p.msgType === 'video' ? '🎥 Video' : (p.msgType === 'audio' ? '🎤 Voice' : '📎 ' + (p.fileName||'File'))));
+    document.getElementById('pinnedPreview').innerText = `${p.user}: ${preview}`;
+    document.getElementById('pinnedCount').innerText = pinnedMessages.length > 1 ? `(${pinnedIndex+1}/${pinnedMessages.length})` : '';
+    bar.onclick = () => {
+        // Jump to pinned message
+        const el = document.getElementById('msg-' + p.id);
+        if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            const bubble = el.querySelector('.bubble');
+            if (bubble) {
+                bubble.style.transition = 'box-shadow 0.5s';
+                bubble.style.boxShadow = '0 0 0 3px var(--c-blue)';
+                setTimeout(() => { bubble.style.boxShadow = ''; }, 1500);
+            }
+        }
+    };
+}
+function cyclePinned() {
+    if (!pinnedMessages.length) return;
+    pinnedIndex = (pinnedIndex + 1) % pinnedMessages.length;
+    refreshPinnedBar();
+}
+async function unpinCurrentPinned() {
+    if (!pinnedMessages.length) return;
+    if (!confirm('Unpin this message?')) return;
+    const p = pinnedMessages[pinnedIndex];
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ action: 'unpin_msg', msg_id: p.id }));
+    }
+}
+function doPin() {
+    if (!contextMsgId) return;
+    const isPinned = pinnedMessages.some(p => p.id === contextMsgId);
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ action: isPinned ? 'unpin_msg' : 'pin_msg', msg_id: contextMsgId }));
+    }
+    closeContextMenu();
+}
+// Update pin button label when context menu opens
+function updatePinButtonLabel(msgId) {
+    const t = document.getElementById('pinBtnText');
+    if (!t) return;
+    const isPinned = pinnedMessages.some(p => p.id === msgId);
+    t.innerText = isPinned ? 'Unpin' : 'Pin';
+}
+
+// Hook into context menu opening
+const __origShowContextMenu = (typeof showContextMenu === 'function') ? showContextMenu : null;
+if (__origShowContextMenu) {
+    window.showContextMenu = function(...args) {
+        __origShowContextMenu.apply(this, args);
+        if (typeof contextMsgId !== 'undefined') updatePinButtonLabel(contextMsgId);
+    };
+}
+
+// Hook WS for pinned_changed events
+const __origInitWS_Pin = (typeof initWebSocket === 'function') ? initWebSocket : null;
+if (__origInitWS_Pin) {
+    const wrapped = window.initWebSocket;
+    window.initWebSocket = function() {
+        wrapped();
+        if (!ws) return;
+        const prev = ws.onmessage;
+        ws.onmessage = async function(event) {
+            if (prev) await prev(event);
+            try {
+                const m = JSON.parse(event.data);
+                if (m.type === 'pinned_changed' && m.room === currentRoom) {
+                    pinnedMessages = m.pinned || [];
+                    pinnedIndex = 0;
+                    refreshPinnedBar();
+                }
+                else if (m.type === 'history' && m.room === currentRoom) {
+                    // Request pinned list when history arrives
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({ action: 'get_pinned', room: currentRoom }));
+                    }
+                }
+            } catch {}
+        };
+    };
+}
+
+// Reset pinned bar when switching rooms
+const __origOpenChat_Pin = (typeof openChat === 'function') ? openChat : null;
+if (__origOpenChat_Pin) {
+    const wrapped = window.openChat;
+    window.openChat = function(...args) {
+        wrapped.apply(this, args);
+        pinnedMessages = [];
+        pinnedIndex = 0;
+        const bar = document.getElementById('pinnedBar');
+        if (bar) bar.style.display = 'none';
+        // get_pinned will be triggered by history hook above
+    };
+}
+
+// =====================================================================
+// Upload Progress Bar (XHR-based to track progress)
+// =====================================================================
+function createUploadProgressEl() {
+    let el = document.getElementById('uploadProgressEl');
+    if (el) return el;
+    el = document.createElement('div');
+    el.id = 'uploadProgressEl';
+    el.style.cssText = 'position:absolute; bottom:78px; left:50%; transform:translateX(-50%); z-index:10; background:var(--bg-panel); backdrop-filter:blur(15px); border:1px solid var(--border); padding:10px 14px; border-radius:14px; box-shadow:0 8px 28px rgba(0,0,0,0.4); min-width:240px; max-width:90%;';
+    el.innerHTML = `
+        <div style="display:flex; align-items:center; gap:10px;">
+            <div id="uploadProgressIcon" style="width:32px; height:32px; border-radius:8px; background:var(--c-blue); display:flex; align-items:center; justify-content:center; color:white; flex-shrink:0;"><svg viewBox="0 0 24 24" style="width:18px; fill:currentColor;"><path d="M9 16h6v-6h4l-7-7-7 7h4zm-4 2h14v2H5z"/></svg></div>
+            <div style="flex:1; min-width:0;">
+                <div id="uploadProgressName" style="font-size:13px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Uploading...</div>
+                <div style="display:flex; align-items:center; gap:8px; margin-top:4px;">
+                    <div style="flex:1; height:5px; background:rgba(255,255,255,0.1); border-radius:10px; overflow:hidden;">
+                        <div id="uploadProgressBar" style="height:100%; width:0%; background:linear-gradient(90deg, var(--c-blue), #4ba2ee); border-radius:10px; transition:width 0.2s;"></div>
+                    </div>
+                    <span id="uploadProgressPct" style="font-size:11px; font-weight:600; color:var(--c-gray); min-width:36px; text-align:right;">0%</span>
+                </div>
+            </div>
+            <button onclick="cancelCurrentUpload()" style="background:transparent; border:none; color:var(--c-red); cursor:pointer; padding:4px;" title="Cancel"><svg viewBox="0 0 24 24" style="width:18px; fill:currentColor;"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></button>
+        </div>
+    `;
+    document.querySelector('.chat-area')?.appendChild(el) || document.body.appendChild(el);
+    return el;
+}
+let currentUploadXHR = null;
+function cancelCurrentUpload() {
+    if (currentUploadXHR) {
+        try { currentUploadXHR.abort(); } catch {}
+        currentUploadXHR = null;
+    }
+    const el = document.getElementById('uploadProgressEl');
+    if (el) el.remove();
+}
+
+async function uploadWithProgress(file, fileName) {
+    return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        currentUploadXHR = xhr;
+        const fd = new FormData();
+        fd.append('file', file, fileName || file.name);
+
+        const progressEl = createUploadProgressEl();
+        document.getElementById('uploadProgressName').innerText = fileName || file.name || 'File';
+        document.getElementById('uploadProgressBar').style.width = '0%';
+        document.getElementById('uploadProgressPct').innerText = '0%';
+
+        xhr.upload.addEventListener('progress', (e) => {
+            if (e.lengthComputable) {
+                const pct = Math.round((e.loaded / e.total) * 100);
+                document.getElementById('uploadProgressBar').style.width = pct + '%';
+                document.getElementById('uploadProgressPct').innerText = pct + '%';
+            }
+        });
+        xhr.addEventListener('load', () => {
+            currentUploadXHR = null;
+            const el = document.getElementById('uploadProgressEl');
+            if (el) el.remove();
+            if (xhr.status >= 200 && xhr.status < 300) {
+                try { resolve(JSON.parse(xhr.responseText)); }
+                catch { reject(new Error('Invalid response')); }
+            } else {
+                let detail = xhr.responseText;
+                try { detail = JSON.parse(xhr.responseText).detail || detail; } catch {}
+                reject(new Error(`HTTP ${xhr.status}: ${detail}`));
+            }
+        });
+        xhr.addEventListener('error', () => {
+            currentUploadXHR = null;
+            const el = document.getElementById('uploadProgressEl');
+            if (el) el.remove();
+            reject(new Error('Network error'));
+        });
+        xhr.addEventListener('abort', () => {
+            currentUploadXHR = null;
+            const el = document.getElementById('uploadProgressEl');
+            if (el) el.remove();
+            reject(new Error('Upload cancelled'));
+        });
+
+        xhr.open('POST', '/api/upload', true);
+        if (currentToken) xhr.setRequestHeader('Authorization', 'Bearer ' + currentToken);
+        xhr.send(fd);
+    });
+}
+
+// Override the existing uploadFile to use progress
+const __origUploadFile = (typeof uploadFile === 'function') ? uploadFile : null;
+if (__origUploadFile) {
+    window.uploadFile = async function() {
+        const file = document.getElementById('fileInput').files[0];
+        if (!file) return;
+        // Quick client-side quota check
+        if (myQuotaMB > 0) {
+            const remaining = myQuotaMB * 1024 * 1024 - myUsedBytes;
+            if (file.size > remaining) {
+                alert(`Quota exceeded.\nRemaining: ${fmtBytes(Math.max(0, remaining))}\nFile size: ${fmtBytes(file.size)}`);
+                document.getElementById('fileInput').value = '';
+                return;
+            }
+        }
+        try {
+            const data = await uploadWithProgress(file);
+            if (data.used_bytes != null) myUsedBytes = data.used_bytes;
+            if (data.url) {
+                ws.send(JSON.stringify({
+                    action: 'send_msg', room: currentRoom, user: currentUser,
+                    targetUser: targetUserForDM, msgType: data.type,
+                    url: data.url, fileName: data.name, replyTo: replyToMsg
+                }));
+                cancelReply();
+            }
+        } catch (e) {
+            if (e.message !== 'Upload cancelled') {
+                alert('Upload failed: ' + e.message);
+            }
+        }
+        document.getElementById('fileInput').value = '';
+    };
+}
+
+// =====================================================================
+// Telegram-style image collage (album)
+// When a user selects multiple images at once, group them into an album.
+// =====================================================================
+async function uploadMultipleImages(files) {
+    if (!files || !files.length) return;
+    if (files.length === 1) {
+        // Just one file - use the regular uploadFile flow
+        document.getElementById('fileInput').files = createDataTransfer(files).files;
+        return uploadFile();
+    }
+    const albumId = 'alb_' + Math.random().toString(36).slice(2, 10);
+    let success = 0;
+    for (let i = 0; i < files.length; i++) {
+        try {
+            const data = await uploadWithProgress(files[i]);
+            if (data.used_bytes != null) myUsedBytes = data.used_bytes;
+            if (data.url) {
+                ws.send(JSON.stringify({
+                    action: 'send_msg', room: currentRoom, user: currentUser,
+                    targetUser: targetUserForDM, msgType: data.type,
+                    url: data.url, fileName: data.name,
+                    replyTo: i === 0 ? replyToMsg : null,
+                    albumId: albumId,
+                    albumIndex: i,
+                    albumTotal: files.length,
+                }));
+                success++;
+            }
+        } catch (e) {
+            if (e.message !== 'Upload cancelled') {
+                alert('Upload failed for "' + files[i].name + '": ' + e.message);
+            }
+        }
+    }
+    if (success > 0) cancelReply();
+}
+
+function createDataTransfer(files) {
+    const dt = new DataTransfer();
+    Array.from(files).forEach(f => dt.items.add(f));
+    return dt;
+}
+
+// Hook the file input to detect multi-select
+function setupMultiUploadHook() {
+    const input = document.getElementById('fileInput');
+    if (!input || input._multiHooked) return;
+    input._multiHooked = true;
+    // Make the input accept multiple files
+    input.setAttribute('multiple', 'multiple');
+    // Listen for changes; if multiple, route through album uploader
+    input.addEventListener('change', async () => {
+        const files = input.files;
+        if (!files || files.length === 0) return;
+        if (files.length > 1) {
+            // Filter only images for album mode
+            const allImages = Array.from(files).every(f => f.type && f.type.startsWith('image/'));
+            if (allImages) {
+                await uploadMultipleImages(Array.from(files));
+                input.value = '';
+                return;
+            }
+            // Mixed types: upload one by one
+            for (const f of Array.from(files)) {
+                const dt = new DataTransfer();
+                dt.items.add(f);
+                input.files = dt.files;
+                await uploadFile();
+            }
+            input.value = '';
+            return;
+        }
+        // single file: default flow handled by original onchange attribute
+    }, { capture: true });
+}
+setInterval(setupMultiUploadHook, 1500);
+
+// =====================================================================
+// Lightbox (tap image/video to view full)
+// =====================================================================
+function openLightbox(url, isVideo = false) {
+    const lb = document.getElementById('lightbox');
+    const content = document.getElementById('lightbox-content');
+    if (!lb || !content) return;
+    content.innerHTML = isVideo
+        ? `<video src="${url}" controls autoplay style="max-width:95vw; max-height:95vh; border-radius:8px;"></video>`
+        : `<img src="${url}" style="max-width:95vw; max-height:95vh; object-fit:contain; border-radius:8px;">`;
+    lb.style.display = 'flex';
+}
+function closeLightbox() {
+    const lb = document.getElementById('lightbox');
+    if (lb) {
+        lb.style.display = 'none';
+        document.getElementById('lightbox-content').innerHTML = '';
+    }
+}
+// ESC to close
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeLightbox(); });
+
+// =====================================================================
+// Album/collage rendering — group consecutive images with same albumId
+// =====================================================================
+let albumGroups = {};  // albumId -> { images: [...], firstMsgId, lastUpdated }
+
+function tryAttachToAlbum(data) {
+    if (!data.albumId || data.msgType !== 'image') return false;
+    const grp = albumGroups[data.albumId] = albumGroups[data.albumId] || { images: [], firstMsgId: null, owner: data.user };
+    grp.images.push({ id: data.id, url: data.url });
+    grp.lastUpdated = Date.now();
+
+    // If this is the first one, render the album container
+    if (!grp.firstMsgId) {
+        grp.firstMsgId = data.id;
+        return false;  // Let normal append happen for first; we'll convert after
+    }
+    // Hide subsequent message rows; just append the URL to the album in firstMsgId's bubble
+    setTimeout(() => collapseAlbumIntoFirst(data.albumId), 30);
+    return false;  // Don't block the original render; we'll mutate post-render
+}
+
+function collapseAlbumIntoFirst(albumId) {
+    const grp = albumGroups[albumId];
+    if (!grp || !grp.firstMsgId) return;
+    const firstEl = document.getElementById('msg-' + grp.firstMsgId);
+    if (!firstEl) return;
+    const bubble = firstEl.querySelector('.bubble');
+    if (!bubble) return;
+
+    // Remove subsequent album items from DOM
+    grp.images.slice(1).forEach(im => {
+        const el = document.getElementById('msg-' + im.id);
+        if (el) el.style.display = 'none';
+    });
+
+    // Replace existing image inside first bubble with the album grid
+    const existingImg = bubble.querySelector('img');
+    if (existingImg && !bubble.querySelector('.album')) {
+        const albumDiv = document.createElement('div');
+        const total = grp.images.length;
+        let cls = 'album ';
+        if (total === 2) cls += 'album-2';
+        else if (total === 3) cls += 'album-3';
+        else if (total === 4) cls += 'album-4';
+        else cls += 'album-many';
+        albumDiv.className = cls;
+        const visibleCount = Math.min(total, total <= 4 ? total : 5);
+        for (let i = 0; i < visibleCount; i++) {
+            const img = grp.images[i];
+            const itemDiv = document.createElement('div');
+            itemDiv.style.position = 'relative';
+            const imgEl = document.createElement('img');
+            imgEl.className = 'album-item';
+            imgEl.src = img.url;
+            imgEl.onclick = (e) => { e.stopPropagation(); openLightbox(img.url, false); };
+            itemDiv.appendChild(imgEl);
+            // Show "+N" overlay on last item if more
+            if (i === visibleCount - 1 && total > visibleCount) {
+                const overlay = document.createElement('div');
+                overlay.className = 'album-overlay-count';
+                overlay.innerText = '+' + (total - visibleCount + 1);
+                overlay.onclick = (e) => { e.stopPropagation(); openLightbox(img.url, false); };
+                itemDiv.appendChild(overlay);
+            }
+            albumDiv.appendChild(itemDiv);
+        }
+        existingImg.replaceWith(albumDiv);
+    } else if (bubble.querySelector('.album')) {
+        // Already have an album; just append a new item if room
+        const albumDiv = bubble.querySelector('.album');
+        const newImage = grp.images[grp.images.length - 1];
+        if (!albumDiv.querySelector(`img[src="${newImage.url}"]`)) {
+            const itemDiv = document.createElement('div');
+            itemDiv.style.position = 'relative';
+            const imgEl = document.createElement('img');
+            imgEl.className = 'album-item';
+            imgEl.src = newImage.url;
+            imgEl.onclick = (e) => { e.stopPropagation(); openLightbox(newImage.url, false); };
+            itemDiv.appendChild(imgEl);
+            albumDiv.appendChild(itemDiv);
+            // Update class based on new count
+            const cnt = albumDiv.children.length;
+            albumDiv.className = 'album ' + (cnt === 2 ? 'album-2' : cnt === 3 ? 'album-3' : cnt === 4 ? 'album-4' : 'album-many');
+        }
+    }
+}
+
+// Hook appendMessage to attach to albums and add date dividers
+const __origAppendMessage_ph4x = (typeof appendMessage === 'function') ? appendMessage : null;
+if (__origAppendMessage_ph4x) {
+    const wrapped = window.appendMessage;
+    window.appendMessage = function(data) {
+        // Insert date divider if needed (when day changes)
+        try {
+            const tsRaw = data.timestamp;
+            if (tsRaw) {
+                const dStr = formatDateDividerLabel(tsRaw);
+                if (dStr && dStr !== window.__lastInsertedDateDivider) {
+                    window.__lastInsertedDateDivider = dStr;
+                    const messages = document.getElementById('messages');
+                    if (messages) {
+                        const div = document.createElement('div');
+                        div.className = 'date-divider';
+                        div.innerHTML = `<span>${dStr}</span>`;
+                        messages.appendChild(div);
+                    }
+                }
+            }
+        } catch {}
+        wrapped(data);
+        // Attach to album if applicable
+        if (data.albumId) {
+            tryAttachToAlbum(data);
+        }
+    };
+}
+
+function formatDateDividerLabel(iso) {
+    try {
+        const d = new Date((iso.includes('T') ? iso : iso.replace(' ', 'T')) + (iso.endsWith('Z') ? '' : 'Z'));
+        if (isNaN(d.getTime())) return '';
+        const today = new Date();
+        const yesterday = new Date(today.getTime() - 86400000);
+        const sameDay = (a, b) => a.toDateString() === b.toDateString();
+        if (sameDay(d, today)) return 'Today';
+        if (sameDay(d, yesterday)) return 'Yesterday';
+        const sevenDays = new Date(today.getTime() - 7 * 86400000);
+        if (d > sevenDays) {
+            return d.toLocaleDateString(undefined, { weekday: 'long' });
+        }
+        return d.toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: d.getFullYear() !== today.getFullYear() ? 'numeric' : undefined });
+    } catch { return ''; }
+}
+
+// Reset divider tracker when switching rooms / loading history
+const __origOpenChat_ph4x = (typeof openChat === 'function') ? openChat : null;
+if (__origOpenChat_ph4x) {
+    const wrapped = window.openChat;
+    window.openChat = function(...args) {
+        window.__lastInsertedDateDivider = null;
+        wrapped.apply(this, args);
+    };
+}
+
+// Auto-open lightbox when single bubble images are tapped
+function setupSingleImageLightbox() {
+    const messages = document.getElementById('messages');
+    if (!messages || messages._lbHooked) return;
+    messages._lbHooked = true;
+    messages.addEventListener('click', (e) => {
+        const t = e.target;
+        if (t.tagName === 'IMG' && t.closest('.bubble') && !t.classList.contains('album-item')) {
+            e.stopPropagation();
+            openLightbox(t.src, false);
+        }
+        if (t.tagName === 'VIDEO' && t.closest('.bubble') && !t.closest('.video-msg-bubble')) {
+            // Round video messages have their own controls; don't intercept
+        }
+    }, true);
+}
+setInterval(setupSingleImageLightbox, 1500);
