@@ -752,6 +752,7 @@ UPDATE_FILES = [
 UPDATE_BINARY_FILES = [
     ("static/icon-192.png", "static/icon-192.png"),
     ("static/icon-512.png", "static/icon-512.png"),
+    ("static/favicon-32.png", "static/favicon-32.png"),
 ]
 MAX_BACKUPS = 5
 
@@ -769,6 +770,7 @@ def _make_backup(label="manual"):
         "static/manifest.json",
         "static/icon-192.png",
         "static/icon-512.png",
+        "static/favicon-32.png",
         "install.sh",
         "users.txt",
     ]:
@@ -924,6 +926,7 @@ async def admin_rollback(request: Request, info: dict = Depends(require_admin)):
             "static/manifest.json",
             "static/icon-192.png",
             "static/icon-512.png",
+            "static/favicon-32.png",
             "install.sh",
             "users.txt",
         ]:
