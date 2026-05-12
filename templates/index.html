@@ -429,6 +429,12 @@
         .input-box { align-items: flex-end; }      /* keep send button bottom-aligned when textarea grows */
         .input-area-row { align-items: flex-end; }
 
+        /* CRITICAL FIX for the chat-shift bug:
+           When the textarea grows, .messages shrinks but its scroll content (anchored bottom)
+           used to jump. The fix is overflow-anchor + a wrapper that always pins to bottom. */
+        .messages { overflow-anchor: none; }   /* Disable browser's anchor algorithm */
+        .messages > .msg-row:last-child { overflow-anchor: auto; }  /* Pin only to last message */
+
         .reply-close-btn {
             position: absolute; top: 6px; right: 6px;
             background: transparent; border: none; color: var(--c-gray);
@@ -490,14 +496,37 @@
             #videoPreview { width: 140px; height: 140px; bottom: 80px; right: 10px; }
             [dir="rtl"] #videoPreview { left: 10px; right: auto; }
 
+            /* Telegram-style compact context menu on mobile:
+               narrow popup, NOT full width, with smaller padding */
             .context-menu {
                 position: fixed !important;
-                bottom: 16px !important;
+                bottom: auto !important;
                 top: auto !important;
-                left: 8px !important;
-                right: 8px !important;
-                width: auto !important;
-                max-width: none;
+                left: auto !important;
+                right: auto !important;
+                width: 230px !important;
+                max-width: 78vw;
+                padding: 6px !important;
+                gap: 2px !important;
+                font-size: 14px;
+            }
+            .context-menu button {
+                padding: 9px 12px !important;
+                font-size: 14px !important;
+                gap: 10px !important;
+            }
+            .context-menu button svg {
+                width: 16px !important;
+                height: 16px !important;
+            }
+            .context-menu .emoji-bar {
+                gap: 4px !important;
+                padding: 4px 6px !important;
+                margin-bottom: 4px !important;
+            }
+            .context-menu .emoji-bar span {
+                font-size: 22px !important;
+                padding: 4px !important;
             }
 
             .chat-header { padding: 0 12px; gap: 10px; height: 60px; }
@@ -1005,6 +1034,95 @@
         @media (max-width: 600px) {
             .admin-user-row > div { flex-direction:column !important; align-items:flex-start !important; }
         }
+
+        /* ===== PHASE 5 EXTRA: Voice player + video + image bubbles ===== */
+        /* Voice bubble */
+        .voice-msg { font-family: inherit; }
+        .voice-msg .voice-play-btn { transition: transform 0.15s, background 0.15s; }
+        .voice-msg .voice-play-btn:hover { transform: scale(1.06); background: var(--c-blue-hover); }
+        .voice-msg .voice-play-btn:active { transform: scale(0.94); }
+        .voice-waveform { padding: 4px 0; }
+
+        /* Image bubble — single image limit */
+        .bubble img { max-width: 320px; max-height: 380px; object-fit: cover; cursor: pointer; }
+        @media (max-width: 600px) {
+            .bubble img { max-width: 70vw; max-height: 60vh; }
+            .voice-msg { min-width: 200px !important; }
+        }
+        .bubble img:hover { opacity: 0.95; }
+
+        /* Video bubble — proper styling */
+        .bubble video:not(.video-msg):not([class*="album"]) {
+            max-width: 320px;
+            max-height: 380px;
+            border-radius: 14px;
+            margin-top: 4px;
+            border: 1px solid var(--border);
+            cursor: pointer;
+            background: #000;
+        }
+        @media (max-width: 600px) {
+            .bubble video:not(.video-msg) {
+                max-width: 70vw;
+                max-height: 60vh;
+            }
+        }
+
+        /* File bubble — Telegram style */
+        .file-link {
+            min-width: 240px;
+            background: rgba(255,255,255,0.06) !important;
+        }
+        .msg-row.out .file-link { background: rgba(255,255,255,0.1) !important; }
+        .file-icon {
+            background: linear-gradient(135deg, var(--c-blue), var(--c-blue-hover)) !important;
+            box-shadow: 0 4px 12px var(--c-blue-glow);
+        }
+
+        /* Upload progress in-bubble (when a message is being uploaded by me) */
+        .uploading-bubble { position: relative; opacity: 0.85; }
+        .uploading-bubble::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: rgba(0,0,0,0.4);
+            border-radius: inherit;
+            z-index: 1;
+            pointer-events: none;
+        }
+        .upload-overlay {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 2;
+            pointer-events: auto;
+        }
+        .upload-ring {
+            width: 56px; height: 56px;
+            position: relative;
+        }
+        .upload-ring svg { transform: rotate(-90deg); }
+        .upload-ring .ring-bg { stroke: rgba(255,255,255,0.25); }
+        .upload-ring .ring-fg {
+            stroke: white;
+            stroke-linecap: round;
+            transition: stroke-dashoffset 0.2s linear;
+        }
+        .upload-cancel-btn {
+            position: absolute;
+            inset: 0;
+            background: rgba(0,0,0,0.45);
+            border: none;
+            border-radius: 50%;
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+        }
+        .upload-cancel-btn svg { width: 22px; height: 22px; fill: white; }
     </style>
 
 
