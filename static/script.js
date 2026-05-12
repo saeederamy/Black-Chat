@@ -467,7 +467,24 @@ function appendMessage(data) {
         }
     }
     else if (data.msgType === 'audio') {
-        media = `<div style="display:flex; align-items:center; gap:10px; background:rgba(0,0,0,0.15); padding:6px 12px 6px 6px; border-radius:30px; margin-top:6px; border:1px solid rgba(255,255,255,0.05); box-shadow: 0 2px 8px rgba(0,0,0,0.1);"><div style="background:var(--c-blue); width:38px; height:38px; border-radius:50%; display:flex; justify-content:center; align-items:center; color:white; flex-shrink:0; font-size:18px; box-shadow:0 0 10px var(--c-blue-glow);">🎤</div><audio controls preload="metadata" src="${data.url}" style="height:32px; width:200px; outline:none; filter:grayscale(0.5);"></audio></div>`;
+        // Telegram-style voice message with waveform, play/pause, seek
+        const audioId = 'aud_' + data.id;
+        media = `
+        <div class="voice-msg" data-audio-id="${audioId}" style="display:flex; align-items:center; gap:10px; padding:6px 4px; margin-top:4px; min-width:230px;">
+            <audio id="${audioId}" preload="metadata" src="${data.url}" style="display:none;"></audio>
+            <button class="voice-play-btn" onclick="toggleVoicePlay('${audioId}'); event.stopPropagation();" style="width:42px; height:42px; border-radius:50%; background:var(--c-blue); border:none; color:white; cursor:pointer; display:flex; align-items:center; justify-content:center; flex-shrink:0; box-shadow:0 0 12px var(--c-blue-glow);">
+                <svg class="voice-icon-play" viewBox="0 0 24 24" style="width:22px; fill:currentColor;"><path d="M8 5v14l11-7z"/></svg>
+                <svg class="voice-icon-pause" viewBox="0 0 24 24" style="width:22px; fill:currentColor; display:none;"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+            </button>
+            <div style="flex:1; display:flex; flex-direction:column; gap:4px; min-width:0;">
+                <div class="voice-waveform" onclick="seekVoiceByClick(event, '${audioId}')" style="height:24px; display:flex; align-items:center; gap:2px; cursor:pointer; position:relative; user-select:none;">
+                    ${generateWaveformBars()}
+                </div>
+                <div style="display:flex; justify-content:space-between; align-items:center; font-size:11px; color:var(--c-gray);">
+                    <span class="voice-time" data-time-for="${audioId}">0:00</span>
+                </div>
+            </div>
+        </div>`;
     }
     else if (data.msgType === 'file') {
         let fName = data.fileName || "File";
@@ -538,19 +555,43 @@ function openMsgMenu(e, id, textEncoded, sender) {
     contextMsgId = id; contextMsgText = decodeURIComponent(textEncoded) || ''; contextMsgSender = sender;
     const menu = document.getElementById('msgContextMenu');
     menu.style.display = 'flex';
-    
+
     if(sender === currentUser && contextMsgText !== '') document.getElementById('editBtnOption').style.display = 'flex';
     else document.getElementById('editBtnOption').style.display = 'none';
-    
+
     let x = window.innerWidth / 2; let y = window.innerHeight / 2;
     if(e) {
         x = e.clientX || (e.touches && e.touches[0].clientX) || x;
         y = e.clientY || (e.touches && e.touches[0].clientY) || y;
     }
-    
-    if(x + 240 > window.innerWidth) x = window.innerWidth - 250;
-    if(y + 300 > window.innerHeight) y = window.innerHeight - 310;
-    menu.style.left = `${x}px`; menu.style.top = `${y}px`;
+
+    // First reset so we can measure
+    menu.style.left = '0px';
+    menu.style.top = '0px';
+
+    // After display:flex paints, measure the actual menu and place properly
+    requestAnimationFrame(() => {
+        const w = menu.offsetWidth || 230;
+        const h = menu.offsetHeight || 280;
+        const isMobile = window.innerWidth < 600;
+        let left, top;
+        if (isMobile) {
+            // Center horizontally, place near tap vertically but keep on screen
+            left = (window.innerWidth - w) / 2;
+            // Show ABOVE the tap if it fits, else below
+            top = y - h - 10;
+            if (top < 10) top = Math.min(y + 10, window.innerHeight - h - 10);
+        } else {
+            left = x;
+            top = y;
+            if (left + w > window.innerWidth - 10) left = window.innerWidth - w - 10;
+            if (top + h > window.innerHeight - 10) top = window.innerHeight - h - 10;
+            if (left < 10) left = 10;
+            if (top < 10) top = 10;
+        }
+        menu.style.left = left + 'px';
+        menu.style.top = top + 'px';
+    });
 }
 
 function sendReaction(emoji) { if(!contextMsgId) return; ws.send(JSON.stringify({action: 'react_msg', msg_id: contextMsgId, emoji: emoji})); closeContextMenu(); }
@@ -681,9 +722,41 @@ function handleInputKey(e) {
 
 function autoResize(el) {
     if (!el) return;
+    const messages = document.getElementById('messages');
+    // Remember whether we were pinned to the bottom BEFORE resize
+    let wasAtBottom = false;
+    let prevScrollTop = 0;
+    let prevHeight = 0;
+    if (messages) {
+        prevScrollTop = messages.scrollTop;
+        prevHeight = el.offsetHeight;
+        // "near bottom" threshold = 40px
+        wasAtBottom = (messages.scrollHeight - messages.scrollTop - messages.clientHeight) < 40;
+    }
+
+    // Resize the textarea
     el.style.height = 'auto';
     const max = 140;
     el.style.height = Math.min(el.scrollHeight, max) + 'px';
+
+    // After the resize, the .messages flex container changed size.
+    // We want to either (a) stick to the bottom, or (b) keep the previous scroll position
+    // so the visible messages don't shift up/down.
+    if (messages) {
+        // Use rAF so we run after layout settles
+        requestAnimationFrame(() => {
+            if (wasAtBottom) {
+                messages.scrollTop = messages.scrollHeight;
+            } else {
+                const heightDelta = el.offsetHeight - prevHeight;
+                // When input grows by +N, messages height shrinks by N → scroll content
+                // would visually shift UP by N. We compensate by reducing scrollTop by N.
+                if (heightDelta !== 0) {
+                    messages.scrollTop = Math.max(0, prevScrollTop - heightDelta);
+                }
+            }
+        });
+    }
 }
 
 // Keep the OLD keypress for safety (no-op since onkeydown handles it now via inline)
@@ -2349,40 +2422,252 @@ async function uploadWithProgress(file, fileName) {
     });
 }
 
-// Override the existing uploadFile to use progress
-const __origUploadFile = (typeof uploadFile === 'function') ? uploadFile : null;
-if (__origUploadFile) {
-    window.uploadFile = async function() {
-        const file = document.getElementById('fileInput').files[0];
-        if (!file) return;
-        // Quick client-side quota check
-        if (myQuotaMB > 0) {
-            const remaining = myQuotaMB * 1024 * 1024 - myUsedBytes;
-            if (file.size > remaining) {
-                alert(`Quota exceeded.\nRemaining: ${fmtBytes(Math.max(0, remaining))}\nFile size: ${fmtBytes(file.size)}`);
-                document.getElementById('fileInput').value = '';
-                return;
+// =====================================================================
+// In-bubble upload preview with progress ring + cancel
+// =====================================================================
+function detectUploadKind(file) {
+    if (!file) return 'file';
+    const t = file.type || '';
+    if (t.startsWith('image/')) return 'image';
+    if (t.startsWith('video/')) return 'video';
+    if (t.startsWith('audio/')) return 'audio';
+    return 'file';
+}
+
+function createUploadPlaceholder(file) {
+    const messages = document.getElementById('messages');
+    if (!messages) return null;
+    const kind = detectUploadKind(file);
+    const tempId = 'up_' + Math.random().toString(36).slice(2, 9);
+
+    // Generate object URL for image/video preview
+    let previewUrl = null;
+    if (kind === 'image' || kind === 'video') {
+        try { previewUrl = URL.createObjectURL(file); } catch {}
+    }
+
+    const row = document.createElement('div');
+    row.className = 'msg-row out';
+    row.id = 'upload-' + tempId;
+
+    let mediaHtml = '';
+    if (kind === 'image' && previewUrl) {
+        mediaHtml = `<img src="${previewUrl}" style="max-width:280px; max-height:340px; border-radius:14px; display:block;">`;
+    } else if (kind === 'video' && previewUrl) {
+        mediaHtml = `<video src="${previewUrl}" muted style="max-width:280px; max-height:340px; border-radius:14px; display:block;"></video>`;
+    } else if (kind === 'audio') {
+        mediaHtml = `<div style="display:flex; align-items:center; gap:10px; padding:10px 14px; min-width:230px;">
+            <div style="width:42px; height:42px; border-radius:50%; background:var(--c-blue); display:flex; align-items:center; justify-content:center; color:white;">🎤</div>
+            <div><div style="font-weight:600; font-size:13px;">${(file.name||'Voice').replace(/[<>]/g,'')}</div><div style="font-size:11px; opacity:0.7;">${fmtBytes(file.size)}</div></div>
+        </div>`;
+    } else {
+        // generic file
+        mediaHtml = `<div class="file-link" style="margin-top:0;">
+            <div class="file-icon"><svg style="width:24px;fill:white;"><use href="#icon-doc"></use></svg></div>
+            <div style="display:flex; flex-direction:column; overflow:hidden;">
+                <span style="font-weight:bold; font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" dir="auto">${(file.name||'File').replace(/[<>]/g,'')}</span>
+                <span style="font-size:11px; opacity:0.7;">${fmtBytes(file.size)} · Uploading...</span>
+            </div>
+        </div>`;
+    }
+
+    row.innerHTML = `
+        <div class="bubble uploading-bubble" style="padding:4px; max-width:90%;">
+            <div style="position:relative; border-radius:14px; overflow:hidden;">
+                ${mediaHtml}
+                <div class="upload-overlay">
+                    <button class="upload-cancel-btn" type="button" data-temp-id="${tempId}" title="Cancel upload">
+                        <div class="upload-ring">
+                            <svg viewBox="0 0 56 56" width="56" height="56">
+                                <circle class="ring-bg" cx="28" cy="28" r="24" fill="none" stroke-width="3"/>
+                                <circle class="ring-fg" data-ring-for="${tempId}" cx="28" cy="28" r="24" fill="none" stroke-width="3" stroke-dasharray="150.8" stroke-dashoffset="150.8"/>
+                            </svg>
+                            <div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center;">
+                                <svg viewBox="0 0 24 24" style="width:18px; fill:white;"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                            </div>
+                        </div>
+                    </button>
+                </div>
+            </div>
+            <div class="upload-status" data-status-for="${tempId}" style="font-size:11px; color:var(--c-gray); margin-top:6px; text-align:right;">0% · Uploading...</div>
+        </div>
+    `;
+
+    messages.appendChild(row);
+    // Smooth-scroll to bottom
+    requestAnimationFrame(() => { messages.scrollTop = messages.scrollHeight; });
+
+    // Track for cancel
+    row._previewUrl = previewUrl;
+    row._tempId = tempId;
+    return { row, tempId, previewUrl };
+}
+
+function updateUploadPlaceholder(tempId, pct) {
+    const ring = document.querySelector(`circle[data-ring-for="${tempId}"]`);
+    const status = document.querySelector(`[data-status-for="${tempId}"]`);
+    if (ring) {
+        const circumference = 150.8; // 2*PI*24
+        const offset = circumference * (1 - (pct / 100));
+        ring.style.strokeDashoffset = offset;
+    }
+    if (status) status.innerText = `${pct}% · Uploading...`;
+}
+
+function removeUploadPlaceholder(tempId) {
+    const row = document.getElementById('upload-' + tempId);
+    if (!row) return;
+    if (row._previewUrl) { try { URL.revokeObjectURL(row._previewUrl); } catch{} }
+    row.remove();
+}
+
+function setUploadPlaceholderError(tempId, errMsg) {
+    const status = document.querySelector(`[data-status-for="${tempId}"]`);
+    if (status) {
+        status.innerText = '❌ ' + (errMsg || 'Upload failed');
+        status.style.color = 'var(--c-red)';
+    }
+    const row = document.getElementById('upload-' + tempId);
+    if (row) {
+        row.querySelector('.uploading-bubble')?.classList.remove('uploading-bubble');
+        // Auto remove after 4s
+        setTimeout(() => removeUploadPlaceholder(tempId), 4000);
+    }
+}
+
+// Better uploadWithProgress that integrates with in-bubble placeholder
+async function uploadWithProgressInBubble(file, fileName, tempId) {
+    return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        const fd = new FormData();
+        fd.append('file', file, fileName || file.name);
+
+        // Track XHR by tempId so we can cancel by clicking the cancel button
+        window._activeUploads = window._activeUploads || {};
+        window._activeUploads[tempId] = xhr;
+
+        xhr.upload.addEventListener('progress', (e) => {
+            if (e.lengthComputable) {
+                const pct = Math.round((e.loaded / e.total) * 100);
+                updateUploadPlaceholder(tempId, pct);
             }
+        });
+        xhr.addEventListener('load', () => {
+            delete window._activeUploads[tempId];
+            if (xhr.status >= 200 && xhr.status < 300) {
+                try { resolve(JSON.parse(xhr.responseText)); }
+                catch { reject(new Error('Invalid response')); }
+            } else {
+                let detail = xhr.responseText;
+                try { detail = JSON.parse(xhr.responseText).detail || detail; } catch {}
+                reject(new Error(`HTTP ${xhr.status}: ${detail}`));
+            }
+        });
+        xhr.addEventListener('error', () => {
+            delete window._activeUploads[tempId];
+            reject(new Error('Network error'));
+        });
+        xhr.addEventListener('abort', () => {
+            delete window._activeUploads[tempId];
+            reject(new Error('Upload cancelled'));
+        });
+
+        xhr.open('POST', '/api/upload', true);
+        if (currentToken) xhr.setRequestHeader('Authorization', 'Bearer ' + currentToken);
+        xhr.send(fd);
+    });
+}
+
+// Wire up cancel button via event delegation
+document.addEventListener('click', function(e) {
+    const btn = e.target.closest('.upload-cancel-btn');
+    if (!btn) return;
+    e.stopPropagation();
+    const tempId = btn.getAttribute('data-temp-id');
+    if (!tempId) return;
+    const xhr = window._activeUploads && window._activeUploads[tempId];
+    if (xhr) { try { xhr.abort(); } catch{} }
+    removeUploadPlaceholder(tempId);
+});
+
+// Replace uploadFile to use in-bubble preview
+window.uploadFile = async function() {
+    const file = document.getElementById('fileInput').files[0];
+    if (!file) return;
+    if (myQuotaMB > 0) {
+        const remaining = myQuotaMB * 1024 * 1024 - myUsedBytes;
+        if (file.size > remaining) {
+            alert(`Quota exceeded.\nRemaining: ${fmtBytes(Math.max(0, remaining))}\nFile size: ${fmtBytes(file.size)}`);
+            document.getElementById('fileInput').value = '';
+            return;
         }
+    }
+    const ph = createUploadPlaceholder(file);
+    if (!ph) return;
+    try {
+        const data = await uploadWithProgressInBubble(file, file.name, ph.tempId);
+        if (data.used_bytes != null) myUsedBytes = data.used_bytes;
+        if (data.url) {
+            // Send actual message; the placeholder will be replaced when the WS
+            // echoes our own message back (or after a short delay if WS lags).
+            removeUploadPlaceholder(ph.tempId);
+            ws.send(JSON.stringify({
+                action: 'send_msg', room: currentRoom, user: currentUser,
+                targetUser: targetUserForDM, msgType: data.type,
+                url: data.url, fileName: data.name, replyTo: replyToMsg
+            }));
+            cancelReply();
+        } else {
+            removeUploadPlaceholder(ph.tempId);
+        }
+    } catch (e) {
+        if (e.message === 'Upload cancelled') {
+            // already removed
+        } else {
+            setUploadPlaceholderError(ph.tempId, e.message);
+        }
+    }
+    document.getElementById('fileInput').value = '';
+};
+
+// Also wire the album / multi-upload path
+window.uploadMultipleImages = async function(files) {
+    if (!files || !files.length) return;
+    if (files.length === 1) {
+        const dt = new DataTransfer();
+        dt.items.add(files[0]);
+        document.getElementById('fileInput').files = dt.files;
+        return uploadFile();
+    }
+    const albumId = 'alb_' + Math.random().toString(36).slice(2, 10);
+    for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const ph = createUploadPlaceholder(file);
+        if (!ph) continue;
         try {
-            const data = await uploadWithProgress(file);
+            const data = await uploadWithProgressInBubble(file, file.name, ph.tempId);
             if (data.used_bytes != null) myUsedBytes = data.used_bytes;
             if (data.url) {
+                removeUploadPlaceholder(ph.tempId);
                 ws.send(JSON.stringify({
                     action: 'send_msg', room: currentRoom, user: currentUser,
                     targetUser: targetUserForDM, msgType: data.type,
-                    url: data.url, fileName: data.name, replyTo: replyToMsg
+                    url: data.url, fileName: data.name,
+                    replyTo: i === 0 ? replyToMsg : null,
+                    albumId, albumIndex: i, albumTotal: files.length,
                 }));
-                cancelReply();
+            } else {
+                removeUploadPlaceholder(ph.tempId);
             }
         } catch (e) {
             if (e.message !== 'Upload cancelled') {
-                alert('Upload failed: ' + e.message);
+                setUploadPlaceholderError(ph.tempId, e.message);
             }
         }
-        document.getElementById('fileInput').value = '';
-    };
-}
+    }
+    cancelReply();
+};
+
 
 // =====================================================================
 // Telegram-style image collage (album)
@@ -2645,3 +2930,102 @@ function setupSingleImageLightbox() {
     }, true);
 }
 setInterval(setupSingleImageLightbox, 1500);
+
+
+// =====================================================================
+// Telegram-style voice message player
+// =====================================================================
+function generateWaveformBars(count = 32) {
+    // Pseudo-random heights based on a seed for a "natural" waveform look
+    let bars = '';
+    for (let i = 0; i < count; i++) {
+        // Predictable but irregular heights between 25% and 100%
+        const h = 25 + ((Math.sin(i * 1.7) + Math.sin(i * 0.9 + 1) + 2) * 18);
+        bars += `<div class="wfbar" style="flex:1; min-width:2px; background:rgba(255,255,255,0.35); height:${Math.round(h)}%; border-radius:2px; transition:background 0.15s;"></div>`;
+    }
+    return bars;
+}
+
+let __activeVoiceId = null;
+
+function toggleVoicePlay(audioId) {
+    const audio = document.getElementById(audioId);
+    if (!audio) return;
+    // Stop any other currently-playing voice message
+    if (__activeVoiceId && __activeVoiceId !== audioId) {
+        const other = document.getElementById(__activeVoiceId);
+        if (other) { try { other.pause(); } catch{} }
+        const otherWrap = document.querySelector(`[data-audio-id="${__activeVoiceId}"]`);
+        if (otherWrap) {
+            otherWrap.querySelector('.voice-icon-play').style.display = 'block';
+            otherWrap.querySelector('.voice-icon-pause').style.display = 'none';
+        }
+    }
+    const wrap = document.querySelector(`[data-audio-id="${audioId}"]`);
+    if (!wrap) return;
+    const iconPlay = wrap.querySelector('.voice-icon-play');
+    const iconPause = wrap.querySelector('.voice-icon-pause');
+
+    if (audio.paused) {
+        audio.play().catch(e => console.warn('Voice play failed:', e));
+        iconPlay.style.display = 'none';
+        iconPause.style.display = 'block';
+        __activeVoiceId = audioId;
+        attachVoiceProgressListeners(audio, wrap);
+    } else {
+        audio.pause();
+        iconPlay.style.display = 'block';
+        iconPause.style.display = 'none';
+    }
+}
+
+function attachVoiceProgressListeners(audio, wrap) {
+    if (audio._listenersAttached) return;
+    audio._listenersAttached = true;
+
+    const timeEl = wrap.querySelector('.voice-time');
+    const bars = wrap.querySelectorAll('.wfbar');
+    const total = bars.length;
+
+    const updateBars = () => {
+        if (!audio.duration || !isFinite(audio.duration)) return;
+        const pct = audio.currentTime / audio.duration;
+        const filledCount = Math.floor(pct * total);
+        bars.forEach((b, i) => {
+            b.style.background = i < filledCount ? 'var(--c-blue)' : 'rgba(255,255,255,0.35)';
+        });
+    };
+    const updateTime = () => {
+        if (timeEl) timeEl.innerText = formatVoiceTime(audio.currentTime || 0) +
+            (audio.duration && isFinite(audio.duration) ? ' / ' + formatVoiceTime(audio.duration) : '');
+    };
+
+    audio.addEventListener('timeupdate', () => { updateBars(); updateTime(); });
+    audio.addEventListener('loadedmetadata', updateTime);
+    audio.addEventListener('ended', () => {
+        const iconPlay = wrap.querySelector('.voice-icon-play');
+        const iconPause = wrap.querySelector('.voice-icon-pause');
+        iconPlay.style.display = 'block';
+        iconPause.style.display = 'none';
+        audio.currentTime = 0;
+        bars.forEach(b => b.style.background = 'rgba(255,255,255,0.35)');
+    });
+}
+
+function formatVoiceTime(s) {
+    if (!isFinite(s)) return '0:00';
+    const m = Math.floor(s / 60);
+    const sec = Math.floor(s % 60);
+    return m + ':' + (sec < 10 ? '0' + sec : sec);
+}
+
+function seekVoiceByClick(e, audioId) {
+    const audio = document.getElementById(audioId);
+    if (!audio || !audio.duration) return;
+    const wfm = e.currentTarget;
+    const rect = wfm.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    let pct = x / rect.width;
+    if (pct < 0) pct = 0; if (pct > 1) pct = 1;
+    audio.currentTime = pct * audio.duration;
+}
