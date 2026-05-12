@@ -59,6 +59,7 @@ function install_app() {
         curl -sL "$REPO_URL/static/manifest.json" -o "$INSTALL_DIR/static/manifest.json"
         curl -sL "$REPO_URL/static/icon-192.png" -o "$INSTALL_DIR/static/icon-192.png"
         curl -sL "$REPO_URL/static/icon-512.png" -o "$INSTALL_DIR/static/icon-512.png"
+        curl -sL "$REPO_URL/static/favicon-32.png" -o "$INSTALL_DIR/static/favicon-32.png"
         curl -sL "$REPO_URL/install.sh" -o "$INSTALL_DIR/install.sh"
     fi
     
@@ -108,6 +109,7 @@ function update_app() {
     curl -sL "$REPO_URL/static/manifest.json" -o "$INSTALL_DIR/static/manifest.json"
     curl -sL "$REPO_URL/static/icon-192.png" -o "$INSTALL_DIR/static/icon-192.png"
     curl -sL "$REPO_URL/static/icon-512.png" -o "$INSTALL_DIR/static/icon-512.png"
+    curl -sL "$REPO_URL/static/favicon-32.png" -o "$INSTALL_DIR/static/favicon-32.png"
     curl -sL "$REPO_URL/install.sh" -o "$INSTALL_DIR/install.sh"
     chmod +x "$INSTALL_DIR/install.sh"
     
