@@ -32,9 +32,57 @@ function fmtBytes(n) {
     return (n/(1024*1024*1024)).toFixed(2) + ' GB';
 }
 
+// ============ Theme system ============
+// Valid: 'dark', 'light', 'telegram', 'telegram-light'
+let serverDefaultTheme = 'dark';
+let allowUserThemeChange = true;
 let savedTheme = localStorage.getItem('hub_theme') || 'dark';
 document.documentElement.setAttribute('data-theme', savedTheme);
-function toggleTheme() { savedTheme = savedTheme === 'dark' ? 'light' : 'dark'; document.documentElement.setAttribute('data-theme', savedTheme); localStorage.setItem('hub_theme', savedTheme); }
+
+function setTheme(name) {
+    const valid = ['dark', 'light', 'telegram', 'telegram-light'];
+    if (!valid.includes(name)) name = 'dark';
+    savedTheme = name;
+    document.documentElement.setAttribute('data-theme', name);
+    localStorage.setItem('hub_theme', name);
+}
+
+// Quick toggle button: cycle through dark → light → telegram → telegram-light → dark
+function toggleTheme() {
+    if (!allowUserThemeChange && currentRole !== 'admin') {
+        alert('Theme switching is disabled by the admin.');
+        return;
+    }
+    const order = ['dark', 'light', 'telegram', 'telegram-light'];
+    const idx = order.indexOf(savedTheme);
+    const next = order[(idx + 1) % order.length];
+    setTheme(next);
+}
+
+// Fetch public app settings (theme default) at boot
+async function loadAppSettings() {
+    try {
+        const res = await fetch('/api/settings/public');
+        if (!res.ok) return;
+        const data = await res.json();
+        serverDefaultTheme = data.default_theme || 'dark';
+        allowUserThemeChange = !!data.allow_user_theme_change;
+        // If user hasn't picked their own theme, follow the server default
+        if (!localStorage.getItem('hub_theme')) {
+            setTheme(serverDefaultTheme);
+        }
+        // If admin disabled user override, force server theme
+        if (!allowUserThemeChange) {
+            setTheme(serverDefaultTheme);
+        }
+        // Update app name on the login screen if present
+        if (data.app_name) {
+            const titleEl = document.querySelector('title');
+            if (titleEl) titleEl.innerText = data.app_name;
+        }
+    } catch(e) {}
+}
+loadAppSettings();
 
 let savedBg = localStorage.getItem('chatBg');
 if(savedBg) document.getElementById('chatArea').style.backgroundImage = `url('${savedBg}')`;
@@ -227,6 +275,9 @@ async function loadInitData() {
     });
     
     if(!currentRoom) openChat('Announcements', 'channel', 'Announcements');
+
+    // Restore unread badges from localStorage (after chat list is rendered)
+    setTimeout(() => { if (typeof restoreUnreadBadges === 'function') restoreUnreadBadges(); }, 100);
 }
 
 function openModal(id) {
@@ -261,7 +312,10 @@ async function refreshMyQuota() {
     } catch(e) {}
 }
 function closeModal(id) { document.getElementById(id).style.display = 'none'; }
-function closeContextMenu() { document.getElementById('msgContextMenu').style.display = 'none'; }
+function closeContextMenu() {
+    document.getElementById('msgContextMenu').style.display = 'none';
+    document.body.classList.remove('ctxmenu-open');
+}
 
 function openCreateModal() {
     let html = '';
@@ -345,10 +399,9 @@ function openChat(roomId, type, title, targetUser = null) {
     if(type === 'private' && targetUser && userAvatars[targetUser]) document.getElementById('header-avatar').style.border = 'none';
 
     document.getElementById('messages').innerHTML = '';
-    
-    let badgeId = type === 'private' ? `badge-dm_${roomId}` : `badge-${roomId}`;
-    let badge = document.getElementById(badgeId);
-    if(badge) { badge.style.display = 'none'; badge.innerText = '0'; }
+
+    // Clear unread badge for this chat (and remove from localStorage)
+    clearBadgeForRoom(roomId, type);
 
     const inputArea = document.getElementById('input-container');
     if ((roomId === 'Announcements' || type === 'channel') && currentRole !== 'admin') inputArea.style.display = 'none';
@@ -425,27 +478,102 @@ function switchProfTab(tab, btn) {
 }
 
 function handleNotification(msg) {
-    let sender = msg.data.user; 
-    let room = msg.room; 
+    let sender = msg.data.user;
+    let room = msg.room;
     let isDM = room.startsWith('dm_');
     let isGroup = room.startsWith('rm_');
+
+    // Do not count own messages as unread
+    if (sender === currentUser) return;
 
     if (isDM && !room.includes(currentUser)) return;
     if (isGroup && msg.data.roomMembers && !msg.data.roomMembers.includes(currentUser)) return;
 
-    if (isDM && !document.querySelector(`.chat-item[data-room="${sender}"]`)) loadInitData(); 
+    if (isDM && !document.querySelector(`.chat-item[data-room="${sender}"]`)) loadInitData();
 
     let targetId = isDM ? sender : room;
     let badgeId = isDM ? `badge-dm_${targetId}` : `badge-${targetId}`;
     let badge = document.getElementById(badgeId);
-    if(badge) { badge.style.display = 'inline-block'; badge.innerText = (parseInt(badge.innerText || 0) + 1); }
-    
+    if (badge) {
+        const newCount = (parseInt(badge.innerText || '0') || 0) + 1;
+        badge.innerText = newCount > 99 ? '99+' : String(newCount);
+        badge.classList.add('has-count');
+        badge.style.display = 'inline-block';
+        // persist count
+        try {
+            const key = `unread_${currentUser}_${badgeId}`;
+            localStorage.setItem(key, String(newCount));
+        } catch {}
+    }
+
+    // Also update chat preview text
+    const chatItem = badge ? badge.closest('.chat-item') : null;
+    if (chatItem) {
+        const preview = chatItem.querySelector('.chat-preview');
+        if (preview) {
+            const previewText = msg.data.msgType === 'text'
+                ? msg.data.text
+                : (msg.data.msgType === 'image' ? '🖼️ Photo' :
+                   msg.data.msgType === 'video' ? '🎥 Video' :
+                   msg.data.msgType === 'audio' ? '🎤 Voice' :
+                   '📎 ' + (msg.data.fileName || 'File'));
+            preview.innerText = `${sender}: ${previewText}`.slice(0, 60);
+            preview.style.color = 'var(--c-blue)';
+            preview.style.fontWeight = '600';
+        }
+    }
+
     try { document.getElementById('notif-sound').play(); } catch(e){}
 
     if ("Notification" in window && Notification.permission === "granted") {
         let notifBody = msg.data.msgType === 'text' ? msg.data.text : "New Message 📎";
         showSystemNotification(sender, notifBody, 'msg-' + room);
     }
+}
+
+// Clear badge when user opens that chat
+function clearBadgeForRoom(roomId, type) {
+    let badgeId = type === 'private' ? `badge-dm_${roomId}` : `badge-${roomId}`;
+    const badge = document.getElementById(badgeId);
+    if (badge) {
+        badge.innerText = '0';
+        badge.classList.remove('has-count');
+        badge.style.display = 'none';
+        try {
+            const key = `unread_${currentUser}_${badgeId}`;
+            localStorage.removeItem(key);
+        } catch {}
+    }
+    // Reset preview style
+    const chatItem = badge ? badge.closest('.chat-item') : null;
+    if (chatItem) {
+        const preview = chatItem.querySelector('.chat-preview');
+        if (preview) {
+            preview.style.color = '';
+            preview.style.fontWeight = '';
+        }
+    }
+}
+
+// Restore badge counts from localStorage on load
+function restoreUnreadBadges() {
+    try {
+        const prefix = `unread_${currentUser}_`;
+        for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (!key || !key.startsWith(prefix)) continue;
+            const badgeId = key.substring(prefix.length);
+            const count = parseInt(localStorage.getItem(key) || '0', 10);
+            if (count > 0) {
+                const badge = document.getElementById(badgeId);
+                if (badge) {
+                    badge.innerText = count > 99 ? '99+' : String(count);
+                    badge.classList.add('has-count');
+                    badge.style.display = 'inline-block';
+                }
+            }
+        }
+    } catch {}
 }
 
 let pressTimer;
@@ -555,39 +683,60 @@ function openMsgMenu(e, id, textEncoded, sender) {
     contextMsgId = id; contextMsgText = decodeURIComponent(textEncoded) || ''; contextMsgSender = sender;
     const menu = document.getElementById('msgContextMenu');
     menu.style.display = 'flex';
+    document.body.classList.add('ctxmenu-open');
 
     if(sender === currentUser && contextMsgText !== '') document.getElementById('editBtnOption').style.display = 'flex';
     else document.getElementById('editBtnOption').style.display = 'none';
 
-    let x = window.innerWidth / 2; let y = window.innerHeight / 2;
-    if(e) {
-        x = e.clientX || (e.touches && e.touches[0].clientX) || x;
-        y = e.clientY || (e.touches && e.touches[0].clientY) || y;
-    }
+    // Telegram-style: position relative to the MESSAGE BUBBLE, not the tap point
+    const msgRow = document.getElementById('msg-' + id);
+    const bubble = msgRow ? msgRow.querySelector('.bubble') : null;
 
-    // First reset so we can measure
+    // Reset positioning before measure
     menu.style.left = '0px';
     menu.style.top = '0px';
 
-    // After display:flex paints, measure the actual menu and place properly
     requestAnimationFrame(() => {
         const w = menu.offsetWidth || 230;
         const h = menu.offsetHeight || 280;
-        const isMobile = window.innerWidth < 600;
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+        const PAD = 8;
         let left, top;
-        if (isMobile) {
-            // Center horizontally, place near tap vertically but keep on screen
-            left = (window.innerWidth - w) / 2;
-            // Show ABOVE the tap if it fits, else below
-            top = y - h - 10;
-            if (top < 10) top = Math.min(y + 10, window.innerHeight - h - 10);
+
+        if (bubble) {
+            const r = bubble.getBoundingClientRect();
+            // Vertical: prefer ABOVE the bubble. If not enough room, BELOW.
+            const spaceAbove = r.top;
+            const spaceBelow = vh - r.bottom;
+            if (spaceAbove >= h + PAD + 4) {
+                top = r.top - h - 8;
+            } else if (spaceBelow >= h + PAD + 4) {
+                top = r.bottom + 8;
+            } else {
+                // Doesn't fully fit either side; place at bottom of viewport
+                top = vh - h - PAD;
+            }
+            // Horizontal: align to bubble's side (right-aligned to outgoing, left-aligned to incoming)
+            const isOutgoing = msgRow && msgRow.classList.contains('out');
+            if (isOutgoing) {
+                left = r.right - w;
+            } else {
+                left = r.left;
+            }
+            // Clamp into viewport
+            if (left < PAD) left = PAD;
+            if (left + w > vw - PAD) left = vw - w - PAD;
+            if (top < PAD) top = PAD;
         } else {
-            left = x;
-            top = y;
-            if (left + w > window.innerWidth - 10) left = window.innerWidth - w - 10;
-            if (top + h > window.innerHeight - 10) top = window.innerHeight - h - 10;
-            if (left < 10) left = 10;
-            if (top < 10) top = 10;
+            // Fallback to tap point
+            let x = (e && (e.clientX || (e.touches && e.touches[0] && e.touches[0].clientX))) || vw / 2;
+            let y = (e && (e.clientY || (e.touches && e.touches[0] && e.touches[0].clientY))) || vh / 2;
+            left = x; top = y;
+            if (left + w > vw - PAD) left = vw - w - PAD;
+            if (top + h > vh - PAD) top = vh - h - PAD;
+            if (left < PAD) left = PAD;
+            if (top < PAD) top = PAD;
         }
         menu.style.left = left + 'px';
         menu.style.top = top + 'px';
@@ -603,8 +752,23 @@ function updateReactionUI(msgId, reactionsObj) {
     for(let em in counts) { let isMine = (myReact === em) ? 'mine' : ''; bar.innerHTML += `<span class="react-badge ${isMine}" onclick="ws.send(JSON.stringify({action:'react_msg', msg_id:'${msgId}', emoji:'${em}'})); event.stopPropagation();">${em} ${counts[em]}</span>`; }
 }
 
-function doReply() { replyToMsg = { id: contextMsgId, text: contextMsgText, user: contextMsgSender }; document.getElementById('replySender').innerText = contextMsgSender; document.getElementById('replyText').innerText = contextMsgText; document.getElementById('replyBar').style.display = 'block'; document.getElementById('msgInput').focus(); closeContextMenu(); }
-function cancelReply() { replyToMsg = null; document.getElementById('replyBar').style.display = 'none'; editMsgId = null;}
+function doReply() {
+    const snap = snapshotMessages();
+    replyToMsg = { id: contextMsgId, text: contextMsgText, user: contextMsgSender };
+    document.getElementById('replySender').innerText = contextMsgSender;
+    document.getElementById('replyText').innerText = contextMsgText;
+    document.getElementById('replyBar').style.display = 'block';
+    document.getElementById('msgInput').focus();
+    closeContextMenu();
+    adjustAfterSnapshot(snap);
+}
+function cancelReply() {
+    const snap = snapshotMessages();
+    replyToMsg = null;
+    document.getElementById('replyBar').style.display = 'none';
+    editMsgId = null;
+    adjustAfterSnapshot(snap);
+}
 function doCopy() { navigator.clipboard.writeText(contextMsgText); closeContextMenu(); }
 function doDeleteMsg() { if(confirm("Delete message for everyone?")) ws.send(JSON.stringify({action: 'delete_msg', msg_ids: [contextMsgId]})); closeContextMenu(); }
 
@@ -674,14 +838,32 @@ function checkInput() {
 
 function handleSendText() {
     const input = document.getElementById('msgInput');
-    if (input.value.trim() !== '') { 
+    if (input.value.trim() !== '') {
         if(editMsgId) {
             ws.send(JSON.stringify({action: 'edit_msg', msg_id: editMsgId, text: input.value}));
             editMsgId = null;
         } else {
-            ws.send(JSON.stringify({action: 'send_msg', room: currentRoom, user: currentUser, targetUser: targetUserForDM, msgType: 'text', text: input.value, replyTo: replyToMsg})); 
+            ws.send(JSON.stringify({action: 'send_msg', room: currentRoom, user: currentUser, targetUser: targetUserForDM, msgType: 'text', text: input.value, replyTo: replyToMsg}));
         }
-        input.value = ''; cancelReply(); checkInput(); 
+        // CRITICAL FIX: Force the textarea back to a single-line state
+        input.value = '';
+        // Remove inline height first
+        input.style.height = 'auto';
+        // Force layout reflow, then set to the empty/single-line scrollHeight
+        // We need rAF to let layout settle since the textarea may have been multi-line
+        requestAnimationFrame(() => {
+            input.style.height = 'auto';
+            // Set explicitly to its natural single-line height
+            const singleLine = Math.max(input.scrollHeight, 40);
+            input.style.height = singleLine + 'px';
+            // One more time after another frame in case browser is slow
+            requestAnimationFrame(() => {
+                input.style.height = 'auto';
+                input.style.height = Math.max(input.scrollHeight, 40) + 'px';
+            });
+        });
+        cancelReply();
+        checkInput();
     }
 }
 // === PHASE 2: Mobile-friendly input handling ===
@@ -720,43 +902,52 @@ function handleInputKey(e) {
     // else: let default newline happen
 }
 
+// ============================================================
+// ANTI-SHIFT BUG: Prevent visible content from jumping when
+// the input bar grows / reply bar appears / upload placeholder appears.
+//
+// Key insight: messages container is flex:1, so when bottom UI grows,
+// messages shrinks. Browser keeps scrollTop the same, so visible content
+// shifts UP and last messages go below the fold.
+//
+// FIX: snapshot scrollTop & messages height BEFORE the change,
+// then adjust scrollTop by the height delta AFTER the change.
+// ============================================================
+function snapshotMessages() {
+    const messages = document.getElementById('messages');
+    if (!messages) return null;
+    return {
+        el: messages,
+        scrollTop: messages.scrollTop,
+        clientHeight: messages.clientHeight,
+        scrollHeight: messages.scrollHeight,
+        wasAtBottom: (messages.scrollHeight - messages.scrollTop - messages.clientHeight) < 80
+    };
+}
+
+function adjustAfterSnapshot(snap) {
+    if (!snap || !snap.el) return;
+    const messages = snap.el;
+    requestAnimationFrame(() => {
+        const newClientHeight = messages.clientHeight;
+        const heightDelta = snap.clientHeight - newClientHeight; // + means messages shrunk
+        if (snap.wasAtBottom) {
+            messages.scrollTop = messages.scrollHeight;
+        } else if (heightDelta !== 0) {
+            // If messages shrunk by N px, the visible content shifted up by N px
+            // To keep visible content stable: increase scrollTop by N
+            messages.scrollTop = Math.max(0, snap.scrollTop + heightDelta);
+        }
+    });
+}
+
 function autoResize(el) {
     if (!el) return;
-    const messages = document.getElementById('messages');
-    // Remember whether we were pinned to the bottom BEFORE resize
-    let wasAtBottom = false;
-    let prevScrollTop = 0;
-    let prevHeight = 0;
-    if (messages) {
-        prevScrollTop = messages.scrollTop;
-        prevHeight = el.offsetHeight;
-        // "near bottom" threshold = 40px
-        wasAtBottom = (messages.scrollHeight - messages.scrollTop - messages.clientHeight) < 40;
-    }
-
-    // Resize the textarea
+    const snap = snapshotMessages();
     el.style.height = 'auto';
     const max = 140;
     el.style.height = Math.min(el.scrollHeight, max) + 'px';
-
-    // After the resize, the .messages flex container changed size.
-    // We want to either (a) stick to the bottom, or (b) keep the previous scroll position
-    // so the visible messages don't shift up/down.
-    if (messages) {
-        // Use rAF so we run after layout settles
-        requestAnimationFrame(() => {
-            if (wasAtBottom) {
-                messages.scrollTop = messages.scrollHeight;
-            } else {
-                const heightDelta = el.offsetHeight - prevHeight;
-                // When input grows by +N, messages height shrinks by N → scroll content
-                // would visually shift UP by N. We compensate by reducing scrollTop by N.
-                if (heightDelta !== 0) {
-                    messages.scrollTop = Math.max(0, prevScrollTop - heightDelta);
-                }
-            }
-        });
-    }
+    adjustAfterSnapshot(snap);
 }
 
 // Keep the OLD keypress for safety (no-op since onkeydown handles it now via inline)
@@ -1368,6 +1559,7 @@ function switchAdminTab(tab) {
     if (tab === 'users') loadAdminUsers();
     if (tab === 'stats') loadAdminStats();
     if (tab === 'turn') loadAdminTurn();
+    if (tab === 'appsettings') loadAdminAppSettings();
     if (tab === 'updates') loadAdminBackups();
 }
 
@@ -3028,4 +3220,117 @@ function seekVoiceByClick(e, audioId) {
     let pct = x / rect.width;
     if (pct < 0) pct = 0; if (pct > 1) pct = 1;
     audio.currentTime = pct * audio.duration;
+}
+
+// =====================================================================
+// PHASE 5b: Theme picker UI + admin settings
+// =====================================================================
+function setThemeFromUI(themeName) {
+    if (!allowUserThemeChange && currentRole !== 'admin') {
+        alert('Theme switching is disabled by the admin.');
+        return;
+    }
+    setTheme(themeName);
+    refreshThemePickerUI();
+}
+
+function refreshThemePickerUI() {
+    document.querySelectorAll('.theme-pick-btn').forEach(b => {
+        if (b.getAttribute('data-theme-pick') === savedTheme) b.classList.add('active');
+        else b.classList.remove('active');
+    });
+    const note = document.getElementById('theme-locked-note');
+    if (note) note.style.display = (!allowUserThemeChange && currentRole !== 'admin') ? 'block' : 'none';
+    // If locked, dim non-active buttons
+    document.querySelectorAll('.theme-pick-btn').forEach(b => {
+        b.style.opacity = (!allowUserThemeChange && currentRole !== 'admin' && !b.classList.contains('active')) ? '0.4' : '1';
+        b.style.cursor = (!allowUserThemeChange && currentRole !== 'admin') ? 'not-allowed' : 'pointer';
+    });
+}
+
+// Hook refreshThemePickerUI into settings open
+const __origOpenModal_theme = window.openModal;
+if (__origOpenModal_theme) {
+    window.openModal = function(id) {
+        __origOpenModal_theme.call(this, id);
+        if (id === 'settingsModal') {
+            setTimeout(refreshThemePickerUI, 30);
+        }
+    };
+}
+
+// =====================================================================
+// Admin: app-wide settings (default theme, allow user override)
+// =====================================================================
+async function loadAdminAppSettings() {
+    const box = document.getElementById('admin-appsettings-content');
+    if (!box) return;
+    box.innerHTML = '<div style="padding:20px; text-align:center; color:var(--c-gray);">Loading...</div>';
+    try {
+        const res = await apiFetch('/api/admin/settings');
+        const d = await res.json();
+        const themes = [
+            { id: 'dark', name: 'Original Dark', color: 'linear-gradient(135deg, #0e1621 0%, #17212b 100%)' },
+            { id: 'light', name: 'Light', color: 'linear-gradient(135deg, #ffffff 0%, #e4e4e7 100%)' },
+            { id: 'telegram', name: 'Telegram Dark', color: 'linear-gradient(135deg, #17212b 0%, #2b5278 100%)' },
+            { id: 'telegram-light', name: 'Telegram Light', color: 'linear-gradient(135deg, #ffffff 0%, #cfd9e0 100%)' },
+        ];
+        box.innerHTML = `
+        <div class="stat-card">
+            <div class="stat-label">Default Theme for New Users</div>
+            <div style="font-size:12px; color:var(--c-gray); margin:6px 0 12px 0;">Users who haven't picked a theme yet will see this one.</div>
+            <div style="display:grid; grid-template-columns:repeat(2, 1fr); gap:10px;">
+                ${themes.map(t => `
+                <button onclick="setAdminTheme('${t.id}')" data-admin-theme="${t.id}" class="admin-theme-pick" style="padding:10px; background:transparent; color:var(--c-text); border:2px solid ${d.default_theme === t.id ? 'var(--c-blue)' : 'var(--border)'}; border-radius:12px; cursor:pointer; text-align:left; font-weight:600;">
+                    <div style="width:100%; height:36px; background:${t.color}; border-radius:8px; margin-bottom:6px;"></div>
+                    ${t.name}${d.default_theme === t.id ? ' <span style="color:var(--c-blue);">✓</span>' : ''}
+                </button>`).join('')}
+            </div>
+        </div>
+        <div class="stat-card" style="margin-top:12px;">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <div>
+                    <div style="font-weight:700; font-size:14px;">Allow users to change theme</div>
+                    <div style="font-size:12px; color:var(--c-gray); margin-top:4px;">If off, users will see the default theme only.</div>
+                </div>
+                <input type="checkbox" id="admin-allow-theme" ${d.allow_user_theme_change === '1' ? 'checked' : ''} onchange="setAdminAllowTheme(this.checked)" style="width:auto; transform:scale(1.5); cursor:pointer;">
+            </div>
+        </div>
+        <div class="stat-card" style="margin-top:12px;">
+            <div class="stat-label">App Name</div>
+            <div style="display:flex; gap:8px; margin-top:8px;">
+                <input id="admin-app-name" type="text" value="${escapeHtml(d.app_name || 'Black Chat')}" maxlength="50" style="flex:1; padding:10px; background:var(--bg-base); border:1px solid var(--border); color:var(--c-white); border-radius:10px;">
+                <button onclick="setAdminAppName()" style="padding:10px 16px; background:var(--c-blue); color:white; border:none; border-radius:10px; cursor:pointer; font-weight:700;">Save</button>
+            </div>
+        </div>`;
+    } catch(e) {
+        box.innerHTML = `<div style="color:var(--c-red); padding:10px;">${escapeHtml(e.message)}</div>`;
+    }
+}
+
+async function setAdminTheme(themeName) {
+    const res = await apiJson('/api/admin/settings', { default_theme: themeName });
+    if (res.ok) {
+        // Update local snapshot so users with no theme pick get it too
+        serverDefaultTheme = themeName;
+        loadAdminAppSettings();
+        alert('✅ Default theme set to "' + themeName + '". New users will see it.');
+    }
+}
+
+async function setAdminAllowTheme(allow) {
+    await apiJson('/api/admin/settings', { allow_user_theme_change: allow });
+    allowUserThemeChange = allow;
+    if (!allow) {
+        // Force everyone to default
+        setTheme(serverDefaultTheme);
+    }
+    alert('✅ Saved.');
+}
+
+async function setAdminAppName() {
+    const name = document.getElementById('admin-app-name').value.trim();
+    if (!name) return;
+    await apiJson('/api/admin/settings', { app_name: name });
+    alert('✅ Saved.');
 }
