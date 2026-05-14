@@ -62,6 +62,98 @@
             --bubble-other-text: #0f172a;
         }
 
+        /* ========== PHASE 5b: TELEGRAM Theme — exact Telegram Desktop look ========== */
+        [data-theme="telegram"] {
+            --bg-base: #212121;             /* Telegram dark chat area */
+            --bg-panel: #17212b;             /* SOLID sidebar - no glassmorphism */
+            --bg-panel-solid: #17212b;
+            --bg-input: #242f3d;
+            --bg-hover: #2b5278;
+            --border: rgba(255, 255, 255, 0.05);
+            --glass-shadow: none;
+
+            --c-blue: #5288c1;               /* Telegram link blue */
+            --c-blue-hover: #6ba6e6;
+            --c-blue-glow: rgba(82, 136, 193, 0.3);
+            --c-white: #ffffff;
+            --c-text: #f5f5f5;
+            --c-gray: #6c7883;
+            --c-gray-strong: #a2acb4;
+
+            --bubble-me: #2b5278;            /* Telegram dark outgoing */
+            --bubble-me-text: #ffffff;
+            --bubble-other: #182533;
+            --bubble-other-text: #ffffff;
+        }
+        /* Telegram theme - disable backdrop-filter blurs (more native) */
+        [data-theme="telegram"] .sidebar,
+        [data-theme="telegram"] .chat-header,
+        [data-theme="telegram"] .input-area,
+        [data-theme="telegram"] .modal-box,
+        [data-theme="telegram"] .glass-box {
+            backdrop-filter: none !important;
+            -webkit-backdrop-filter: none !important;
+            background: var(--bg-panel) !important;
+        }
+        [data-theme="telegram"] body {
+            background: var(--bg-base);
+        }
+        /* Telegram doesn't use glow on icons */
+        [data-theme="telegram"] .avatar,
+        [data-theme="telegram"] .unread-badge {
+            box-shadow: none !important;
+        }
+        /* Solid chat header */
+        [data-theme="telegram"] .chat-header {
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+        }
+        /* Telegram pattern wallpaper - subtle dotted */
+        [data-theme="telegram"] .chat-area {
+            background-color: #0e1621;
+            background-image: radial-gradient(circle at 25% 25%, rgba(255,255,255,0.02) 1px, transparent 1px);
+            background-size: 24px 24px;
+        }
+        /* Bubble — flatter, like Telegram */
+        [data-theme="telegram"] .bubble {
+            box-shadow: 0 1px 1px rgba(0,0,0,0.3) !important;
+            border-radius: 12px !important;
+        }
+        /* Telegram-style send button */
+        [data-theme="telegram"] .send-btn {
+            background: var(--c-blue) !important;
+            color: white !important;
+        }
+        /* Sidebar selection */
+        [data-theme="telegram"] .chat-item.active,
+        [data-theme="telegram"] .chat-item:hover {
+            background: var(--bg-hover) !important;
+        }
+        /* Telegram light variant (for users who want light Telegram) */
+        [data-theme="telegram-light"] {
+            --bg-base: #ffffff;
+            --bg-panel: #ffffff;
+            --bg-panel-solid: #ffffff;
+            --bg-input: #f1f3f4;
+            --bg-hover: #f4f4f5;
+            --border: rgba(0, 0, 0, 0.07);
+
+            --c-blue: #1a82e2;
+            --c-white: #1a1a1a;
+            --c-text: #1a1a1a;
+            --c-gray: #707579;
+            --c-gray-strong: #535762;
+
+            --bubble-me: #eeffde;
+            --bubble-me-text: #000000;
+            --bubble-other: #ffffff;
+            --bubble-other-text: #000000;
+        }
+        [data-theme="telegram-light"] .chat-area {
+            background-color: #cfd9e0;
+            background-image: radial-gradient(circle at 25% 25%, rgba(0,0,0,0.03) 1px, transparent 1px);
+            background-size: 24px 24px;
+        }
+
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; outline: none; -webkit-tap-highlight-color: transparent;}
         body { display: flex; height: 100dvh; background: var(--bg-base); color: var(--c-white); overflow: hidden; transition: background 0.3s ease, color 0.3s ease; }
 
@@ -135,7 +227,30 @@
         .chat-info { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center;}
         .chat-name { font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--c-white); }
         .chat-preview { font-size: 13px; color: var(--c-gray); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .unread-badge { background: var(--c-red); color: white; font-size: 12px; font-weight: bold; padding: 2px 8px; border-radius: 12px; display: none; margin-right: auto; box-shadow: 0 0 10px var(--c-red-glow);}
+        .unread-badge {
+            background: var(--c-blue);
+            color: white;
+            font-size: 11px;
+            font-weight: 700;
+            padding: 3px 8px;
+            border-radius: 12px;
+            display: none;
+            min-width: 22px;
+            text-align: center;
+            margin-left: auto;
+            box-shadow: 0 0 10px var(--c-blue-glow);
+            line-height: 1.2;
+        }
+        [dir="rtl"] .unread-badge { margin-left: 0; margin-right: auto; }
+        .unread-badge.has-count { display: inline-block; animation: badgePop 0.3s ease; }
+        @keyframes badgePop {
+            0% { transform: scale(0); }
+            70% { transform: scale(1.15); }
+            100% { transform: scale(1); }
+        }
+        .theme-pick-btn { transition: transform 0.2s, border-color 0.2s; }
+        .theme-pick-btn:hover { transform: scale(1.04); }
+        .theme-pick-btn.active { border-color: var(--c-blue) !important; box-shadow: 0 0 12px var(--c-blue-glow); }
 
         /* --- Chat Area & Telegram Pattern --- */
         .chat-area { 
@@ -499,18 +614,27 @@
             [dir="rtl"] #videoPreview { left: 10px; right: auto; }
 
             /* Telegram-style compact context menu on mobile:
-               narrow popup, NOT full width, with smaller padding */
+               narrow popup positioned by JS - do NOT use !important on top/left/right/bottom */
             .context-menu {
-                position: fixed !important;
-                bottom: auto !important;
-                top: auto !important;
-                left: auto !important;
-                right: auto !important;
+                position: fixed;
                 width: 230px !important;
                 max-width: 78vw;
                 padding: 6px !important;
                 gap: 2px !important;
                 font-size: 14px;
+                /* Critical: leave top/left/right/bottom unforced so JS-positioning works */
+                box-shadow: 0 12px 40px rgba(0,0,0,0.6) !important;
+            }
+            /* Pseudo-backdrop on mobile when menu is open */
+            body.ctxmenu-open::before {
+                content: '';
+                position: fixed;
+                inset: 0;
+                background: rgba(0,0,0,0.45);
+                backdrop-filter: blur(2px);
+                -webkit-backdrop-filter: blur(2px);
+                z-index: 4999;
+                animation: fadeIn 0.15s ease;
             }
             .context-menu button {
                 padding: 9px 12px !important;
@@ -926,6 +1050,28 @@
                 <span style="font-weight:600;">Auto-Download Media</span>
                 <input type="checkbox" id="autoDlToggle" style="width:auto; transform:scale(1.5); cursor:pointer;" checked onchange="toggleAutoDl(this.checked)">
             </div>
+            <div style="padding:12px 0; border-bottom:1px solid var(--border);">
+                <span style="display:block; margin-bottom:10px; font-weight:600; text-align:left;">Theme</span>
+                <div id="theme-picker" style="display:grid; grid-template-columns:repeat(4, 1fr); gap:8px;">
+                    <button onclick="setThemeFromUI('dark')" data-theme-pick="dark" class="theme-pick-btn" style="padding:8px 4px; background:#0e1621; color:white; border:2px solid transparent; border-radius:10px; cursor:pointer; font-size:11px; font-weight:600;">
+                        <div style="width:100%; height:30px; background:linear-gradient(135deg, #0e1621 0%, #17212b 100%); border-radius:6px; margin-bottom:4px;"></div>
+                        Original
+                    </button>
+                    <button onclick="setThemeFromUI('light')" data-theme-pick="light" class="theme-pick-btn" style="padding:8px 4px; background:#f4f4f5; color:#222; border:2px solid transparent; border-radius:10px; cursor:pointer; font-size:11px; font-weight:600;">
+                        <div style="width:100%; height:30px; background:linear-gradient(135deg, #ffffff 0%, #e4e4e7 100%); border-radius:6px; margin-bottom:4px; border:1px solid #e4e4e7;"></div>
+                        Light
+                    </button>
+                    <button onclick="setThemeFromUI('telegram')" data-theme-pick="telegram" class="theme-pick-btn" style="padding:8px 4px; background:#17212b; color:white; border:2px solid transparent; border-radius:10px; cursor:pointer; font-size:11px; font-weight:600;">
+                        <div style="width:100%; height:30px; background:linear-gradient(135deg, #17212b 0%, #2b5278 100%); border-radius:6px; margin-bottom:4px;"></div>
+                        Telegram
+                    </button>
+                    <button onclick="setThemeFromUI('telegram-light')" data-theme-pick="telegram-light" class="theme-pick-btn" style="padding:8px 4px; background:#cfd9e0; color:#222; border:2px solid transparent; border-radius:10px; cursor:pointer; font-size:11px; font-weight:600;">
+                        <div style="width:100%; height:30px; background:linear-gradient(135deg, #ffffff 0%, #cfd9e0 100%); border-radius:6px; margin-bottom:4px; border:1px solid #b8c0c8;"></div>
+                        TG Light
+                    </button>
+                </div>
+                <div id="theme-locked-note" style="display:none; font-size:11px; color:var(--c-orange); margin-top:6px;">⚠ Admin has locked theme selection</div>
+            </div>
             <div style="display:flex; justify-content:space-between; align-items:center; padding:12px 0; border-bottom:1px solid var(--border);">
                 <div>
                     <div style="font-weight:600;">Send by Enter</div>
@@ -970,6 +1116,7 @@
                 <button class="admin-tab active" data-tab="users" onclick="switchAdminTab('users')" style="padding:10px 16px; background:transparent; border:none; color:var(--c-white); cursor:pointer; font-weight:600; border-bottom:2px solid var(--c-blue);">👥 Users</button>
                 <button class="admin-tab" data-tab="stats" onclick="switchAdminTab('stats')" style="padding:10px 16px; background:transparent; border:none; color:var(--c-gray); cursor:pointer; font-weight:600; border-bottom:2px solid transparent;">📊 Stats</button>
                 <button class="admin-tab" data-tab="turn" onclick="switchAdminTab('turn')" style="padding:10px 16px; background:transparent; border:none; color:var(--c-gray); cursor:pointer; font-weight:600; border-bottom:2px solid transparent;">🎙️ TURN</button>
+                <button class="admin-tab" data-tab="appsettings" onclick="switchAdminTab('appsettings')" style="padding:10px 16px; background:transparent; border:none; color:var(--c-gray); cursor:pointer; font-weight:600; border-bottom:2px solid transparent;">🎨 Theme</button>
                 <button class="admin-tab" data-tab="updates" onclick="switchAdminTab('updates')" style="padding:10px 16px; background:transparent; border:none; color:var(--c-gray); cursor:pointer; font-weight:600; border-bottom:2px solid transparent;">🔄 Updates</button>
             </div>
 
@@ -1010,6 +1157,12 @@
                     <strong style="color:var(--c-white);">How to install:</strong><br>
                     SSH to your server, run <code style="background:#000; padding:2px 6px; border-radius:4px;">black-chat</code> and choose option <strong>10) Setup TURN Server</strong>. The script auto-installs coturn and saves credentials.
                 </div>
+            </div>
+
+            <!-- APP SETTINGS TAB (Theme + branding) -->
+            <div class="admin-pane" id="admin-pane-appsettings" style="display:none;">
+                <div id="admin-appsettings-content" style="display:grid; gap:12px;"></div>
+                <button onclick="loadAdminAppSettings()" style="width:100%; padding:12px; background:var(--bg-input); color:var(--c-white); border:1px solid var(--border); border-radius:10px; cursor:pointer; margin-top:12px;">🔄 Refresh</button>
             </div>
 
             <!-- UPDATES TAB -->
