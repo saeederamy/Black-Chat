@@ -86,6 +86,12 @@ def init_db():
     )''')
     c.execute('CREATE INDEX IF NOT EXISTS idx_pinned_room ON pinned_messages(room)')
 
+    # Phase 5b: app-wide settings (admin-controlled), key/value
+    c.execute('''CREATE TABLE IF NOT EXISTS app_settings (
+        skey TEXT PRIMARY KEY,
+        svalue TEXT
+    )''')
+
     conn.commit()
     conn.close()
 
@@ -193,6 +199,46 @@ def check_login(username, password):
 
 def get_all_usernames():
     return [u["username"] for u in read_users()]
+
+# ===================== APP SETTINGS (admin-controlled) =====================
+DEFAULT_SETTINGS = {
+    "default_theme": "dark",    # "dark" | "light" | "telegram"
+    "allow_user_theme_change": "1",  # "1" or "0"
+    "app_name": "Black Chat",
+}
+
+def get_setting(key, default=None):
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("SELECT svalue FROM app_settings WHERE skey=?", (key,))
+        row = c.fetchone()
+        conn.close()
+        if row:
+            return row[0]
+    except Exception:
+        pass
+    return default if default is not None else DEFAULT_SETTINGS.get(key, "")
+
+def set_setting(key, value):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO app_settings (skey, svalue) VALUES (?, ?)", (key, str(value)))
+    conn.commit()
+    conn.close()
+
+def get_all_settings():
+    out = dict(DEFAULT_SETTINGS)
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("SELECT skey, svalue FROM app_settings")
+        for r in c.fetchall():
+            out[r[0]] = r[1]
+        conn.close()
+    except Exception:
+        pass
+    return out
 
 # ===================== QUOTA HELPERS =====================
 def get_user_used_bytes(username):
@@ -383,6 +429,44 @@ async def upload_avatar(file: UploadFile = File(...), authorization: Optional[st
     conn.commit()
     conn.close()
     return {"success": True, "url": url}
+
+@app.get("/api/app-settings")
+async def get_public_settings():
+    """Public settings everyone needs (theme, etc) - no auth required."""
+    s = get_all_settings()
+    return {
+        "default_theme": s.get("default_theme", "dark"),
+        "allow_user_theme_change": s.get("allow_user_theme_change", "1") == "1",
+        "app_name": s.get("app_name", "Black Chat"),
+    }
+
+@app.post("/api/admin/settings")
+async def admin_set_settings(request: Request, info: dict = Depends(require_admin)):
+    data = await request.json()
+    if "default_theme" in data:
+        if data["default_theme"] not in ("dark", "light", "telegram"):
+            raise HTTPException(status_code=400, detail="Invalid theme")
+        set_setting("default_theme", data["default_theme"])
+    if "allow_user_theme_change" in data:
+        set_setting("allow_user_theme_change", "1" if data["allow_user_theme_change"] else "0")
+    if "app_name" in data and isinstance(data["app_name"], str):
+        set_setting("app_name", data["app_name"][:50])
+    return {"success": True, "settings": get_all_settings()}
+
+@app.get("/api/admin/settings")
+async def admin_get_settings(info: dict = Depends(require_admin)):
+    return get_all_settings()
+
+@app.get("/api/settings/public")
+async def get_public_settings():
+    """Public settings that all (even unauthenticated) clients need.
+    Used by the login page to apply default theme."""
+    return {
+        "default_theme": get_setting("default_theme", "dark"),
+        "allow_user_theme_change": get_setting("allow_user_theme_change", "1") == "1",
+        "app_name": get_setting("app_name", "Black Chat"),
+    }
+
 
 @app.get("/api/quota")
 async def get_quota(info: dict = Depends(require_user)):
@@ -744,6 +828,7 @@ UPDATE_FILES = [
     ("main.py", "main.py"),
     ("templates/index.html", "templates/index.html"),
     ("static/script.js", "static/script.js"),
+    ("static/style.css", "static/style.css"),
     ("static/service-worker.js", "static/service-worker.js"),
     ("static/manifest.json", "static/manifest.json"),
     ("install.sh", "install.sh"),
@@ -766,6 +851,7 @@ def _make_backup(label="manual"):
         "main.py",
         "templates/index.html",
         "static/script.js",
+        "static/style.css",
         "static/service-worker.js",
         "static/manifest.json",
         "static/icon-192.png",
@@ -922,6 +1008,7 @@ async def admin_rollback(request: Request, info: dict = Depends(require_admin)):
             "main.py",
             "templates/index.html",
             "static/script.js",
+            "static/style.css",
             "static/service-worker.js",
             "static/manifest.json",
             "static/icon-192.png",
