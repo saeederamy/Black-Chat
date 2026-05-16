@@ -52,15 +52,33 @@ function install_app() {
         cp -r * $INSTALL_DIR/ 2>/dev/null
     else
         echo -e "${CYAN}Downloading files from GitHub...${RESET}"
-        curl -sL "$REPO_URL/main.py" -o "$INSTALL_DIR/main.py"
-        curl -sL "$REPO_URL/templates/index.html" -o "$INSTALL_DIR/templates/index.html"
-        curl -sL "$REPO_URL/static/script.js" -o "$INSTALL_DIR/static/script.js"
-        curl -sL "$REPO_URL/static/service-worker.js" -o "$INSTALL_DIR/static/service-worker.js"
-        curl -sL "$REPO_URL/static/manifest.json" -o "$INSTALL_DIR/static/manifest.json"
-        curl -sL "$REPO_URL/static/icon-192.png" -o "$INSTALL_DIR/static/icon-192.png"
-        curl -sL "$REPO_URL/static/icon-512.png" -o "$INSTALL_DIR/static/icon-512.png"
-        curl -sL "$REPO_URL/static/favicon-32.png" -o "$INSTALL_DIR/static/favicon-32.png"
-        curl -sL "$REPO_URL/install.sh" -o "$INSTALL_DIR/install.sh"
+        download_file() {
+            local url="$1"
+            local dest="$2"
+            local name="$3"
+            if ! curl -fsSL "$url" -o "$dest"; then
+                echo -e "${RED}[!] Failed to download $name from $url${RESET}"
+                echo -e "${RED}[!] Make sure you've pushed v2 files to GitHub first.${RESET}"
+                return 1
+            fi
+            if [ ! -s "$dest" ]; then
+                echo -e "${RED}[!] $name downloaded but is empty.${RESET}"
+                return 1
+            fi
+            return 0
+        }
+
+        download_file "$REPO_URL/main.py"                    "$INSTALL_DIR/main.py"                    "main.py" || return 1
+        download_file "$REPO_URL/templates/index.html"       "$INSTALL_DIR/templates/index.html"       "index.html" || return 1
+        download_file "$REPO_URL/static/script.js"           "$INSTALL_DIR/static/script.js"           "script.js" || return 1
+        download_file "$REPO_URL/static/style.css"           "$INSTALL_DIR/static/style.css"           "style.css" || return 1
+        download_file "$REPO_URL/static/service-worker.js"   "$INSTALL_DIR/static/service-worker.js"   "service-worker.js" || return 1
+        download_file "$REPO_URL/static/manifest.json"       "$INSTALL_DIR/static/manifest.json"       "manifest.json" || return 1
+        download_file "$REPO_URL/static/icon-192.png"        "$INSTALL_DIR/static/icon-192.png"        "icon-192.png" || return 1
+        download_file "$REPO_URL/static/icon-512.png"        "$INSTALL_DIR/static/icon-512.png"        "icon-512.png" || return 1
+        download_file "$REPO_URL/static/favicon-32.png"      "$INSTALL_DIR/static/favicon-32.png"      "favicon-32.png" || return 1
+        download_file "$REPO_URL/install.sh"                 "$INSTALL_DIR/install.sh"                 "install.sh" || return 1
+        echo -e "${GREEN}[✓] All files downloaded successfully${RESET}"
     fi
     
     cd $INSTALL_DIR
@@ -105,6 +123,7 @@ function update_app() {
     curl -sL "$REPO_URL/main.py" -o "$INSTALL_DIR/main.py"
     curl -sL "$REPO_URL/templates/index.html" -o "$INSTALL_DIR/templates/index.html"
     curl -sL "$REPO_URL/static/script.js" -o "$INSTALL_DIR/static/script.js"
+    curl -sL "$REPO_URL/static/style.css" -o "$INSTALL_DIR/static/style.css"
     curl -sL "$REPO_URL/static/service-worker.js" -o "$INSTALL_DIR/static/service-worker.js"
     curl -sL "$REPO_URL/static/manifest.json" -o "$INSTALL_DIR/static/manifest.json"
     curl -sL "$REPO_URL/static/icon-192.png" -o "$INSTALL_DIR/static/icon-192.png"
