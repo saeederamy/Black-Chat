@@ -1,3336 +1,2138 @@
-// SERVER_CONFIG removed: TURN/STUN settings are now fetched from /api/turn-config
+/* ============================================================
+   Black Chat — frontend (v2, clean rewrite)
+   ============================================================ */
+'use strict';
 
-let currentUser = null; let currentRole = null; let currentRoom = null; let targetUserForDM = null; 
-let currentToken = localStorage.getItem('bc_token') || null;
-let myQuotaMB = 0; let myUsedBytes = 0;
-let ws = null; let currentLang = localStorage.getItem('lang') || 'fa'; let myContacts = [];
-let contextMsgId = null; let contextMsgText = null; let contextMsgSender = null;
-let replyToMsg = null; let selectionMode = false; let selectedMsgs = [];
-let editMsgId = null; 
-let autoDownload = true; 
-let lastDateStr = null; 
-let onlineUsers = [];
+// ============================================================
+// 1. STATE
+// ============================================================
+const State = {
+    token: localStorage.getItem('bc_token') || null,
+    user: localStorage.getItem('bc_user') || null,
+    role: localStorage.getItem('bc_role') || null,
+    quotaMB: 0,
+    usedBytes: 0,
+    contacts: [],
+    rooms: [],            // [{id, name, type: 'dm'|'group', members?, avatar?}]
+    allUsers: [],
+    avatars: {},          // username -> url
+    currentRoom: null,    // {id, name, type, partner?}
+    onlineUsers: [],
+    lastSeen: {},
+    messages: {},         // roomId -> [msg]
+    unread: {},           // roomId -> count
+    pinned: {},           // roomId -> [msg]
+    pinnedIdx: 0,
+    replyTo: null,
+    editId: null,
+    selectionMode: false,
+    selectedIds: new Set(),
+    typingTimers: {},     // roomId -> timeout
+    typing: {},           // roomId -> {user, expires}
+    ws: null,
+    appName: 'Black Chat',
+};
 
-// ---- API helper that always sends Authorization header ----
-async function apiFetch(url, options = {}) {
-    options.headers = options.headers || {};
-    if (currentToken) options.headers['Authorization'] = 'Bearer ' + currentToken;
-    return fetch(url, options);
-}
-async function apiJson(url, body) {
-    const res = await apiFetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body || {})
-    });
-    return res;
+// ============================================================
+// 2. SAFE HTML / UTIL
+// ============================================================
+function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 function fmtBytes(n) {
-    if (!n || n < 1024) return (n||0) + ' B';
-    if (n < 1024*1024) return (n/1024).toFixed(1) + ' KB';
-    if (n < 1024*1024*1024) return (n/(1024*1024)).toFixed(1) + ' MB';
-    return (n/(1024*1024*1024)).toFixed(2) + ' GB';
+    if (!n || n < 1024) return (n || 0) + ' B';
+    if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+    if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB';
+    return (n / 1073741824).toFixed(2) + ' GB';
 }
-
-// ============ Theme system ============
-// Valid: 'dark', 'light', 'telegram', 'telegram-light'
-let serverDefaultTheme = 'dark';
-let allowUserThemeChange = true;
-let savedTheme = localStorage.getItem('hub_theme') || 'dark';
-document.documentElement.setAttribute('data-theme', savedTheme);
-
-function setTheme(name) {
-    const valid = ['dark', 'light', 'telegram', 'telegram-light'];
-    if (!valid.includes(name)) name = 'dark';
-    savedTheme = name;
-    document.documentElement.setAttribute('data-theme', name);
-    localStorage.setItem('hub_theme', name);
+function fmtTime(d) {
+    if (typeof d === 'string') d = new Date(d.replace(' ', 'T') + (d.includes('Z') ? '' : 'Z'));
+    if (!(d instanceof Date) || isNaN(d)) return '';
+    const h = d.getHours().toString().padStart(2, '0');
+    const m = d.getMinutes().toString().padStart(2, '0');
+    return `${h}:${m}`;
 }
-
-// Quick toggle button: cycle through dark → light → telegram → telegram-light → dark
-function toggleTheme() {
-    if (!allowUserThemeChange && currentRole !== 'admin') {
-        alert('Theme switching is disabled by the admin.');
-        return;
+function fmtDateLabel(d) {
+    if (typeof d === 'string') d = new Date(d.replace(' ', 'T') + (d.includes('Z') ? '' : 'Z'));
+    if (!(d instanceof Date) || isNaN(d)) return '';
+    const today = new Date();
+    const yest = new Date(); yest.setDate(yest.getDate() - 1);
+    const sameDay = (a, b) => a.toDateString() === b.toDateString();
+    if (sameDay(d, today)) return 'Today';
+    if (sameDay(d, yest)) return 'Yesterday';
+    const week = 7 * 24 * 3600 * 1000;
+    if (Date.now() - d.getTime() < week) {
+        return d.toLocaleDateString(undefined, { weekday: 'long' });
     }
-    const order = ['dark', 'light', 'telegram', 'telegram-light'];
-    const idx = order.indexOf(savedTheme);
-    const next = order[(idx + 1) % order.length];
-    setTheme(next);
+    return d.toLocaleDateString();
+}
+function fmtRelative(iso) {
+    if (!iso) return '';
+    const d = new Date(iso.replace(' ', 'T') + (iso.includes('Z') ? '' : 'Z'));
+    if (isNaN(d)) return '';
+    const s = Math.floor((Date.now() - d.getTime()) / 1000);
+    if (s < 60) return 'just now';
+    if (s < 3600) return Math.floor(s / 60) + 'm ago';
+    if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+    return Math.floor(s / 86400) + 'd ago';
 }
 
-// Fetch public app settings (theme default) at boot
-async function loadAppSettings() {
+// ============================================================
+// 3. API HELPERS
+// ============================================================
+async function api(path, opts = {}) {
+    opts.headers = opts.headers || {};
+    if (State.token) opts.headers['Authorization'] = 'Bearer ' + State.token;
+    return fetch(path, opts);
+}
+async function apiPost(path, body) {
+    return api(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body || {}),
+    });
+}
+
+// ============================================================
+// 4. LOGIN / LOGOUT
+// ============================================================
+async function doLogin() {
+    const u = document.getElementById('login-username').value.trim();
+    const p = document.getElementById('login-password').value;
+    const err = document.getElementById('login-error');
+    err.innerText = '';
+    if (!u || !p) { err.innerText = 'Username and password required.'; return; }
+
+    // request notification permission while still inside a user gesture
     try {
-        const res = await fetch('/api/settings/public');
-        if (!res.ok) return;
+        if ('Notification' in window && Notification.permission === 'default') {
+            Notification.requestPermission().catch(() => {});
+        }
+    } catch {}
+
+    try {
+        const res = await fetch('/api/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: u, password: p }),
+        });
+        if (!res.ok) { err.innerText = 'Server error ' + res.status; return; }
         const data = await res.json();
-        serverDefaultTheme = data.default_theme || 'dark';
-        allowUserThemeChange = !!data.allow_user_theme_change;
-        // If user hasn't picked their own theme, follow the server default
-        if (!localStorage.getItem('hub_theme')) {
-            setTheme(serverDefaultTheme);
-        }
-        // If admin disabled user override, force server theme
-        if (!allowUserThemeChange) {
-            setTheme(serverDefaultTheme);
-        }
-        // Update app name on the login screen if present
-        if (data.app_name) {
-            const titleEl = document.querySelector('title');
-            if (titleEl) titleEl.innerText = data.app_name;
-        }
-    } catch(e) {}
-}
-loadAppSettings();
+        if (!data.success) { err.innerText = data.message || 'Invalid credentials.'; return; }
 
-let savedBg = localStorage.getItem('chatBg');
-if(savedBg) document.getElementById('chatArea').style.backgroundImage = `url('${savedBg}')`;
+        State.token = data.token;
+        State.user = data.username;
+        State.role = data.role;
+        State.quotaMB = data.quota_mb || 0;
+        State.usedBytes = data.used_bytes || 0;
+        localStorage.setItem('bc_token', State.token);
+        localStorage.setItem('bc_user', State.user);
+        localStorage.setItem('bc_role', State.role);
 
-const translations = {
-    'en': { login_title: 'Secure Login', btn_login: 'Access Hub', search_ph: 'Search...', type_ph: 'Type a message...', settings: 'Settings', add_contact: 'New Chat / Group', username_ph: 'Enter Exact Username', language: 'Language', active_sessions: 'Active Sessions', chat_bg: 'Chat Wallpaper URL', system_channel: 'System Announcements', private_chat: 'Private Chat', group: 'Private Group' },
-    'fa': { login_title: 'ورود به سیستم', btn_login: 'ورود / تایید', search_ph: 'جستجو...', type_ph: 'پیام خود را بنویسید...', settings: 'تنظیمات سیستم', add_contact: 'چت یا گروه جدید', username_ph: 'آیدی دقیق را وارد کنید', language: 'زبان برنامه', active_sessions: 'آی‌پی‌های متصل شما', chat_bg: 'پس‌زمینه چت (لینک عکس)', system_channel: 'کانال سیستم', private_chat: 'چت خصوصی', group: 'گروه خصوصی' }
-};
-
-function applyLang() {
-    document.documentElement.dir = currentLang === 'fa' ? 'rtl' : 'ltr';
-    let langSel = document.getElementById('langSelect'); if(langSel) langSel.value = currentLang;
-    document.querySelectorAll('[data-i18n]').forEach(el => { el.innerText = translations[currentLang][el.getAttribute('data-i18n')]; });
-    document.querySelectorAll('[data-i18n-ph]').forEach(el => { el.placeholder = translations[currentLang][el.getAttribute('data-i18n-ph')]; });
-}
-applyLang();
-function changeLang(lang) { currentLang = lang; localStorage.setItem('lang', lang); applyLang(); }
-function toggleAutoDl(state) { autoDownload = state; }
-function changeBg(url) { if(url.trim() === '') { localStorage.removeItem('chatBg'); document.getElementById('chatArea').style.backgroundImage = 'none'; } else { localStorage.setItem('chatBg', url); document.getElementById('chatArea').style.backgroundImage = `url('${url}')`; } }
-
-// === PHASE 2: Service Worker Registration (must run early for mobile push) ===
-async function registerServiceWorker() {
-    if (!('serviceWorker' in navigator)) return null;
-    try {
-        const reg = await navigator.serviceWorker.register('/static/service-worker.js', { scope: '/' });
-        return reg;
+        enterApp();
     } catch (e) {
-        console.warn('SW registration failed:', e);
-        return null;
+        err.innerText = 'Connection error: ' + e.message;
     }
 }
-// Kick off registration immediately so it's ready by the time we need to show a notification
-registerServiceWorker();
-
-function requestNotificationAccess() {
-    if (!("Notification" in window)) return;
-    if (Notification.permission === "default") {
-        // Must be inside a user gesture; called from login button onclick & openChat
-        Notification.requestPermission().catch(() => {});
-    }
-}
-
-async function showSystemNotification(title, body, tag) {
-    if (!("Notification" in window) || Notification.permission !== "granted") return;
-    try {
-        const reg = navigator.serviceWorker ? await navigator.serviceWorker.getRegistration() : null;
-        const opts = {
-            body: body,
-            icon: '/static/icon-192.png',
-            badge: '/static/icon-192.png',
-            tag: tag || ('bc-' + Date.now()),
-            renotify: true,
-            silent: false,
-            vibrate: [120, 60, 120],
-        };
-        if (reg && reg.showNotification) {
-            await reg.showNotification(title, opts);
-        } else {
-            // Fallback for desktop
-            new Notification(title, opts);
-        }
-    } catch (e) { console.warn('Notification error:', e); }
-}
-
-window.onload = () => {
-    const s_usr = localStorage.getItem('bc_user');
-    const s_role = localStorage.getItem('bc_role');
-    const s_tok = localStorage.getItem('bc_token');
-    if (s_usr && s_role && s_tok) {
-        currentUser = s_usr; currentRole = s_role; currentToken = s_tok;
-        document.getElementById('login-wrapper').style.display = 'none';
-        document.getElementById('app').style.display = 'flex';
-        initWebSocket(); loadInitData();
-    }
-};
 
 function doLogout() {
-    apiFetch('/api/logout', {method:'POST'}).catch(()=>{});
-    localStorage.removeItem('bc_user'); localStorage.removeItem('bc_role'); localStorage.removeItem('bc_token');
+    api('/api/logout', { method: 'POST' }).catch(() => {});
+    localStorage.removeItem('bc_token');
+    localStorage.removeItem('bc_user');
+    localStorage.removeItem('bc_role');
     location.reload();
 }
 
-async function login() {
-    const u = document.getElementById('username').value.trim(); const p = document.getElementById('password').value.trim();
-    if (!u || !p) return;
+async function enterApp() {
+    document.getElementById('login-screen').style.display = 'none';
+    document.getElementById('app').style.display = 'flex';
 
-    // IMPORTANT: must be inside the click gesture, BEFORE any await
-    requestNotificationAccess();
+    // Show admin menu entry
+    if (State.role === 'admin') {
+        const ma = document.getElementById('menu-admin');
+        if (ma) ma.style.display = '';
+    }
 
-    try {
-        const res = await fetch('/api/login', { method: 'POST', body: JSON.stringify({username: u, password: p}), headers: {'Content-Type': 'application/json'} });
-        if (!res.ok) {
-            const errTxt = await res.text();
-            alert("Server Error: " + res.status + "\n" + errTxt);
-            return;
-        }
-        const data = await res.json();
-        if (data.success) {
-            currentUser = data.username; currentRole = data.role; currentToken = data.token;
-            myQuotaMB = data.quota_mb || 0; myUsedBytes = data.used_bytes || 0;
-            localStorage.setItem('bc_user', currentUser);
-            localStorage.setItem('bc_role', currentRole);
-            localStorage.setItem('bc_token', currentToken);
-
-            document.getElementById('login-wrapper').style.display = 'none'; 
-            document.getElementById('app').style.display = 'flex';
-            initWebSocket(); loadInitData();
-        } else alert("Invalid Credentials!");
-    } catch(e) { alert("Connection Error:\n" + e.message); }
+    await loadInitData();
+    connectWS();
+    setupHandlers();
+    registerSW();
 }
 
-function initWebSocket() {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    ws = new WebSocket(`${protocol}//${window.location.host}/ws/${currentUser}/${currentRole}/${currentToken}`);
-    ws.onopen = () => { if (currentRoom) ws.send(JSON.stringify({action: 'get_history', room: currentRoom})); };
-    ws.onmessage = async (event) => {
-        const msg = JSON.parse(event.data);
-        if (msg.type === 'history') { 
-            if(msg.room === currentRoom) { 
-                document.getElementById('messages').innerHTML = ''; 
-                lastDateStr = null; 
-                msg.data.forEach(m => appendMessage(m)); 
-            }
-        } 
-        else if (msg.type === 'new_msg') { 
-            if(msg.room === currentRoom) appendMessage(msg.data); else handleNotification(msg);
+// ============================================================
+// 5. INIT DATA
+// ============================================================
+async function loadInitData() {
+    try {
+        const res = await apiPost('/api/action', { action: 'get_init_data' });
+        const d = await res.json();
+        State.contacts = d.contacts || [];
+        State.allUsers = d.all_users || [];
+        State.avatars = d.all_avatars || {};
+        State.rooms = [];
+
+        // Build the rooms list
+        // Announcements channel
+        State.rooms.push({ id: 'Announcements', name: 'Announcements', type: 'channel' });
+
+        // Custom rooms (groups)
+        (d.custom_rooms || []).forEach(r => {
+            State.rooms.push({ id: r.id, name: r.name, type: 'group' });
+        });
+
+        // DM contacts
+        (d.contacts || []).forEach(c => {
+            const roomId = dmRoomId(State.user, c);
+            State.rooms.push({ id: roomId, name: c, type: 'dm', partner: c });
+        });
+
+        if (d.quota_mb) State.quotaMB = d.quota_mb;
+        if (d.used_bytes != null) State.usedBytes = d.used_bytes;
+
+        renderChatList();
+    } catch (e) {
+        console.error('loadInitData failed:', e);
+    }
+}
+
+function dmRoomId(a, b) {
+    const [x, y] = [a, b].sort();
+    return `dm_${x}-${y}`;
+}
+
+// ============================================================
+// 6. WEBSOCKET
+// ============================================================
+function connectWS() {
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const url = `${proto}//${window.location.host}/ws/${encodeURIComponent(State.user)}/${encodeURIComponent(State.role)}/${encodeURIComponent(State.token)}`;
+    State.ws = new WebSocket(url);
+
+    State.ws.onopen = () => {
+        if (State.currentRoom) {
+            State.ws.send(JSON.stringify({ action: 'get_history', room: State.currentRoom.id }));
         }
-        else if (msg.type === 'deleted') { 
-            const el = document.getElementById(`msg-${msg.msg_id}`); if(el) el.remove(); 
-            selectedMsgs = selectedMsgs.filter(id => id !== msg.msg_id); updateSelectionUI();
-        }
-        else if (msg.type === 'edited') {
-            if(msg.room === currentRoom) {
-                const el = document.getElementById(`msg-${msg.msg_id}`);
-                if(el) {
-                    const txtNode = el.querySelector('.msg-text-content');
-                    if(txtNode) {
-                        txtNode.innerText = msg.new_text;
-                        if(!txtNode.innerHTML.includes('edited-tag')) txtNode.innerHTML += ' <span class="edited-tag">(edited)</span>';
-                    }
-                }
-            }
-        }
-        else if (msg.type === 'reaction_updated') { if(msg.room === currentRoom) updateReactionUI(msg.msg_id, msg.reactions); }
-        else if (msg.type === 'webrtc') { handleWebRTC(msg.data); }
-        else if (msg.type === 'presence') { onlineUsers = msg.online || []; }
-        else if (msg.type === 'pong') { /* keepalive */ }
     };
-    ws.onclose = (ev) => {
-        // 4401 = invalid token
+    State.ws.onmessage = ev => {
+        try { handleWS(JSON.parse(ev.data)); }
+        catch (e) { console.error('WS msg parse', e); }
+    };
+    State.ws.onclose = ev => {
         if (ev.code === 4401) {
-            localStorage.removeItem('bc_token'); localStorage.removeItem('bc_user'); localStorage.removeItem('bc_role');
+            localStorage.clear();
             location.reload();
             return;
         }
-        setTimeout(initWebSocket, 2000);
+        setTimeout(connectWS, 2000);
     };
-    setInterval(() => { if(ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({action: 'ping'})); }, 15000);
-}
 
-let userAvatars = {};
-
-async function loadInitData() {
-    const res = await apiJson('/api/action', {action: 'get_init_data', user: currentUser});
-    const data = await res.json();
-    myContacts = data.contacts; 
-    if(data.all_avatars) userAvatars = data.all_avatars;
-    if(data.quota_mb) myQuotaMB = data.quota_mb;
-    if(data.used_bytes != null) myUsedBytes = data.used_bytes;
-    
-    if(data.avatar) { document.getElementById('my-avatar').src = data.avatar; document.getElementById('my-avatar').style.display='block'; document.getElementById('my-initial').style.display='none'; }
-
-    const list = document.getElementById('chat-list');
-    
-    list.innerHTML = `<div class="chat-item" data-room="Announcements" onclick="openChat('Announcements', 'channel', 'Announcements')">
-            <div class="avatar" style="background:var(--c-red); color:white; border:none; box-shadow:0 0 15px var(--c-red-glow);">📢</div><div class="chat-info"><div class="chat-name">Announcements</div><div class="chat-preview" data-i18n="system_channel">${translations[currentLang].system_channel}</div></div><span class="unread-badge" id="badge-Announcements">0</span></div>`;
-    
-    data.custom_rooms.forEach(r => {
-        let sub = translations[currentLang].group;
-        let safeName = r.name.replace(/'/g, "\\'").replace(/"/g, "&quot;");
-        list.innerHTML += `<div class="chat-item" data-room="${r.id}" onclick="openChat('${r.id}', 'group', '${safeName}')">
-                <div class="avatar" style="background:var(--c-blue); color:white; border:none; box-shadow:0 0 15px var(--c-blue-glow);">👥</div><div class="chat-info"><div class="chat-name">${r.name}</div><div class="chat-preview">${sub}</div></div><span class="unread-badge" id="badge-${r.id}">0</span></div>`;
-    });
-
-    data.contacts.forEach(c => {
-        let avHTML = userAvatars[c] ? `<img src="${userAvatars[c]}">` : '👤';
-        let safeC = c.replace(/'/g, "\\'").replace(/"/g, "&quot;");
-        list.innerHTML += `<div class="chat-item" data-room="${c}" onclick="openChat('${safeC}', 'private', '${safeC}', '${safeC}')">
-                <div class="avatar">${avHTML}</div><div class="chat-info"><div class="chat-name">${c}</div><div class="chat-preview" data-i18n="private_chat">${translations[currentLang].private_chat}</div></div><span class="unread-badge" id="badge-dm_${c}">0</span></div>`;
-    });
-    
-    if(!currentRoom) openChat('Announcements', 'channel', 'Announcements');
-
-    // Restore unread badges from localStorage (after chat list is rendered)
-    setTimeout(() => { if (typeof restoreUnreadBadges === 'function') restoreUnreadBadges(); }, 100);
-}
-
-function openModal(id) {
-    document.getElementById(id).style.display = 'flex';
-    if (id === 'settingsModal') {
-        // Show admin entry button only for admin
-        const adminRow = document.getElementById('admin-entry-row');
-        if (adminRow) adminRow.style.display = (currentRole === 'admin') ? 'block' : 'none';
-        // Sync the Enter-to-send checkbox
-        const ets = document.getElementById('enterSendToggle');
-        if (ets) ets.checked = getEnterToSend();
-        // Refresh quota and active sessions
-        refreshMyQuota();
-        if (typeof fetchIPs === 'function') fetchIPs();
-    }
-}
-
-async function refreshMyQuota() {
-    try {
-        const res = await apiFetch('/api/quota');
-        if (!res.ok) return;
-        const d = await res.json();
-        myQuotaMB = d.quota_mb; myUsedBytes = d.used_bytes;
-        const txt = document.getElementById('my-storage-info');
-        const bar = document.getElementById('my-storage-bar');
-        if (txt) txt.innerText = `${d.used_mb} MB / ${d.quota_mb} MB used  ·  ${d.remaining_mb} MB free`;
-        if (bar) {
-            const pct = d.quota_mb > 0 ? Math.min(100, (d.used_bytes / (d.quota_mb*1024*1024) * 100)) : 0;
-            bar.style.width = pct + '%';
-            bar.style.background = pct > 90 ? 'var(--c-red)' : 'var(--c-blue)';
+    // keepalive
+    setInterval(() => {
+        if (State.ws && State.ws.readyState === WebSocket.OPEN) {
+            State.ws.send(JSON.stringify({ action: 'ping' }));
         }
-    } catch(e) {}
-}
-function closeModal(id) { document.getElementById(id).style.display = 'none'; }
-function closeContextMenu() {
-    document.getElementById('msgContextMenu').style.display = 'none';
-    document.body.classList.remove('ctxmenu-open');
+    }, 15000);
 }
 
-function openCreateModal() {
-    let html = '';
-    myContacts.forEach(c => { 
-        html += `<label class="contact-check"><input type="checkbox" value="${c}"> <span>${c}</span></label>`; 
-    });
-    document.getElementById('groupMembersList').innerHTML = html || '<p style="font-size:13px; color:var(--c-gray); text-align:center; padding:15px;">Contact list is empty.</p>';
-    switchCreateTab('private');
-    openModal('createModal');
-}
-
-function switchCreateTab(tab) {
-    if(tab === 'private') {
-        document.getElementById('tab-private').style.color = 'var(--c-blue)'; document.getElementById('tab-private').style.borderBottomColor = 'var(--c-blue)';
-        document.getElementById('tab-group').style.color = 'var(--c-gray)'; document.getElementById('tab-group').style.borderBottomColor = 'transparent';
-        document.getElementById('content-private').style.display = 'block'; document.getElementById('content-group').style.display = 'none';
-    } else {
-        document.getElementById('tab-group').style.color = 'var(--c-blue)'; document.getElementById('tab-group').style.borderBottomColor = 'var(--c-blue)';
-        document.getElementById('tab-private').style.color = 'var(--c-gray)'; document.getElementById('tab-private').style.borderBottomColor = 'transparent';
-        document.getElementById('content-group').style.display = 'block'; document.getElementById('content-private').style.display = 'none';
+function wsSend(obj) {
+    if (State.ws && State.ws.readyState === WebSocket.OPEN) {
+        State.ws.send(JSON.stringify(obj));
     }
 }
 
-function searchChat() {
-    let q = document.getElementById('sidebarSearchInput').value.toLowerCase();
-    document.querySelectorAll('.chat-item').forEach(i => { i.style.display = i.querySelector('.chat-name').innerText.toLowerCase().includes(q) ? 'flex' : 'none'; });
-}
-
-async function fetchIPs() {
-    const res = await apiJson('/api/action', {action: 'get_ips', user: currentUser});
-    const data = await res.json();
-    document.getElementById('ipList').innerHTML = data.ips.map(i => `<div style="border-bottom:1px solid var(--border); padding:8px 0;">🌐 ${i.ip} <br><span style="color:var(--c-gray); font-size:11px;">${i.date}</span></div>`).join('');
-}
-
-async function uploadAvatar() {
-    const file = document.getElementById('avatarInput').files[0]; if (!file) return;
-    const fd = new FormData(); fd.append('file', file);
-    const res = await apiFetch('/api/upload_avatar', { method: 'POST', body: fd });
-    const data = await res.json();
-    if (data.success) { document.getElementById('my-avatar').src = data.url; document.getElementById('my-avatar').style.display = 'block'; document.getElementById('my-initial').style.display = 'none'; }
-}
-
-async function submitContact() {
-    const t = document.getElementById('contactUsername').value.trim(); if(!t) return;
-    const res = await apiJson('/api/action', {action:'add_contact', owner: currentUser, target: t});
-    const data = await res.json();
-    if(data.success) { closeModal('createModal'); loadInitData(); openChat(data.target, 'private', data.target, data.target); } else alert(data.msg);
-}
-
-async function submitCreation() {
-    const n = document.getElementById('creationName').value.trim(); const t = document.getElementById('creationType').value || 'group'; if(!n) return;
-    let members = []; document.querySelectorAll('#groupMembersList input:checked').forEach(chk => members.push(chk.value));
-    const res = await apiJson('/api/action', {action:'create_room', type: t, name: n, user: currentUser, members: members});
-    const data = await res.json();
-    if(data.success) { closeModal('createModal'); loadInitData(); openChat(data.room_id, t, n); }
-}
-
-function openChat(roomId, type, title, targetUser = null) {
-    requestNotificationAccess(); 
-    
-    document.querySelectorAll('.chat-item').forEach(c => c.classList.remove('active'));
-    let activeItem = document.querySelector(`.chat-item[data-room="${roomId}"]`);
-    if(activeItem) activeItem.classList.add('active');
-
-    targetUserForDM = targetUser; cancelSelection(); cancelReply(); editMsgId = null; lastDateStr = null;
-    let realRoomId = roomId;
-    if (type === 'private') { const users = [currentUser, roomId].sort(); realRoomId = `dm_${users.join('-')}`; }
-    currentRoom = realRoomId;
-
-    document.getElementById('room-title').innerText = title;
-    let st = type === 'channel' ? translations[currentLang].system_channel : (type === 'group' ? translations[currentLang].group : translations[currentLang].private_chat);
-    if(roomId === 'Announcements') st = translations[currentLang].system_channel;
-    document.getElementById('room-status').innerText = st;
-    
-    let headerAv = '📢';
-    if (type === 'group') headerAv = '👥';
-    if (type === 'private') headerAv = (targetUser && userAvatars[targetUser]) ? `<img src="${userAvatars[targetUser]}" style="width:100%;height:100%;object-fit:cover;">` : '👤';
-    
-    document.getElementById('header-avatar').innerHTML = headerAv;
-    document.getElementById('header-avatar').style.boxShadow = type === 'channel' ? '0 0 15px var(--c-red-glow)' : '0 0 15px var(--c-blue-glow)';
-    if(type === 'private' && targetUser && userAvatars[targetUser]) document.getElementById('header-avatar').style.border = 'none';
-
-    document.getElementById('messages').innerHTML = '';
-
-    // Clear unread badge for this chat (and remove from localStorage)
-    clearBadgeForRoom(roomId, type);
-
-    const inputArea = document.getElementById('input-container');
-    if ((roomId === 'Announcements' || type === 'channel') && currentRole !== 'admin') inputArea.style.display = 'none';
-    else inputArea.style.display = 'flex';
-    
-    if(type === 'private') {
-        document.getElementById('callBtn').style.display = 'flex';
-        const vBtn = document.getElementById('videoCallBtn');
-        if (vBtn) vBtn.style.display = 'flex';
-        const gBtn = document.getElementById('groupSettingsBtn');
-        if (gBtn) gBtn.style.display = 'none';
-    } else {
-        document.getElementById('callBtn').style.display = 'none';
-        const vBtn = document.getElementById('videoCallBtn');
-        if (vBtn) vBtn.style.display = 'none';
-        const gBtn = document.getElementById('groupSettingsBtn');
-        // Show group settings only for custom rooms (rm_)
-        if (gBtn) gBtn.style.display = (typeof roomId === 'string' && roomId.startsWith('rm_')) ? 'flex' : 'none';
-    }
-
-    // Hide search bar when switching chats
-    const sb = document.getElementById('searchBar');
-    const sr = document.getElementById('searchResults');
-    if (sb) sb.style.display = 'none';
-    if (sr) sr.style.display = 'none';
-
-    if (window.innerWidth <= 768) document.getElementById('sidebar').classList.add('hidden');
-    if(ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({action: 'get_history', room: currentRoom}));
-}
-
-function closeChat() { document.getElementById('sidebar').classList.remove('hidden'); }
-
-function openProfile() {
-    if(!currentRoom) return;
-    document.getElementById('prof-avatar').innerHTML = document.getElementById('header-avatar').innerHTML;
-    document.getElementById('prof-name').innerText = document.getElementById('room-title').innerText;
-    
-    let mediaH = '', filesH = '', audioH = '', linksH = '';
-    document.querySelectorAll('.bubble').forEach(b => {
-        let msgId = b.parentElement.id; 
-        let img = b.querySelector('img'); let vid = b.querySelector('video');
-        if(img) mediaH += `<img src="${img.src}" onclick="closeModal('profileModal'); scrollToMsg('${msgId}')" style="width:30%; height:80px; object-fit:cover; border-radius:12px; border:1px solid var(--border); cursor:pointer; transition:0.3s;" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">`;
-        if(vid && !vid.classList.contains('video-msg')) mediaH += `<video src="${vid.src}" onclick="closeModal('profileModal'); scrollToMsg('${msgId}')" style="width:30%; height:80px; object-fit:cover; border-radius:12px; border:1px solid var(--border); cursor:pointer;"></video>`;
-        
-        let aud = b.querySelector('audio'); 
-        let vidMsg = b.querySelector('.video-msg');
-        
-        if(aud) audioH += `<div style="background:var(--bg-input); padding:10px; border-radius:16px; display:flex; align-items:center; gap:12px; width:100%; border:1px solid var(--border);"><div onclick="closeModal('profileModal'); scrollToMsg('${msgId}')" style="background:var(--c-blue); width:44px; height:44px; border-radius:50%; display:flex; justify-content:center; align-items:center; color:white; flex-shrink:0; cursor:pointer; box-shadow:0 0 10px var(--c-blue-glow);">🎵</div><audio controls src="${aud.src}" style="height:35px; width:100%; outline:none;"></audio></div>`;
-        if(vidMsg) audioH += `<video src="${vidMsg.src}" onclick="closeModal('profileModal'); scrollToMsg('${msgId}')" controls style="width:100px; height:100px; border-radius:50%; object-fit:cover; margin-bottom:8px; border:3px solid var(--c-blue); cursor:pointer; box-shadow:0 4px 15px rgba(0,0,0,0.3);"></video>`; 
-
-        let link = b.querySelector('.file-link');
-        if(link) filesH += `<a href="${link.href}" class="file-link" download>${link.innerHTML}</a>`;
-        
-        let txt = b.querySelector('.msg-text-content');
-        if(txt) {
-            let urls = txt.innerText.match(/https?:\/\/[^\s]+/g);
-            if(urls) urls.forEach(u => linksH += `<a href="${u}" target="_blank" style="color:var(--c-blue); padding:12px; border-bottom:1px solid var(--border); display:block; border-radius:12px; background:var(--bg-input); margin-bottom:6px; transition:0.3s;" onmouseover="this.style.background='var(--border)'" onmouseout="this.style.background='var(--bg-input)'">${u}</a>`);
-        }
-    });
-    
-    document.getElementById('tab-media').innerHTML = mediaH || '<p style="padding:25px; color:var(--c-gray); width:100%; text-align:center;">No Media</p>';
-    document.getElementById('tab-files').innerHTML = filesH || '<p style="padding:25px; color:var(--c-gray); width:100%; text-align:center;">No Files</p>';
-    document.getElementById('tab-audio').innerHTML = audioH || '<p style="padding:25px; color:var(--c-gray); width:100%; text-align:center;">No Voice/Video</p>';
-    document.getElementById('tab-links').innerHTML = linksH || '<p style="padding:25px; color:var(--c-gray); width:100%; text-align:center;">No Links</p>';
-    
-    switchProfTab('media', document.querySelector('.prof-tab'));
-    openModal('profileModal');
-}
-function switchProfTab(tab, btn) {
-    document.querySelectorAll('.prof-tab').forEach(b => { b.style.color = 'var(--c-gray)'; b.style.borderBottomColor = 'transparent'; });
-    btn.style.color = 'var(--c-blue)'; btn.style.borderBottomColor = 'var(--c-blue)';
-    document.querySelectorAll('.prof-content').forEach(c => c.style.display = 'none');
-    document.getElementById(`tab-${tab}`).style.display = tab==='media'?'flex':'flex';
-}
-
-function handleNotification(msg) {
-    let sender = msg.data.user;
-    let room = msg.room;
-    let isDM = room.startsWith('dm_');
-    let isGroup = room.startsWith('rm_');
-
-    // Do not count own messages as unread
-    if (sender === currentUser) return;
-
-    if (isDM && !room.includes(currentUser)) return;
-    if (isGroup && msg.data.roomMembers && !msg.data.roomMembers.includes(currentUser)) return;
-
-    if (isDM && !document.querySelector(`.chat-item[data-room="${sender}"]`)) loadInitData();
-
-    let targetId = isDM ? sender : room;
-    let badgeId = isDM ? `badge-dm_${targetId}` : `badge-${targetId}`;
-    let badge = document.getElementById(badgeId);
-    if (badge) {
-        const newCount = (parseInt(badge.innerText || '0') || 0) + 1;
-        badge.innerText = newCount > 99 ? '99+' : String(newCount);
-        badge.classList.add('has-count');
-        badge.style.display = 'inline-block';
-        // persist count
-        try {
-            const key = `unread_${currentUser}_${badgeId}`;
-            localStorage.setItem(key, String(newCount));
-        } catch {}
-    }
-
-    // Also update chat preview text
-    const chatItem = badge ? badge.closest('.chat-item') : null;
-    if (chatItem) {
-        const preview = chatItem.querySelector('.chat-preview');
-        if (preview) {
-            const previewText = msg.data.msgType === 'text'
-                ? msg.data.text
-                : (msg.data.msgType === 'image' ? '🖼️ Photo' :
-                   msg.data.msgType === 'video' ? '🎥 Video' :
-                   msg.data.msgType === 'audio' ? '🎤 Voice' :
-                   '📎 ' + (msg.data.fileName || 'File'));
-            preview.innerText = `${sender}: ${previewText}`.slice(0, 60);
-            preview.style.color = 'var(--c-blue)';
-            preview.style.fontWeight = '600';
-        }
-    }
-
-    try { document.getElementById('notif-sound').play(); } catch(e){}
-
-    if ("Notification" in window && Notification.permission === "granted") {
-        let notifBody = msg.data.msgType === 'text' ? msg.data.text : "New Message 📎";
-        showSystemNotification(sender, notifBody, 'msg-' + room);
-    }
-}
-
-// Clear badge when user opens that chat
-function clearBadgeForRoom(roomId, type) {
-    let badgeId = type === 'private' ? `badge-dm_${roomId}` : `badge-${roomId}`;
-    const badge = document.getElementById(badgeId);
-    if (badge) {
-        badge.innerText = '0';
-        badge.classList.remove('has-count');
-        badge.style.display = 'none';
-        try {
-            const key = `unread_${currentUser}_${badgeId}`;
-            localStorage.removeItem(key);
-        } catch {}
-    }
-    // Reset preview style
-    const chatItem = badge ? badge.closest('.chat-item') : null;
-    if (chatItem) {
-        const preview = chatItem.querySelector('.chat-preview');
-        if (preview) {
-            preview.style.color = '';
-            preview.style.fontWeight = '';
-        }
-    }
-}
-
-// Restore badge counts from localStorage on load
-function restoreUnreadBadges() {
-    try {
-        const prefix = `unread_${currentUser}_`;
-        for (let i = 0; i < localStorage.length; i++) {
-            const key = localStorage.key(i);
-            if (!key || !key.startsWith(prefix)) continue;
-            const badgeId = key.substring(prefix.length);
-            const count = parseInt(localStorage.getItem(key) || '0', 10);
-            if (count > 0) {
-                const badge = document.getElementById(badgeId);
-                if (badge) {
-                    badge.innerText = count > 99 ? '99+' : String(count);
-                    badge.classList.add('has-count');
-                    badge.style.display = 'inline-block';
-                }
+function handleWS(m) {
+    switch (m.type) {
+        case 'history':
+            if (State.currentRoom && m.room === State.currentRoom.id) {
+                State.messages[m.room] = m.data || [];
+                renderMessages();
+                // Get pinned for this room
+                wsSend({ action: 'get_pinned', room: m.room });
+                // Mark as read
+                wsSend({ action: 'read_messages', room: m.room });
             }
-        }
-    } catch {}
-}
-
-let pressTimer;
-function startPress(e, id, text, sender) { pressTimer = window.setTimeout(() => { openMsgMenu(e, id, text, sender); }, 600); }
-function cancelPress() { clearTimeout(pressTimer); }
-
-function appendMessage(data) {
-    const isSelf = data.user === currentUser;
-    const msgBox = document.getElementById('messages');
-    
-    let media = '';
-    if (data.msgType === 'image') media = `<img src="${data.url}">`;
-    else if (data.msgType === 'video') {
-        let isVideoMessage = data.url.includes('rec_');
-        if (isVideoMessage) {
-            media = `<video class="video-msg" autoplay loop muted playsinline src="${data.url}" onclick="this.muted = !this.muted;"></video>`;
-        } else {
-            media = `<video controls playsinline style="max-width:100%; border-radius:12px; margin-top:5px; border:1px solid var(--border);" src="${data.url}"></video>`;
-        }
-    }
-    else if (data.msgType === 'audio') {
-        // Telegram-style voice message with waveform, play/pause, seek
-        const audioId = 'aud_' + data.id;
-        media = `
-        <div class="voice-msg" data-audio-id="${audioId}" style="display:flex; align-items:center; gap:10px; padding:6px 4px; margin-top:4px; min-width:230px;">
-            <audio id="${audioId}" preload="metadata" src="${data.url}" style="display:none;"></audio>
-            <button class="voice-play-btn" onclick="toggleVoicePlay('${audioId}'); event.stopPropagation();" style="width:42px; height:42px; border-radius:50%; background:var(--c-blue); border:none; color:white; cursor:pointer; display:flex; align-items:center; justify-content:center; flex-shrink:0; box-shadow:0 0 12px var(--c-blue-glow);">
-                <svg class="voice-icon-play" viewBox="0 0 24 24" style="width:22px; fill:currentColor;"><path d="M8 5v14l11-7z"/></svg>
-                <svg class="voice-icon-pause" viewBox="0 0 24 24" style="width:22px; fill:currentColor; display:none;"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
-            </button>
-            <div style="flex:1; display:flex; flex-direction:column; gap:4px; min-width:0;">
-                <div class="voice-waveform" onclick="seekVoiceByClick(event, '${audioId}')" style="height:24px; display:flex; align-items:center; gap:2px; cursor:pointer; position:relative; user-select:none;">
-                    ${generateWaveformBars()}
-                </div>
-                <div style="display:flex; justify-content:space-between; align-items:center; font-size:11px; color:var(--c-gray);">
-                    <span class="voice-time" data-time-for="${audioId}">0:00</span>
-                </div>
-            </div>
-        </div>`;
-    }
-    else if (data.msgType === 'file') {
-        let fName = data.fileName || "File";
-        media = `<a href="${data.url}" class="file-link" download><div class="file-icon"><svg style="width:24px;fill:white;"><use href="#icon-doc"></use></svg></div> <div style="display:flex; flex-direction:column; overflow:hidden;"><span style="font-weight:bold; font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" dir="auto">${fName}</span><span style="font-size:11px; opacity:0.7;">Download</span></div></a>`;
-    }
-
-    let textContent = data.text || '';
-    let replyHtml = '';
-    if (data.replyTo && data.replyTo.id) {
-        replyHtml = `<div class="reply-preview" onclick="scrollToMsg('msg-${data.replyTo.id}'); event.stopPropagation();"><div style="color:var(--c-blue); font-weight:bold; font-size:12px; margin-bottom:2px;">${data.replyTo.user}</div><div style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${data.replyTo.text}</div></div>`;
-    }
-
-    let safeText = encodeURIComponent(textContent);
-
-    let dateObj = data.timestamp ? new Date(data.timestamp.replace(' ', 'T') + 'Z') : new Date();
-    let timeStr = dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-    let dateStr = dateObj.toLocaleDateString('fa-IR', { month: 'long', day: 'numeric' });
-    
-    if (dateStr !== lastDateStr) {
-        msgBox.insertAdjacentHTML('beforeend', `<div class="date-header"><span>${dateStr}</span></div>`);
-        lastDateStr = dateStr;
-    }
-
-    let isOnlyVidMsg = data.msgType === 'video' && data.url.includes('rec_') && !textContent;
-    let bubbleClass = isOnlyVidMsg ? "bubble video-msg-bubble" : "bubble";
-
-    const html = `
-        <div class="msg-row ${isSelf ? 'out' : 'in'}" id="msg-${data.id}">
-            <div class="${bubbleClass}" dir="auto" 
-                oncontextmenu="openMsgMenu(event, '${data.id}', '${safeText}', '${data.user}')"
-                ontouchstart="startPress(event, '${data.id}', '${safeText}', '${data.user}')" 
-                ontouchend="cancelPress()" 
-                ontouchmove="cancelPress()"
-                onclick="toggleMsgSelection('${data.id}')">
-                
-                <span class="sender-name">${data.user}</span>
-                ${replyHtml}
-                <span class="msg-text-content">${textContent}</span>
-                ${media}
-                <div class="reactions-bar" id="reacts-${data.id}"></div>
-                <div class="msg-bottom-bar"><span class="msg-time">${timeStr}</span></div>
-            </div>
-        </div>`;
-    
-    msgBox.insertAdjacentHTML('beforeend', html);
-    if(data.reactions) updateReactionUI(data.id, data.reactions);
-    msgBox.scrollTop = msgBox.scrollHeight;
-}
-
-function scrollToMsg(id) {
-    const el = document.getElementById(id);
-    const msgBox = document.getElementById('messages');
-    if(el && msgBox) {
-        const offsetTop = el.offsetTop - msgBox.offsetTop;
-        msgBox.scrollTo({ top: offsetTop - 60, behavior: 'smooth' });
-        
-        const bubble = el.querySelector('.bubble');
-        if(bubble) {
-            bubble.classList.add('highlight-msg');
-            setTimeout(()=> bubble.classList.remove('highlight-msg'), 2000);
-        }
-    }
-}
-
-function openMsgMenu(e, id, textEncoded, sender) {
-    if(e && e.preventDefault) e.preventDefault();
-    if(selectionMode) { toggleMsgSelection(id); return; }
-    contextMsgId = id; contextMsgText = decodeURIComponent(textEncoded) || ''; contextMsgSender = sender;
-    const menu = document.getElementById('msgContextMenu');
-    menu.style.display = 'flex';
-    document.body.classList.add('ctxmenu-open');
-
-    if(sender === currentUser && contextMsgText !== '') document.getElementById('editBtnOption').style.display = 'flex';
-    else document.getElementById('editBtnOption').style.display = 'none';
-
-    // Telegram-style: position relative to the MESSAGE BUBBLE, not the tap point
-    const msgRow = document.getElementById('msg-' + id);
-    const bubble = msgRow ? msgRow.querySelector('.bubble') : null;
-
-    // Reset positioning before measure
-    menu.style.left = '0px';
-    menu.style.top = '0px';
-
-    requestAnimationFrame(() => {
-        const w = menu.offsetWidth || 230;
-        const h = menu.offsetHeight || 280;
-        const vw = window.innerWidth;
-        const vh = window.innerHeight;
-        const PAD = 8;
-        let left, top;
-
-        if (bubble) {
-            const r = bubble.getBoundingClientRect();
-            // Vertical: prefer ABOVE the bubble. If not enough room, BELOW.
-            const spaceAbove = r.top;
-            const spaceBelow = vh - r.bottom;
-            if (spaceAbove >= h + PAD + 4) {
-                top = r.top - h - 8;
-            } else if (spaceBelow >= h + PAD + 4) {
-                top = r.bottom + 8;
-            } else {
-                // Doesn't fully fit either side; place at bottom of viewport
-                top = vh - h - PAD;
+            break;
+        case 'new_msg':
+            onNewMsg(m);
+            break;
+        case 'deleted':
+            onDeleted(m);
+            break;
+        case 'edited':
+            onEdited(m);
+            break;
+        case 'reaction_updated':
+            onReaction(m);
+            break;
+        case 'read_receipt':
+            onReadReceipt(m);
+            break;
+        case 'typing':
+            onTyping(m);
+            break;
+        case 'presence':
+            State.onlineUsers = m.online || [];
+            renderHeader();
+            renderChatList();
+            break;
+        case 'last_seen':
+            State.lastSeen = m.data || {};
+            renderHeader();
+            break;
+        case 'pinned_changed':
+            State.pinned[m.room] = m.pinned || [];
+            if (State.currentRoom && m.room === State.currentRoom.id) {
+                State.pinnedIdx = 0;
+                renderPinnedBar();
             }
-            // Horizontal: align to bubble's side (right-aligned to outgoing, left-aligned to incoming)
-            const isOutgoing = msgRow && msgRow.classList.contains('out');
-            if (isOutgoing) {
-                left = r.right - w;
-            } else {
-                left = r.left;
-            }
-            // Clamp into viewport
-            if (left < PAD) left = PAD;
-            if (left + w > vw - PAD) left = vw - w - PAD;
-            if (top < PAD) top = PAD;
-        } else {
-            // Fallback to tap point
-            let x = (e && (e.clientX || (e.touches && e.touches[0] && e.touches[0].clientX))) || vw / 2;
-            let y = (e && (e.clientY || (e.touches && e.touches[0] && e.touches[0].clientY))) || vh / 2;
-            left = x; top = y;
-            if (left + w > vw - PAD) left = vw - w - PAD;
-            if (top + h > vh - PAD) top = vh - h - PAD;
-            if (left < PAD) left = PAD;
-            if (top < PAD) top = PAD;
+            break;
+        case 'webrtc':
+            handleWebRTC(m.data);
+            break;
+        case 'pong':
+            break;
+    }
+}
+
+function onNewMsg(m) {
+    const room = m.room;
+    const data = m.data;
+    State.messages[room] = State.messages[room] || [];
+    State.messages[room].push(data);
+
+    if (State.currentRoom && room === State.currentRoom.id) {
+        appendMessage(data, true);
+        // Mark as read shortly (so other side sees blue ticks)
+        if (document.hasFocus()) {
+            setTimeout(() => wsSend({ action: 'read_messages', room }), 500);
         }
-        menu.style.left = left + 'px';
-        menu.style.top = top + 'px';
-    });
-}
-
-function sendReaction(emoji) { if(!contextMsgId) return; ws.send(JSON.stringify({action: 'react_msg', msg_id: contextMsgId, emoji: emoji})); closeContextMenu(); }
-
-function updateReactionUI(msgId, reactionsObj) {
-    const bar = document.getElementById(`reacts-${msgId}`); if(!bar) return;
-    bar.innerHTML = ''; let counts = {}; let myReact = null;
-    for(let usr in reactionsObj) { let em = reactionsObj[usr]; counts[em] = (counts[em] || 0) + 1; if(usr === currentUser) myReact = em; }
-    for(let em in counts) { let isMine = (myReact === em) ? 'mine' : ''; bar.innerHTML += `<span class="react-badge ${isMine}" onclick="ws.send(JSON.stringify({action:'react_msg', msg_id:'${msgId}', emoji:'${em}'})); event.stopPropagation();">${em} ${counts[em]}</span>`; }
-}
-
-function doReply() {
-    const snap = snapshotMessages();
-    replyToMsg = { id: contextMsgId, text: contextMsgText, user: contextMsgSender };
-    document.getElementById('replySender').innerText = contextMsgSender;
-    document.getElementById('replyText').innerText = contextMsgText;
-    document.getElementById('replyBar').style.display = 'block';
-    document.getElementById('msgInput').focus();
-    closeContextMenu();
-    adjustAfterSnapshot(snap);
-}
-function cancelReply() {
-    const snap = snapshotMessages();
-    replyToMsg = null;
-    document.getElementById('replyBar').style.display = 'none';
-    editMsgId = null;
-    adjustAfterSnapshot(snap);
-}
-function doCopy() { navigator.clipboard.writeText(contextMsgText); closeContextMenu(); }
-function doDeleteMsg() { if(confirm("Delete message for everyone?")) ws.send(JSON.stringify({action: 'delete_msg', msg_ids: [contextMsgId]})); closeContextMenu(); }
-
-function doEdit() {
-    editMsgId = contextMsgId;
-    document.getElementById('msgInput').value = contextMsgText;
-    document.getElementById('msgInput').focus();
-    checkInput(); closeContextMenu();
-}
-
-function doSelect() { selectionMode = true; closeContextMenu(); toggleMsgSelection(contextMsgId); }
-function toggleMsgSelection(id) {
-    if(!selectionMode) return;
-    const bubble = document.querySelector(`#msg-${id} .bubble`);
-    if(!bubble) return;
-    if(selectedMsgs.includes(id)) { selectedMsgs = selectedMsgs.filter(m => m !== id); bubble.classList.remove('selected-msg'); } 
-    else { selectedMsgs.push(id); bubble.classList.add('selected-msg'); }
-    updateSelectionUI();
-}
-function updateSelectionUI() {
-    const bar = document.getElementById('multiSelectBar');
-    if(selectedMsgs.length > 0) { bar.style.display = 'flex'; document.getElementById('selectCount').innerText = `${selectedMsgs.length} Selected`; } 
-    else { cancelSelection(); }
-}
-function cancelSelection() {
-    selectionMode = false; selectedMsgs = [];
-    document.querySelectorAll('.bubble.selected-msg').forEach(b => b.classList.remove('selected-msg'));
-    document.getElementById('multiSelectBar').style.display = 'none';
-}
-function deleteSelected() { if(confirm(`Delete ${selectedMsgs.length} messages for everyone?`)) { ws.send(JSON.stringify({action: 'delete_msg', msg_ids: selectedMsgs})); cancelSelection(); } }
-
-function openForwardModal() {
-    let html = '';
-    document.querySelectorAll('.chat-item').forEach(item => {
-        let rid = item.getAttribute('data-room');
-        if(rid === 'Announcements' && currentRole !== 'admin') return; 
-        let rname = item.querySelector('.chat-name').innerText;
-        let avatar = item.querySelector('.avatar').innerHTML;
-        html += `<div class="contact-check" onclick="execForward('${rid}')" style="border-bottom:1px solid var(--border); padding:10px; display:flex; align-items:center; gap:10px; cursor:pointer; transition:0.2s;" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='none'"><div class="avatar" style="width:36px;height:36px;font-size:14px;border:none;">${avatar}</div> <span style="color:var(--c-white); font-weight:bold;">${rname}</span></div>`;
-    });
-    document.getElementById('forwardList').innerHTML = html || '<p style="text-align:center;color:gray;padding:15px;">No chats available</p>';
-    openModal('forwardModal');
-}
-
-function execForward(targetRoomId) {
-    ws.send(JSON.stringify({action: 'forward_msg', msg_ids: selectedMsgs, target_room: targetRoomId}));
-    closeModal('forwardModal'); cancelSelection();
-    let chatItem = document.querySelector(`.chat-item[data-room="${targetRoomId}"]`);
-    if(chatItem) chatItem.click();
-}
-
-// --- Inputs & Recording ---
-let mediaRecorder; let audioChunks = []; let isRecording = false; let isPaused = false;
-let recTimerInterval; let recSeconds = 0;
-
-function checkInput() {
-    const input = document.getElementById('msgInput');
-    const btnSend = document.getElementById('actionSendBtn');
-    const btnMic = document.getElementById('actionMicBtn');
-    const btnVid = document.getElementById('actionVideoBtn');
-    if (input.value.trim() !== '') { 
-        btnSend.style.display = 'flex'; btnMic.style.display = 'none'; btnVid.style.display = 'none';
-    } else { 
-        btnSend.style.display = 'none'; btnMic.style.display = 'flex'; btnVid.style.display = 'flex';
-    }
-}
-
-function handleSendText() {
-    const input = document.getElementById('msgInput');
-    if (input.value.trim() !== '') {
-        if(editMsgId) {
-            ws.send(JSON.stringify({action: 'edit_msg', msg_id: editMsgId, text: input.value}));
-            editMsgId = null;
-        } else {
-            ws.send(JSON.stringify({action: 'send_msg', room: currentRoom, user: currentUser, targetUser: targetUserForDM, msgType: 'text', text: input.value, replyTo: replyToMsg}));
-        }
-        // CRITICAL FIX: Force the textarea back to a single-line state
-        input.value = '';
-        // Remove inline height first
-        input.style.height = 'auto';
-        // Force layout reflow, then set to the empty/single-line scrollHeight
-        // We need rAF to let layout settle since the textarea may have been multi-line
-        requestAnimationFrame(() => {
-            input.style.height = 'auto';
-            // Set explicitly to its natural single-line height
-            const singleLine = Math.max(input.scrollHeight, 40);
-            input.style.height = singleLine + 'px';
-            // One more time after another frame in case browser is slow
-            requestAnimationFrame(() => {
-                input.style.height = 'auto';
-                input.style.height = Math.max(input.scrollHeight, 40) + 'px';
-            });
-        });
-        cancelReply();
-        checkInput();
-    }
-}
-// === PHASE 2: Mobile-friendly input handling ===
-// Detect if we're on mobile/touch device
-function isMobileDevice() {
-    return ('ontouchstart' in window) || (navigator.maxTouchPoints > 0) || /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
-}
-
-// Whether Enter sends the message; user can toggle in settings.
-// Default: desktop = Enter sends, Shift+Enter newline; mobile = Enter newline, button sends.
-let enterToSend = localStorage.getItem('enterToSend');
-if (enterToSend === null) {
-    enterToSend = isMobileDevice() ? 'false' : 'true';
-    localStorage.setItem('enterToSend', enterToSend);
-}
-function setEnterToSend(val) {
-    enterToSend = val ? 'true' : 'false';
-    localStorage.setItem('enterToSend', enterToSend);
-}
-function getEnterToSend() { return enterToSend === 'true'; }
-
-function handleInputKey(e) {
-    if (e.key !== 'Enter') return;
-    // On mobile, never auto-send unless user enabled it; let Enter create newline
-    if (e.shiftKey) return; // Shift+Enter always = newline
-    if (e.ctrlKey || e.metaKey) {
-        // Ctrl+Enter / Cmd+Enter always sends
-        e.preventDefault();
-        handleSendText();
-        return;
-    }
-    if (getEnterToSend()) {
-        e.preventDefault();
-        handleSendText();
-    }
-    // else: let default newline happen
-}
-
-// ============================================================
-// ANTI-SHIFT BUG: Prevent visible content from jumping when
-// the input bar grows / reply bar appears / upload placeholder appears.
-//
-// Key insight: messages container is flex:1, so when bottom UI grows,
-// messages shrinks. Browser keeps scrollTop the same, so visible content
-// shifts UP and last messages go below the fold.
-//
-// FIX: snapshot scrollTop & messages height BEFORE the change,
-// then adjust scrollTop by the height delta AFTER the change.
-// ============================================================
-function snapshotMessages() {
-    const messages = document.getElementById('messages');
-    if (!messages) return null;
-    return {
-        el: messages,
-        scrollTop: messages.scrollTop,
-        clientHeight: messages.clientHeight,
-        scrollHeight: messages.scrollHeight,
-        wasAtBottom: (messages.scrollHeight - messages.scrollTop - messages.clientHeight) < 80
-    };
-}
-
-function adjustAfterSnapshot(snap) {
-    if (!snap || !snap.el) return;
-    const messages = snap.el;
-    requestAnimationFrame(() => {
-        const newClientHeight = messages.clientHeight;
-        const heightDelta = snap.clientHeight - newClientHeight; // + means messages shrunk
-        if (snap.wasAtBottom) {
-            messages.scrollTop = messages.scrollHeight;
-        } else if (heightDelta !== 0) {
-            // If messages shrunk by N px, the visible content shifted up by N px
-            // To keep visible content stable: increase scrollTop by N
-            messages.scrollTop = Math.max(0, snap.scrollTop + heightDelta);
-        }
-    });
-}
-
-function autoResize(el) {
-    if (!el) return;
-    const snap = snapshotMessages();
-    el.style.height = 'auto';
-    const max = 140;
-    el.style.height = Math.min(el.scrollHeight, max) + 'px';
-    adjustAfterSnapshot(snap);
-}
-
-// Keep the OLD keypress for safety (no-op since onkeydown handles it now via inline)
-// Removed the unsafe Enter-always-sends listener that was here before
-
-function updateTimer() {
-    if(!isPaused) { recSeconds++; let m = String(Math.floor(recSeconds / 60)).padStart(2, '0'); let s = String(recSeconds % 60).padStart(2, '0'); document.getElementById('recTimer').innerText = `${m}:${s}`; }
-}
-
-async function startRecord(type, btn) {
-    if (!isRecording) {
-        try {
-            audioChunks = []; 
-            const constraints = type === 'video' ? { audio: true, video: { facingMode: "user" } } : { audio: true };
-            const stream = await navigator.mediaDevices.getUserMedia(constraints);
-            
-            if (type === 'video') { const vidPrev = document.getElementById('videoPreview'); vidPrev.srcObject = stream; vidPrev.style.display = 'block'; }
-
-            mediaRecorder = new MediaRecorder(stream);
-            mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
-            mediaRecorder.onstop = async () => {
-                if(type === 'video') { const vidPrev = document.getElementById('videoPreview'); vidPrev.style.display = 'none'; vidPrev.srcObject = null; }
-                stream.getTracks().forEach(t => t.stop());
-                
-                if(audioChunks.length > 0) {
-                    const mime = type === 'video' ? 'video/webm' : 'audio/webm';
-                    const uniqueId = Math.random().toString(36).substring(2, 10);
-                    const fileName = `rec_${uniqueId}.${type==='video'?'mp4':'webm'}`;
-                    
-                    const fd = new FormData(); 
-                    fd.append('file', new File([new Blob(audioChunks, { type: mime })], fileName, { type: mime }));
-                    audioChunks = []; 
-                    
-                    const res = await apiFetch('/api/upload', { method: 'POST', body: fd });
-                    const data = await res.json();
-                    if (data.error || !data.url) {
-                        alert("Upload failed: " + (data.detail || data.error || "Unknown error"));
-                        return;
-                    }
-                    if (data.used_bytes != null) myUsedBytes = data.used_bytes;
-                    ws.send(JSON.stringify({action: 'send_msg', room: currentRoom, user: currentUser, targetUser: targetUserForDM, msgType: type, url: data.url, replyTo: replyToMsg}));
-                    cancelReply();
-                }
-            };
-            mediaRecorder.start(500); isRecording = true; isPaused = false;
-            
-            document.getElementById('textInputBox').style.display = 'none';
-            document.getElementById('attachBtn').style.display = 'none';
-            document.getElementById('actionVideoBtn').style.display = 'none';
-            document.getElementById('actionMicBtn').style.display = 'none';
-            
-            document.getElementById('recControls').style.display = 'flex';
-            let sendBtn = document.getElementById('actionSendBtn');
-            sendBtn.style.display = 'flex'; sendBtn.classList.add('rec'); sendBtn.classList.remove('send');
-            sendBtn.onclick = stopAndSendRecord; 
-
-            recSeconds = 0; document.getElementById('recTimer').innerText = "00:00";
-            recTimerInterval = setInterval(updateTimer, 1000);
-            
-        } catch (err) { alert("Please allow Microphone/Camera access in your browser."); }
-    }
-}
-
-function pauseResumeRecord() {
-    const btn = document.getElementById('pauseRecBtn');
-    if(isPaused) { mediaRecorder.resume(); isPaused = false; btn.innerHTML = '<svg style="width:20px;fill:currentColor;"><use href="#icon-pause"></use></svg>'; btn.style.color = "var(--c-blue)";}
-    else { mediaRecorder.pause(); isPaused = true; btn.innerHTML = '▶'; btn.style.color = "var(--c-red)";}
-}
-
-function cancelRecord() { audioChunks = []; mediaRecorder.stop(); resetRecordUI(); }
-function stopAndSendRecord() { mediaRecorder.stop(); resetRecordUI(); }
-
-function resetRecordUI() {
-    isRecording = false; clearInterval(recTimerInterval);
-    document.getElementById('recControls').style.display = 'none';
-    document.getElementById('textInputBox').style.display = 'flex';
-    document.getElementById('attachBtn').style.display = 'flex';
-    
-    let sendBtn = document.getElementById('actionSendBtn');
-    sendBtn.classList.remove('rec'); sendBtn.classList.add('send');
-    sendBtn.onclick = handleSendText; 
-    checkInput(); 
-}
-
-async function uploadFile() {
-    const file = document.getElementById('fileInput').files[0]; if (!file) return;
-
-    // Quick client-side quota check
-    if (myQuotaMB > 0) {
-        const remaining = myQuotaMB * 1024 * 1024 - myUsedBytes;
-        if (file.size > remaining) {
-            alert(`Quota exceeded.\nRemaining: ${fmtBytes(Math.max(0, remaining))}\nFile size: ${fmtBytes(file.size)}`);
-            document.getElementById('fileInput').value = '';
-            return;
-        }
-    }
-
-    const fd = new FormData(); fd.append('file', file);
-    const res = await apiFetch('/api/upload', { method: 'POST', body: fd });
-    if (!res.ok) {
-        try { const e = await res.json(); alert("Upload failed: " + (e.detail || res.status)); }
-        catch { alert("Upload failed: " + res.status); }
-        document.getElementById('fileInput').value = '';
-        return;
-    }
-    const data = await res.json();
-    if (data.used_bytes != null) myUsedBytes = data.used_bytes;
-    if (data.url) { ws.send(JSON.stringify({action: 'send_msg', room: currentRoom, user: currentUser, targetUser: targetUserForDM, msgType: data.type, url: data.url, fileName: data.name, replyTo: replyToMsg})); cancelReply(); }
-    document.getElementById('fileInput').value = '';
-}
-
-// =====================================================================
-// WebRTC — Voice + Video Calls (1-to-1)
-// =====================================================================
-// State
-let localStreamCall = null;
-let remoteStreamCall = null;
-let peerConnection = null;
-let callTarget = null;
-let callMode = 'audio';      // 'audio' | 'video'
-let callDirection = null;    // 'outgoing' | 'incoming'
-let callState = 'idle';      // 'idle' | 'ringing' | 'connecting' | 'in-call'
-let isMuted = false;
-let isCameraOff = false;
-let currentFacingMode = 'user';   // 'user' | 'environment'
-let cachedIceServers = null;
-let pendingIceCandidates = [];    // ICE candidates that arrived before remoteDescription was set
-let callStartedAt = null;
-let callTimerInterval = null;
-let ringtoneAudio = null;
-
-async function getIceServers() {
-    if (cachedIceServers) return cachedIceServers;
-    try {
-        const res = await apiFetch('/api/turn-config');
-        if (res.ok) {
-            const data = await res.json();
-            cachedIceServers = data.iceServers;
-            return cachedIceServers;
-        }
-    } catch (e) { console.warn('Failed to get TURN config:', e); }
-    // Fallback: free Google STUN
-    cachedIceServers = [
-        { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }
-    ];
-    return cachedIceServers;
-}
-
-function ensureSecureContext() {
-    const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-    if (window.location.protocol !== 'https:' && !isLocalhost) {
-        alert("⚠️ Calls require HTTPS to access microphone/camera.\nPlease use a secure (https://) connection.");
-        return false;
-    }
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        alert("Your browser does not support media devices.");
-        return false;
-    }
-    return true;
-}
-
-function getMediaConstraints(mode, facing) {
-    if (mode === 'video') {
-        return {
-            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-            video: { facingMode: facing || 'user', width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 24 } }
-        };
-    }
-    return {
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        video: false
-    };
-}
-
-// Public entry points
-async function startCall() { await initiateCall('audio'); }
-async function startVideoCall() { await initiateCall('video'); }
-
-async function initiateCall(mode) {
-    if (callState !== 'idle') {
-        alert('Already in a call');
-        return;
-    }
-    if (!ensureSecureContext()) return;
-    if (!targetUserForDM) {
-        alert('Open a private chat first to start a call');
-        return;
-    }
-
-    callTarget = targetUserForDM;
-    callMode = mode;
-    callDirection = 'outgoing';
-    callState = 'ringing';
-    pendingIceCandidates = [];
-
-    showCallUI({ title: callTarget, status: mode === 'video' ? 'Video calling...' : 'Calling...', mode });
-
-    try {
-        const constraints = getMediaConstraints(mode, currentFacingMode);
-        localStreamCall = await navigator.mediaDevices.getUserMedia(constraints);
-        attachLocalVideo();
-
-        const iceServers = await getIceServers();
-        peerConnection = new RTCPeerConnection({ iceServers, iceTransportPolicy: 'all' });
-        bindPeerEvents();
-        localStreamCall.getTracks().forEach(t => peerConnection.addTrack(t, localStreamCall));
-
-        const offer = await peerConnection.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: mode === 'video' });
-        await peerConnection.setLocalDescription(offer);
-
-        ws.send(JSON.stringify({
-            action: 'webrtc', type: 'offer', mode: mode,
-            targetUser: callTarget, offer: offer, from: currentUser
-        }));
-    } catch (err) {
-        console.error('Call start error:', err);
-        const msg = (err && err.name === 'NotAllowedError')
-            ? "Permission denied for microphone/camera."
-            : "Could not start call: " + (err.message || err);
-        alert(msg);
-        endCall(false);
-    }
-}
-
-function bindPeerEvents() {
-    peerConnection.onicecandidate = (e) => {
-        if (e.candidate && callTarget) {
-            ws.send(JSON.stringify({
-                action: 'webrtc', type: 'ice', targetUser: callTarget,
-                candidate: e.candidate, from: currentUser
-            }));
-        }
-    };
-    peerConnection.ontrack = (e) => {
-        if (!remoteStreamCall) remoteStreamCall = new MediaStream();
-        e.streams[0].getTracks().forEach(t => {
-            try { remoteStreamCall.addTrack(t); } catch {}
-        });
-        attachRemoteMedia();
-    };
-    peerConnection.oniceconnectionstatechange = () => {
-        const st = peerConnection ? peerConnection.iceConnectionState : '';
-        console.log('[WebRTC] ICE state:', st);
-        const stEl = document.getElementById('callStatusText');
-        if (st === 'connected' || st === 'completed') {
-            if (callState !== 'in-call') {
-                callState = 'in-call';
-                callStartedAt = Date.now();
-                if (callTimerInterval) clearInterval(callTimerInterval);
-                callTimerInterval = setInterval(updateCallDuration, 1000);
-                stopRingtone();
-            }
-            if (stEl) stEl.innerText = formatCallDuration();
-        } else if (st === 'disconnected' || st === 'failed') {
-            if (stEl) stEl.innerText = 'Connection lost';
-            if (st === 'failed') setTimeout(() => endCall(true), 2000);
-        }
-    };
-}
-
-function attachLocalVideo() {
-    const lv = document.getElementById('localVideo');
-    if (lv && callMode === 'video') {
-        lv.srcObject = localStreamCall;
-        lv.style.display = 'block';
-        try { lv.play().catch(()=>{}); } catch {}
-    } else if (lv) {
-        lv.style.display = 'none';
-    }
-}
-
-function attachRemoteMedia() {
-    const remoteVideo = document.getElementById('remoteVideo');
-    const remoteAudio = document.getElementById('remoteAudio');
-    if (callMode === 'video' && remoteVideo) {
-        remoteVideo.srcObject = remoteStreamCall;
-        remoteVideo.style.display = 'block';
-        try { remoteVideo.play().catch(()=>{}); } catch {}
-    }
-    if (remoteAudio) {
-        remoteAudio.srcObject = remoteStreamCall;
-        try { remoteAudio.play().catch(()=>{}); } catch {}
-    }
-}
-
-function handleWebRTC(data) {
-    if (data.targetUser !== currentUser) return;
-
-    if (data.type === 'offer') {
-        if (callState !== 'idle') {
-            // already in a call - reject quietly
-            ws.send(JSON.stringify({ action: 'webrtc', type: 'busy', targetUser: data.from, from: currentUser }));
-            return;
-        }
-        callTarget = data.from;
-        callMode = data.mode || 'audio';
-        callDirection = 'incoming';
-        callState = 'ringing';
-        pendingIceCandidates = [];
-        // store offer for accept
-        window._pendingOffer = data.offer;
-        showCallUI({
-            title: callTarget,
-            status: callMode === 'video' ? 'Incoming video call' : 'Incoming voice call',
-            mode: callMode,
-            incoming: true,
-        });
-        playRingtone();
-    }
-    else if (data.type === 'answer') {
-        if (peerConnection && peerConnection.signalingState !== 'stable') {
-            peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer))
-                .then(flushPendingIce).catch(e => console.error('Set answer failed:', e));
-        }
-        const stEl = document.getElementById('callStatusText');
-        if (stEl) stEl.innerText = 'Connecting...';
-    }
-    else if (data.type === 'ice') {
-        if (peerConnection && peerConnection.remoteDescription) {
-            peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(e => console.warn('ICE add failed:', e));
-        } else {
-            // Buffer until remote description is set
-            pendingIceCandidates.push(data.candidate);
-        }
-    }
-    else if (data.type === 'busy') {
-        const stEl = document.getElementById('callStatusText');
-        if (stEl) stEl.innerText = 'User is busy';
-        setTimeout(() => endCall(false), 2000);
-    }
-    else if (data.type === 'end') {
-        endCall(false);
-    }
-}
-
-async function flushPendingIce() {
-    if (!peerConnection) return;
-    while (pendingIceCandidates.length > 0) {
-        const c = pendingIceCandidates.shift();
-        try { await peerConnection.addIceCandidate(new RTCIceCandidate(c)); } catch (e) { console.warn(e); }
-    }
-}
-
-async function acceptCall() {
-    if (!ensureSecureContext()) { endCall(true); return; }
-    const offerData = window._pendingOffer;
-    if (!offerData) { endCall(true); return; }
-    delete window._pendingOffer;
-
-    stopRingtone();
-    callState = 'connecting';
-    const stEl = document.getElementById('callStatusText');
-    if (stEl) stEl.innerText = 'Connecting...';
-    setInCallButtons();
-
-    try {
-        const constraints = getMediaConstraints(callMode, currentFacingMode);
-        localStreamCall = await navigator.mediaDevices.getUserMedia(constraints);
-        attachLocalVideo();
-
-        const iceServers = await getIceServers();
-        peerConnection = new RTCPeerConnection({ iceServers, iceTransportPolicy: 'all' });
-        bindPeerEvents();
-        localStreamCall.getTracks().forEach(t => peerConnection.addTrack(t, localStreamCall));
-
-        await peerConnection.setRemoteDescription(new RTCSessionDescription(offerData));
-        await flushPendingIce();
-        const answer = await peerConnection.createAnswer();
-        await peerConnection.setLocalDescription(answer);
-
-        ws.send(JSON.stringify({
-            action: 'webrtc', type: 'answer',
-            targetUser: callTarget, answer: answer, from: currentUser
-        }));
-    } catch (err) {
-        console.error('Accept error:', err);
-        const msg = (err && err.name === 'NotAllowedError')
-            ? "Permission denied for microphone/camera."
-            : "Could not accept call: " + (err.message || err);
-        alert(msg);
-        endCall(true);
-    }
-}
-
-function rejectCall() { endCall(true); }
-
-function endCall(notifyOther = true) {
-    stopRingtone();
-    if (callTimerInterval) { clearInterval(callTimerInterval); callTimerInterval = null; }
-
-    if (peerConnection) {
-        try { peerConnection.close(); } catch {}
-        peerConnection = null;
-    }
-    if (localStreamCall) {
-        try { localStreamCall.getTracks().forEach(t => t.stop()); } catch {}
-        localStreamCall = null;
-    }
-    remoteStreamCall = null;
-
-    const remoteAudio = document.getElementById('remoteAudio');
-    const remoteVideo = document.getElementById('remoteVideo');
-    const localVideo = document.getElementById('localVideo');
-    if (remoteAudio) remoteAudio.srcObject = null;
-    if (remoteVideo) { remoteVideo.srcObject = null; remoteVideo.style.display = 'none'; }
-    if (localVideo) { localVideo.srcObject = null; localVideo.style.display = 'none'; }
-
-    if (notifyOther && callTarget && ws && ws.readyState === WebSocket.OPEN) {
-        try {
-            ws.send(JSON.stringify({ action: 'webrtc', type: 'end', targetUser: callTarget, from: currentUser }));
-        } catch {}
-    }
-
-    document.getElementById('callModal').style.display = 'none';
-    callTarget = null;
-    callMode = 'audio';
-    callDirection = null;
-    callState = 'idle';
-    isMuted = false;
-    isCameraOff = false;
-    pendingIceCandidates = [];
-    callStartedAt = null;
-}
-
-// =================== In-call controls ===================
-function toggleMute() {
-    if (!localStreamCall) return;
-    isMuted = !isMuted;
-    localStreamCall.getAudioTracks().forEach(t => t.enabled = !isMuted);
-    const btn = document.getElementById('callMuteBtn');
-    if (btn) {
-        btn.classList.toggle('active', isMuted);
-        btn.title = isMuted ? 'Unmute' : 'Mute';
-        btn.innerHTML = isMuted
-            ? '<svg viewBox="0 0 24 24" style="width:24px;fill:currentColor;"><path d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zM15 11.16L9 5.18V5c0-1.66 1.34-3 3-3s3 1.34 3 3v6.16zM4.27 3L3 4.27l6.01 6.01V11c0 1.66 1.33 3 2.99 3 .22 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52-2.76 0-5.3-2.1-5.3-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c.91-.13 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z"/></svg>'
-            : '<svg viewBox="0 0 24 24" style="width:24px;fill:currentColor;"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/><path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>';
-    }
-}
-
-function toggleCamera() {
-    if (!localStreamCall) return;
-    if (callMode !== 'video') {
-        alert('Camera is only available in video calls');
-        return;
-    }
-    isCameraOff = !isCameraOff;
-    localStreamCall.getVideoTracks().forEach(t => t.enabled = !isCameraOff);
-    const btn = document.getElementById('callCameraBtn');
-    if (btn) {
-        btn.classList.toggle('active', isCameraOff);
-        btn.title = isCameraOff ? 'Camera On' : 'Camera Off';
-    }
-    const lv = document.getElementById('localVideo');
-    if (lv) lv.style.display = isCameraOff ? 'none' : 'block';
-}
-
-async function switchCamera() {
-    if (!localStreamCall || callMode !== 'video') return;
-    const newFacing = currentFacingMode === 'user' ? 'environment' : 'user';
-    try {
-        const newStream = await navigator.mediaDevices.getUserMedia({
-            audio: false,
-            video: { facingMode: newFacing, width: { ideal: 640 }, height: { ideal: 480 } }
-        });
-        const newVideoTrack = newStream.getVideoTracks()[0];
-        if (!newVideoTrack) return;
-        // Replace sender track
-        const sender = peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
-        if (sender) await sender.replaceTrack(newVideoTrack);
-        // Stop old video track, attach new
-        localStreamCall.getVideoTracks().forEach(t => { try { t.stop(); } catch {} localStreamCall.removeTrack(t); });
-        localStreamCall.addTrack(newVideoTrack);
-        attachLocalVideo();
-        currentFacingMode = newFacing;
-    } catch (err) {
-        console.error('Camera switch failed:', err);
-        alert('Could not switch camera: ' + (err.message || err));
-    }
-}
-
-// =================== Call UI ===================
-function showCallUI({ title, status, mode, incoming = false }) {
-    const modal = document.getElementById('callModal');
-    if (!modal) return;
-    modal.style.display = 'flex';
-
-    const t = document.getElementById('callUserText');
-    if (t) t.innerText = title || '';
-    const s = document.getElementById('callStatusText');
-    if (s) s.innerText = status || '';
-
-    // Avatar
-    const av = document.getElementById('callAvatar');
-    if (av) {
-        const url = (userAvatars && userAvatars[title]) || '';
-        if (url) {
-            av.innerHTML = `<img src="${url}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;">`;
-        } else {
-            av.innerHTML = `<span style="font-size:54px;font-weight:700;">${(title||'?').charAt(0).toUpperCase()}</span>`;
-        }
-    }
-
-    // Show video container only in video mode
-    const vc = document.getElementById('callVideoContainer');
-    if (vc) vc.style.display = (mode === 'video') ? 'block' : 'none';
-
-    if (incoming) {
-        setIncomingButtons();
     } else {
-        setOutgoingButtons();
-    }
-}
-
-function setIncomingButtons() {
-    const btns = document.getElementById('callBtns');
-    if (!btns) return;
-    btns.innerHTML = `
-        <button class="call-btn answer-btn" onclick="acceptCall()" title="Answer">
-            <svg viewBox="0 0 24 24" style="width:28px;fill:currentColor;"><path d="M20.01 15.38c-1.23 0-2.42-.2-3.53-.56a.977.977 0 0 0-1.01.24l-1.57 1.97c-2.83-1.35-5.48-3.9-6.89-6.83l1.95-1.66c.27-.28.35-.67.24-1.02-.37-1.11-.56-2.3-.56-3.53 0-.54-.45-.99-.99-.99H4.19C3.65 3 3 3.24 3 3.99 3 13.28 10.73 21 20.01 21c.71 0 .99-.63.99-1.18v-3.45c0-.54-.45-.99-.99-.99z"/></svg>
-        </button>
-        <button class="call-btn reject-btn" onclick="rejectCall()" title="Decline">
-            <svg viewBox="0 0 24 24" style="width:28px;fill:currentColor;transform:rotate(135deg);"><path d="M20.01 15.38c-1.23 0-2.42-.2-3.53-.56a.977.977 0 0 0-1.01.24l-1.57 1.97c-2.83-1.35-5.48-3.9-6.89-6.83l1.95-1.66c.27-.28.35-.67.24-1.02-.37-1.11-.56-2.3-.56-3.53 0-.54-.45-.99-.99-.99H4.19C3.65 3 3 3.24 3 3.99 3 13.28 10.73 21 20.01 21c.71 0 .99-.63.99-1.18v-3.45c0-.54-.45-.99-.99-.99z"/></svg>
-        </button>
-    `;
-}
-
-function setOutgoingButtons() {
-    const btns = document.getElementById('callBtns');
-    if (!btns) return;
-    btns.innerHTML = `
-        <button class="call-btn reject-btn" onclick="endCall()" title="End call">
-            <svg viewBox="0 0 24 24" style="width:28px;fill:currentColor;transform:rotate(135deg);"><path d="M20.01 15.38c-1.23 0-2.42-.2-3.53-.56a.977.977 0 0 0-1.01.24l-1.57 1.97c-2.83-1.35-5.48-3.9-6.89-6.83l1.95-1.66c.27-.28.35-.67.24-1.02-.37-1.11-.56-2.3-.56-3.53 0-.54-.45-.99-.99-.99H4.19C3.65 3 3 3.24 3 3.99 3 13.28 10.73 21 20.01 21c.71 0 .99-.63.99-1.18v-3.45c0-.54-.45-.99-.99-.99z"/></svg>
-        </button>
-    `;
-}
-
-function setInCallButtons() {
-    const btns = document.getElementById('callBtns');
-    if (!btns) return;
-    const isVideo = callMode === 'video';
-    btns.innerHTML = `
-        <button class="call-btn ctrl-btn" id="callMuteBtn" onclick="toggleMute()" title="Mute">
-            <svg viewBox="0 0 24 24" style="width:24px;fill:currentColor;"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/><path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>
-        </button>
-        ${isVideo ? `
-        <button class="call-btn ctrl-btn" id="callCameraBtn" onclick="toggleCamera()" title="Camera Off">
-            <svg viewBox="0 0 24 24" style="width:24px;fill:currentColor;"><path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/></svg>
-        </button>
-        <button class="call-btn ctrl-btn" id="callSwitchBtn" onclick="switchCamera()" title="Switch Camera">
-            <svg viewBox="0 0 24 24" style="width:24px;fill:currentColor;"><path d="M9.4 10.5l4.77-8.26C13.47 2.09 12.75 2 12 2c-2.4 0-4.6.85-6.32 2.25l3.66 6.35.06-.1zM21.54 9c-.92-2.92-3.15-5.26-6-6.34L11.88 9h9.66zm.26 1h-7.49l.29.5 4.76 8.25C21 16.97 22 14.61 22 12c0-.69-.07-1.35-.2-2zM8.54 12l-3.9-6.75C3.01 7.03 2 9.39 2 12c0 .69.07 1.35.2 2h7.49l-1.15-2zm-6.08 3c.92 2.92 3.15 5.26 6 6.34L12.12 15H2.46zm11.27 0l-3.9 6.76c.7.15 1.42.24 2.17.24 2.4 0 4.6-.85 6.32-2.25l-3.66-6.35-.93 1.6z"/></svg>
-        </button>
-        ` : ''}
-        <button class="call-btn reject-btn" onclick="endCall()" title="End call">
-            <svg viewBox="0 0 24 24" style="width:28px;fill:currentColor;transform:rotate(135deg);"><path d="M20.01 15.38c-1.23 0-2.42-.2-3.53-.56a.977.977 0 0 0-1.01.24l-1.57 1.97c-2.83-1.35-5.48-3.9-6.89-6.83l1.95-1.66c.27-.28.35-.67.24-1.02-.37-1.11-.56-2.3-.56-3.53 0-.54-.45-.99-.99-.99H4.19C3.65 3 3 3.24 3 3.99 3 13.28 10.73 21 20.01 21c.71 0 .99-.63.99-1.18v-3.45c0-.54-.45-.99-.99-.99z"/></svg>
-        </button>
-    `;
-}
-
-function formatCallDuration() {
-    if (!callStartedAt) return '';
-    const sec = Math.floor((Date.now() - callStartedAt) / 1000);
-    const m = String(Math.floor(sec / 60)).padStart(2, '0');
-    const s = String(sec % 60).padStart(2, '0');
-    return `${m}:${s}`;
-}
-function updateCallDuration() {
-    const stEl = document.getElementById('callStatusText');
-    if (stEl) stEl.innerText = formatCallDuration();
-    // Switch buttons to in-call mode if not already
-    if (callState === 'in-call' && !document.getElementById('callMuteBtn')) {
-        setInCallButtons();
-    }
-}
-
-function playRingtone() {
-    try {
-        const r = document.getElementById('notif-sound');
-        if (!r) return;
-        ringtoneAudio = r;
-        ringtoneAudio.loop = true;
-        ringtoneAudio.play().catch(()=>{});
-    } catch {}
-}
-function stopRingtone() {
-    if (ringtoneAudio) {
-        try { ringtoneAudio.pause(); ringtoneAudio.currentTime = 0; ringtoneAudio.loop = false; } catch {}
-        ringtoneAudio = null;
-    }
-}
-
-// ============================================================
-// ADMIN PANEL
-// ============================================================
-async function openAdminPanel() {
-    if (currentRole !== 'admin') { alert('Admin only'); return; }
-    closeModal('settingsModal');
-    document.getElementById('adminModal').style.display = 'flex';
-    switchAdminTab('users');
-}
-function closeAdminPanel() { document.getElementById('adminModal').style.display = 'none'; }
-
-function switchAdminTab(tab) {
-    document.querySelectorAll('.admin-tab').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.admin-pane').forEach(p => p.style.display = 'none');
-    const tabBtn = document.querySelector(`.admin-tab[data-tab="${tab}"]`);
-    if (tabBtn) tabBtn.classList.add('active');
-    const pane = document.getElementById('admin-pane-' + tab);
-    if (pane) pane.style.display = 'block';
-    if (tab === 'users') loadAdminUsers();
-    if (tab === 'stats') loadAdminStats();
-    if (tab === 'turn') loadAdminTurn();
-    if (tab === 'appsettings') loadAdminAppSettings();
-    if (tab === 'updates') loadAdminBackups();
-}
-
-async function loadAdminTurn() {
-    const box = document.getElementById('admin-turn-content');
-    if (!box) return;
-    box.innerHTML = '<div style="padding:20px; text-align:center; color:var(--c-gray);">Loading...</div>';
-    try {
-        const res = await apiFetch('/api/admin/turn');
-        if (!res.ok) { box.innerHTML = '<div style="color:var(--c-red); padding:10px;">Failed: '+res.status+'</div>'; return; }
-        const d = await res.json();
-        const dot = (ok) => `<span style="display:inline-block; width:10px; height:10px; border-radius:50%; background:${ok?'#22c55e':'#64748b'}; margin-right:8px; vertical-align:middle;"></span>`;
-        const yes = '<span style="color:#22c55e; font-weight:700;">YES</span>';
-        const no = '<span style="color:var(--c-red); font-weight:700;">NO</span>';
-        box.innerHTML = `
-        <div class="stat-card">
-            <div class="stat-label">Service Status</div>
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-top:6px;">
-                <span style="font-size:16px;">${dot(d.running)}${d.running?'Running':'Stopped'}</span>
-                <span style="font-size:13px; color:var(--c-gray);">Configured: ${d.configured?yes:no}</span>
-            </div>
-        </div>
-        ${d.configured ? `
-        <div class="stat-card" style="margin-top:12px;">
-            <div class="stat-label">TURN Credentials</div>
-            <table style="width:100%; font-size:13px; border-collapse:collapse; color:var(--c-text);">
-                <tr><td style="padding:6px 0; color:var(--c-gray);">Host:</td><td style="text-align:right; font-family:monospace;">${escapeHtml(d.host)}</td></tr>
-                <tr><td style="padding:6px 0; color:var(--c-gray);">Port:</td><td style="text-align:right; font-family:monospace;">${escapeHtml(d.port)}</td></tr>
-                <tr><td style="padding:6px 0; color:var(--c-gray);">TLS Port:</td><td style="text-align:right; font-family:monospace;">${escapeHtml(d.tls_port)}</td></tr>
-                <tr><td style="padding:6px 0; color:var(--c-gray);">Username:</td><td style="text-align:right; font-family:monospace;">${escapeHtml(d.user)}</td></tr>
-                <tr><td style="padding:6px 0; color:var(--c-gray);">Password:</td><td style="text-align:right; font-family:monospace; word-break:break-all;">${escapeHtml(d.password)}</td></tr>
-                <tr><td style="padding:6px 0; color:var(--c-gray);">Realm:</td><td style="text-align:right; font-family:monospace;">${escapeHtml(d.realm)}</td></tr>
-            </table>
-        </div>` : `
-        <div class="stat-card" style="margin-top:12px; border:1px solid var(--c-orange);">
-            <div style="color:var(--c-orange); font-weight:700; margin-bottom:6px;">⚠️ TURN not configured</div>
-            <div style="font-size:13px; color:var(--c-gray);">Calls between users on different networks may fail without TURN. Run <code style="background:#000; padding:2px 6px; border-radius:4px;">black-chat</code> on the server and choose option 10 to install coturn.</div>
-        </div>`}
-        <div class="stat-card" style="margin-top:12px;">
-            <div class="stat-label">ICE Servers (sent to clients)</div>
-            <pre style="margin-top:8px; padding:10px; background:#000; color:#7dd3fc; border-radius:8px; font-size:11px; overflow-x:auto;">${escapeHtml(JSON.stringify(d.ice_servers, null, 2))}</pre>
-        </div>`;
-    } catch(e) { box.innerHTML = '<div style="color:var(--c-red); padding:10px;">Error: '+e.message+'</div>'; }
-}
-
-async function adminTurnRestart() {
-    if (!confirm('Restart coturn service?')) return;
-    const res = await apiJson('/api/admin/turn/restart', {});
-    if (res.ok) {
-        alert('Restart issued. Reloading TURN status...');
-        setTimeout(loadAdminTurn, 2000);
-    } else {
-        try { const e = await res.json(); alert('Failed: ' + (e.detail || 'unknown')); } catch { alert('Failed'); }
-    }
-}
-
-async function loadAdminUsers() {
-    const box = document.getElementById('admin-users-list');
-    box.innerHTML = '<div style="padding:20px; text-align:center; color:var(--c-gray);">Loading...</div>';
-    try {
-        const res = await apiFetch('/api/admin/users');
-        if (!res.ok) { box.innerHTML = '<div style="color:var(--c-red); padding:10px;">Failed: '+res.status+'</div>'; return; }
-        const data = await res.json();
-        if (!data.users.length) { box.innerHTML = '<div style="padding:20px; color:var(--c-gray); text-align:center;">No users</div>'; return; }
-        box.innerHTML = data.users.map(u => {
-            const usedMB = (u.used_bytes/(1024*1024)).toFixed(1);
-            const pct = u.quota_mb > 0 ? Math.min(100, (u.used_bytes / (u.quota_mb*1024*1024) * 100)) : 0;
-            const onlineDot = u.online ? '<span style="display:inline-block; width:8px; height:8px; background:#22c55e; border-radius:50%; margin-right:6px;"></span>' : '<span style="display:inline-block; width:8px; height:8px; background:#64748b; border-radius:50%; margin-right:6px;"></span>';
-            return `
-            <div class="admin-user-row" style="padding:14px; background:var(--bg-input); border-radius:12px; margin-bottom:10px; border:1px solid var(--border);">
-              <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
-                <div>
-                  <div style="font-weight:700; font-size:15px;">${onlineDot}${escapeHtml(u.username)} <span style="font-size:11px; padding:2px 8px; background:${u.role==='admin'?'var(--c-red)':'var(--c-blue)'}; border-radius:8px; color:white; margin-right:6px;">${u.role}</span></div>
-                  <div style="font-size:12px; color:var(--c-gray); margin-top:4px;">Used: ${usedMB} MB / ${u.quota_mb} MB</div>
-                  <div style="height:5px; background:rgba(255,255,255,0.1); border-radius:10px; margin-top:6px; width:200px; max-width:100%;">
-                    <div style="height:100%; width:${pct}%; background:${pct>90?'var(--c-red)':'var(--c-blue)'}; border-radius:10px;"></div>
-                  </div>
-                </div>
-                <div style="display:flex; gap:6px;">
-                  <button onclick="adminEditUser('${escapeAttr(u.username)}', ${u.quota_mb}, '${u.role}')" style="padding:8px 12px; background:var(--c-blue); color:white; border:none; border-radius:8px; cursor:pointer; font-size:12px;">Edit</button>
-                  <button onclick="adminDeleteUser('${escapeAttr(u.username)}')" style="padding:8px 12px; background:var(--c-red); color:white; border:none; border-radius:8px; cursor:pointer; font-size:12px;">Delete</button>
-                </div>
-              </div>
-            </div>`;
-        }).join('');
-    } catch(e) { box.innerHTML = '<div style="color:var(--c-red); padding:10px;">Error: '+e.message+'</div>'; }
-}
-
-function escapeHtml(s) { return String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-function escapeAttr(s) { return String(s||'').replace(/'/g, "\\'").replace(/"/g, '\\"'); }
-
-async function adminAddUser() {
-    const username = document.getElementById('admin-new-username').value.trim();
-    const password = document.getElementById('admin-new-password').value.trim();
-    const role = document.getElementById('admin-new-role').value;
-    const quota = parseInt(document.getElementById('admin-new-quota').value) || 500;
-    if (!username || !password) { alert('Username and password required'); return; }
-    const res = await apiJson('/api/admin/users/add', { username, password, role, quota_mb: quota });
-    if (res.ok) {
-        document.getElementById('admin-new-username').value = '';
-        document.getElementById('admin-new-password').value = '';
-        document.getElementById('admin-new-quota').value = '500';
-        loadAdminUsers();
-    } else {
-        try { const e = await res.json(); alert(e.detail || 'Failed'); } catch { alert('Failed'); }
-    }
-}
-
-async function adminEditUser(username, currentQuota, currentR) {
-    const newPass = prompt(`New password for "${username}" (leave empty to keep):`, '');
-    const newQuota = prompt(`Quota in MB for "${username}":`, currentQuota);
-    const newRole = prompt(`Role for "${username}" (admin/user):`, currentR);
-    if (newQuota === null) return;
-    const body = { username };
-    if (newPass && newPass.trim()) body.password = newPass.trim();
-    if (newQuota) body.quota_mb = parseInt(newQuota) || currentQuota;
-    if (newRole && (newRole === 'admin' || newRole === 'user')) body.role = newRole;
-    const res = await apiJson('/api/admin/users/update', body);
-    if (res.ok) loadAdminUsers();
-    else { try { const e = await res.json(); alert(e.detail || 'Failed'); } catch { alert('Failed'); } }
-}
-
-async function adminDeleteUser(username) {
-    if (!confirm(`Delete user "${username}"?`)) return;
-    const res = await apiJson('/api/admin/users/delete', { username });
-    if (res.ok) loadAdminUsers();
-    else { try { const e = await res.json(); alert(e.detail || 'Failed'); } catch { alert('Failed'); } }
-}
-
-async function loadAdminStats() {
-    const box = document.getElementById('admin-stats-content');
-    box.innerHTML = '<div style="padding:20px; text-align:center; color:var(--c-gray);">Loading...</div>';
-    try {
-        const res = await apiFetch('/api/admin/stats');
-        const d = await res.json();
-        const diskPct = d.disk_total ? (d.disk_used / d.disk_total * 100).toFixed(1) : 0;
-        box.innerHTML = `
-        <div class="stat-card">
-          <div class="stat-label">Online Users</div>
-          <div class="stat-value">${d.online_count} <span style="font-size:13px; color:var(--c-gray);">/ ${d.users_count}</span></div>
-          ${d.online_users.length ? `<div style="font-size:11px; color:var(--c-gray); margin-top:6px;">${d.online_users.map(u=>escapeHtml(u)).join(', ')}</div>` : ''}
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Total Messages</div>
-          <div class="stat-value">${d.messages_count.toLocaleString()}</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Uploaded Files</div>
-          <div class="stat-value">${d.uploads_files.toLocaleString()} <span style="font-size:13px; color:var(--c-gray);">(${fmtBytes(d.uploads_bytes)})</span></div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Server Disk</div>
-          <div class="stat-value">${fmtBytes(d.disk_used)} / ${fmtBytes(d.disk_total)}</div>
-          <div style="height:6px; background:rgba(255,255,255,0.1); border-radius:10px; margin-top:8px;">
-            <div style="height:100%; width:${diskPct}%; background:${diskPct>85?'var(--c-red)':'var(--c-blue)'}; border-radius:10px;"></div>
-          </div>
-          <div style="font-size:11px; color:var(--c-gray); margin-top:4px;">${diskPct}% used | ${fmtBytes(d.disk_free)} free</div>
-        </div>`;
-    } catch(e) { box.innerHTML = '<div style="color:var(--c-red); padding:10px;">Error: '+e.message+'</div>'; }
-}
-
-async function loadAdminBackups() {
-    const box = document.getElementById('admin-backups-list');
-    box.innerHTML = '<div style="padding:20px; text-align:center; color:var(--c-gray);">Loading...</div>';
-    try {
-        const res = await apiFetch('/api/admin/backups');
-        const data = await res.json();
-        if (!data.backups.length) { box.innerHTML = '<div style="padding:20px; color:var(--c-gray); text-align:center;">No backups</div>'; return; }
-        box.innerHTML = data.backups.map(b => `
-          <div style="padding:12px; background:var(--bg-input); border-radius:10px; margin-bottom:8px; border:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
-            <div>
-              <div style="font-weight:600; font-size:13px;">${escapeHtml(b.name)}</div>
-              <div style="font-size:11px; color:var(--c-gray);">${new Date(b.created).toLocaleString()} · ${fmtBytes(b.size_bytes)}</div>
-            </div>
-            <button onclick="adminRollback('${escapeAttr(b.name)}')" style="padding:8px 14px; background:var(--c-orange); color:white; border:none; border-radius:8px; cursor:pointer; font-size:12px; font-weight:600;">↶ Rollback</button>
-          </div>`).join('');
-    } catch(e) { box.innerHTML = '<div style="color:var(--c-red); padding:10px;">Error: '+e.message+'</div>'; }
-}
-
-async function adminCreateBackup() {
-    if (!confirm('Create a backup now?')) return;
-    const res = await apiJson('/api/admin/backup', {});
-    if (res.ok) { alert('Backup created'); loadAdminBackups(); }
-    else alert('Backup failed');
-}
-
-async function adminUpdateApp() {
-    if (!confirm('Update the app from GitHub?\n\nA backup will be created automatically.\nThe service will restart after.')) return;
-    const btn = document.getElementById('admin-update-btn');
-    if (btn) { btn.disabled = true; btn.innerText = 'Updating...'; }
-    try {
-        const res = await apiJson('/api/admin/update', {});
-        const d = await res.json();
-        if (res.ok && d.success) {
-            alert('✅ Update applied!\nBackup: ' + d.backup + '\n\nThe page will reload in ~5 seconds.');
-            setTimeout(() => location.reload(), 5000);
-        } else {
-            alert('Update failed: ' + (d.detail || 'unknown'));
-        }
-    } catch(e) { alert('Update error: ' + e.message); }
-    finally { if (btn) { btn.disabled = false; btn.innerText = '🔄 Update Now'; } }
-}
-
-async function adminRollback(name) {
-    if (!confirm('Rollback to backup:\n' + name + '\n\nA safety backup of the current state will be made first.\nThe service will restart after.')) return;
-    const res = await apiJson('/api/admin/rollback', { name });
-    if (res.ok) {
-        alert('✅ Rollback complete. Reloading in ~5 seconds.');
-        setTimeout(() => location.reload(), 5000);
-    } else {
-        try { const e = await res.json(); alert('Rollback failed: ' + (e.detail || 'unknown')); } catch { alert('Rollback failed'); }
-    }
-}
-
-async function adminRestartService() {
-    if (!confirm('Restart the service now?')) return;
-    await apiJson('/api/admin/restart', {});
-    alert('Restart issued. Reloading in 5 seconds.');
-    setTimeout(() => location.reload(), 5000);
-}
-
-// =====================================================================
-// PHASE 4: Typing indicator, Read receipts, Online/Last seen,
-// Smart auto-scroll, Scroll-to-bottom button, Swipe to reply
-// =====================================================================
-
-// ---- State ----
-let lastSeenMap = {};                 // username -> ISO timestamp
-let typingUsers = {};                 // room -> { user: timestamp }
-let typingClearTimer = null;
-let myTypingState = false;
-let myTypingDebounce = null;
-let unreadCount = 0;
-let isNearBottom = true;
-
-// ---- Typing dots HTML ----
-function typingDotsHTML() {
-    return '<span class="typing-dots-container"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span>';
-}
-
-// ---- Update chat header status (online / last seen / typing) ----
-function refreshHeaderStatus() {
-    const statusEl = document.getElementById('room-status');
-    if (!statusEl || !currentRoom) return;
-
-    // Channel/group: keep their original status
-    if (currentRoom === 'Announcements') {
-        statusEl.innerText = translations[currentLang].system_channel || 'System Announcements';
-        return;
-    }
-    if (currentRoom.startsWith('rm_')) {
-        // Group: show typing user(s) if any
-        const typers = typingUsers[currentRoom] ? Object.keys(typingUsers[currentRoom]) : [];
-        if (typers.length > 0) {
-            const names = typers.slice(0, 2).join(', ');
-            statusEl.innerHTML = `<span style="color:var(--c-blue);">${escapeHtml(names)} typing</span>${typingDotsHTML()}`;
-        } else {
-            statusEl.innerText = translations[currentLang].group || 'Private Group';
-        }
-        return;
-    }
-
-    // Private DM
-    if (!targetUserForDM) {
-        statusEl.innerText = '';
-        return;
-    }
-    // Typing has highest priority
-    if (typingUsers[currentRoom] && Object.keys(typingUsers[currentRoom]).length > 0) {
-        statusEl.innerHTML = `<span style="color:var(--c-blue);">typing</span>${typingDotsHTML()}`;
-        return;
-    }
-    // Online?
-    if (onlineUsers && onlineUsers.includes(targetUserForDM)) {
-        statusEl.innerHTML = '<span style="color:#4dcd5e;">● online</span>';
-        return;
-    }
-    // Last seen
-    const ls = lastSeenMap[targetUserForDM];
-    if (ls) {
-        statusEl.innerText = 'last seen ' + formatLastSeen(ls);
-    } else {
-        statusEl.innerText = 'offline';
-    }
-}
-
-function formatLastSeen(iso) {
-    try {
-        // Backend stores in UTC without timezone marker - assume UTC
-        const d = new Date(iso.replace(' ', 'T') + 'Z');
-        const now = Date.now();
-        const diffSec = Math.floor((now - d.getTime()) / 1000);
-        if (diffSec < 60) return 'just now';
-        if (diffSec < 3600) return Math.floor(diffSec / 60) + ' min ago';
-        if (diffSec < 86400) return Math.floor(diffSec / 3600) + 'h ago';
-        if (diffSec < 7 * 86400) return Math.floor(diffSec / 86400) + 'd ago';
-        return d.toLocaleDateString();
-    } catch { return ''; }
-}
-
-// ---- Send our own typing signal ----
-function notifyTyping() {
-    if (!ws || ws.readyState !== WebSocket.OPEN || !currentRoom) return;
-    if (currentRoom === 'Announcements') return;
-    if (!myTypingState) {
-        myTypingState = true;
-        ws.send(JSON.stringify({ action: 'typing', room: currentRoom, state: 'typing' }));
-    }
-    if (myTypingDebounce) clearTimeout(myTypingDebounce);
-    myTypingDebounce = setTimeout(() => {
-        myTypingState = false;
-        if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ action: 'typing', room: currentRoom, state: 'stopped' }));
-        }
-    }, 3000);
-}
-
-// ---- Handle incoming typing signals ----
-function handleTypingSignal(msg) {
-    if (!msg.room || !msg.user || msg.user === currentUser) return;
-    typingUsers[msg.room] = typingUsers[msg.room] || {};
-    if (msg.state === 'stopped') {
-        delete typingUsers[msg.room][msg.user];
-        if (Object.keys(typingUsers[msg.room]).length === 0) delete typingUsers[msg.room];
-    } else {
-        typingUsers[msg.room][msg.user] = Date.now();
-    }
-    if (msg.room === currentRoom) refreshHeaderStatus();
-
-    // Auto-clear stale typing after 5s
-    if (typingClearTimer) clearTimeout(typingClearTimer);
-    typingClearTimer = setTimeout(() => {
-        const now = Date.now();
-        Object.keys(typingUsers).forEach(room => {
-            Object.keys(typingUsers[room]).forEach(user => {
-                if (now - typingUsers[room][user] > 5000) delete typingUsers[room][user];
-            });
-            if (Object.keys(typingUsers[room]).length === 0) delete typingUsers[room];
-        });
-        refreshHeaderStatus();
-    }, 5000);
-}
-
-// ---- Read receipts ----
-function markCurrentRoomAsRead() {
-    if (!ws || ws.readyState !== WebSocket.OPEN || !currentRoom) return;
-    if (!document.hasFocus || !document.hasFocus()) return;
-    ws.send(JSON.stringify({ action: 'read_messages', room: currentRoom }));
-}
-
-function applyReadReceipt(msg) {
-    // msg.msg_ids_per_sender: { senderUser: [msgIds...] }
-    if (!msg.msg_ids_per_sender) return;
-    if (msg.room !== currentRoom) return;
-    const myMsgs = msg.msg_ids_per_sender[currentUser] || [];
-    myMsgs.forEach(id => {
-        const el = document.getElementById('msg-' + id);
-        if (!el) return;
-        let ticks = el.querySelector('.msg-ticks');
-        if (!ticks) {
-            // No ticks yet (e.g. attached after history load) — try to add them
-            attachTicksToBubble(el, { readBy: ['someone'] });
-            ticks = el.querySelector('.msg-ticks');
-        }
-        if (ticks) {
-            ticks.classList.add('read');
-            ticks.innerHTML = '<svg viewBox="0 0 24 24"><path d="M.41 13.41L6 19l1.41-1.42L1.83 12 .41 13.41zM22.24 5.58L11.66 16.17 7.5 12l-1.41 1.41L11.66 19l12-12-1.42-1.42zM18 7l-1.41-1.42-6.35 6.35 1.42 1.41L18 7z"/></svg>';
-        }
-    });
-}
-
-// ---- Smart scroll ----
-function scrollMessagesToBottom(force = false) {
-    const box = document.getElementById('messages');
-    if (!box) return;
-    if (force || isNearBottom) {
-        box.scrollTop = box.scrollHeight;
-        unreadCount = 0;
-        updateScrollBottomBtn();
-    }
-}
-
-function updateScrollBottomBtn() {
-    const btn = document.getElementById('scrollBottomBtn');
-    if (!btn) return;
-    if (isNearBottom) {
-        btn.style.display = 'none';
-    } else {
-        btn.style.display = 'flex';
-        const dot = document.getElementById('unreadDot');
-        if (dot) {
-            if (unreadCount > 0) {
-                dot.style.display = 'flex';
-                dot.innerText = unreadCount > 99 ? '99+' : String(unreadCount);
-            } else {
-                dot.style.display = 'none';
-            }
-        }
-    }
-}
-
-function attachMessagesScrollListener() {
-    const box = document.getElementById('messages');
-    if (!box || box._scrollAttached) return;
-    box._scrollAttached = true;
-    box.addEventListener('scroll', () => {
-        const nearBottom = (box.scrollHeight - box.scrollTop - box.clientHeight) < 80;
-        isNearBottom = nearBottom;
-        if (nearBottom) {
-            unreadCount = 0;
-            markCurrentRoomAsRead();
-        }
-        updateScrollBottomBtn();
-    }, { passive: true });
-}
-
-// ---- Hook into existing message append ----
-// We patch by saving the original appendMessage and wrapping it
-const __origAppendMessage = (typeof appendMessage === 'function') ? appendMessage : null;
-if (__origAppendMessage) {
-    window.appendMessage = function(data) {
-        const wasNearBottom = isNearBottom;
-        __origAppendMessage(data);
-
-        // After appending, decide auto-scroll
-        if (data.user === currentUser) {
-            // My own message: always scroll
-            scrollMessagesToBottom(true);
-        } else if (wasNearBottom) {
-            scrollMessagesToBottom(true);
-            // Mark as read if focused
-            markCurrentRoomAsRead();
-        } else {
-            // I'm scrolled up; track unread
-            unreadCount++;
-            updateScrollBottomBtn();
-        }
-
-        // Add ticks to outgoing message bubble (post-render)
-        try {
-            const el = document.getElementById('msg-' + data.id);
-            if (el && data.user === currentUser) {
-                attachTicksToBubble(el, data);
-            }
-        } catch {}
-    };
-}
-
-function attachTicksToBubble(el, data) {
-    if (!el) return;
-    const bottomBar = el.querySelector('.msg-bottom-bar');
-    const bubble = el.querySelector('.bubble');
-    if (!bubble) return;
-    if (el.querySelector('.msg-ticks')) return;
-    const ticksSpan = document.createElement('span');
-    ticksSpan.className = 'msg-ticks';
-    const isRead = (data.readBy && data.readBy.length > 0);
-    if (isRead) ticksSpan.classList.add('read');
-    ticksSpan.innerHTML = isRead
-        ? '<svg viewBox="0 0 24 24"><path d="M.41 13.41L6 19l1.41-1.42L1.83 12 .41 13.41zM22.24 5.58L11.66 16.17 7.5 12l-1.41 1.41L11.66 19l12-12-1.42-1.42zM18 7l-1.41-1.42-6.35 6.35 1.42 1.41L18 7z"/></svg>'
-        : '<svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>';
-    if (bottomBar) bottomBar.appendChild(ticksSpan);
-    else bubble.appendChild(ticksSpan);
-}
-
-// ---- Enhance openChat: refresh header status when chat opens ----
-const __origOpenChat = (typeof openChat === 'function') ? openChat : null;
-if (__origOpenChat) {
-    window.openChat = function(roomId, type, title, targetUser = null) {
-        __origOpenChat(roomId, type, title, targetUser);
-        unreadCount = 0;
-        isNearBottom = true;
-        // Reset typing state for this room
-        typingUsers[currentRoom] = {};
-        setTimeout(() => {
-            attachMessagesScrollListener();
-            refreshHeaderStatus();
-            updateScrollBottomBtn();
-            // Mark history as read after a short delay
-            setTimeout(markCurrentRoomAsRead, 600);
-        }, 50);
-    };
-}
-
-// ---- Hook WS events for typing/presence/read_receipt ----
-const __origWsHook = window.__phase4WsHook || false;
-if (!__origWsHook) {
-    window.__phase4WsHook = true;
-    // Wrap WebSocket onmessage by intercepting initWebSocket
-    const __origInitWS = (typeof initWebSocket === 'function') ? initWebSocket : null;
-    if (__origInitWS) {
-        window.initWebSocket = function() {
-            __origInitWS();
-            // After ws is created, augment its onmessage
-            if (!ws) return;
-            const prevOnMessage = ws.onmessage;
-            ws.onmessage = async function(event) {
-                if (prevOnMessage) await prevOnMessage(event);
+        // Increment unread for the room (unless it's my own message)
+        if (data.user !== State.user) {
+            State.unread[room] = (State.unread[room] || 0) + 1;
+            try { document.getElementById('notif-sound').play(); } catch {}
+            // System notification
+            if ('Notification' in window && Notification.permission === 'granted' && document.hidden) {
+                const sender = data.user;
+                const body = data.msgType === 'text' ? data.text : `[${data.msgType}]`;
                 try {
-                    const m = JSON.parse(event.data);
-                    if (m.type === 'typing') handleTypingSignal(m);
-                    else if (m.type === 'presence') {
-                        onlineUsers = m.online || [];
-                        if (m.last_seen) lastSeenMap = m.last_seen;
-                        refreshHeaderStatus();
-                    }
-                    else if (m.type === 'read_receipt') {
-                        applyReadReceipt(m);
-                    }
-                    else if (m.type === 'history') {
-                        // Mark as read after history loads
-                        setTimeout(markCurrentRoomAsRead, 400);
+                    if (navigator.serviceWorker) {
+                        navigator.serviceWorker.getRegistration().then(reg => {
+                            if (reg) reg.showNotification(sender, { body, icon: '/static/icon-192.png', tag: room });
+                        });
+                    } else {
+                        new Notification(sender, { body, icon: '/static/icon-192.png' });
                     }
                 } catch {}
-            };
-        };
-    }
-}
-
-// ---- Hook into message input for typing notify ----
-function setupTypingHook() {
-    const inp = document.getElementById('msgInput');
-    if (!inp || inp._typingHooked) return;
-    inp._typingHooked = true;
-    inp.addEventListener('input', () => {
-        if (inp.value.length > 0) notifyTyping();
-    });
-}
-// Try to attach on DOMContentLoaded and on each openChat
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', setupTypingHook);
-} else {
-    setupTypingHook();
-}
-
-// ---- Mark as read when window regains focus ----
-window.addEventListener('focus', () => {
-    setTimeout(markCurrentRoomAsRead, 200);
-});
-document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) {
-        setTimeout(markCurrentRoomAsRead, 200);
-    }
-});
-
-// ---- Periodic header refresh (for "last seen X min ago" updates) ----
-setInterval(refreshHeaderStatus, 30000);
-
-// ---- Swipe-to-reply on touch devices ----
-function setupSwipeReply() {
-    const messages = document.getElementById('messages');
-    if (!messages || messages._swipeHooked) return;
-    messages._swipeHooked = true;
-
-    let startX = 0, startY = 0, curBubble = null, dragging = false;
-
-    messages.addEventListener('touchstart', (e) => {
-        if (selectionMode) return;
-        const t = e.targetTouches[0];
-        startX = t.clientX; startY = t.clientY;
-        curBubble = e.target.closest('.bubble');
-        dragging = false;
-    }, { passive: true });
-
-    messages.addEventListener('touchmove', (e) => {
-        if (!curBubble || selectionMode) return;
-        const t = e.targetTouches[0];
-        const dx = t.clientX - startX;
-        const dy = t.clientY - startY;
-        // Horizontal drag dominates
-        if (!dragging && Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy)) dragging = true;
-        if (dragging) {
-            // Limit drag
-            const offset = Math.max(-80, Math.min(80, dx));
-            curBubble.style.transform = `translateX(${offset}px)`;
-            curBubble.style.transition = 'none';
-        }
-    }, { passive: true });
-
-    messages.addEventListener('touchend', () => {
-        if (!curBubble) return;
-        const transform = curBubble.style.transform;
-        const match = transform && transform.match(/-?\d+/);
-        const offset = match ? parseInt(match[0]) : 0;
-        curBubble.style.transition = 'transform 0.2s';
-        curBubble.style.transform = '';
-        // If swiped enough, trigger reply
-        if (Math.abs(offset) > 50) {
-            const wrapper = curBubble.parentElement;
-            if (wrapper && wrapper.id && wrapper.id.startsWith('msg-')) {
-                const id = wrapper.id.replace('msg-', '');
-                const textEl = curBubble.querySelector('.msg-text-content');
-                const text = textEl ? textEl.innerText : '';
-                const senderEl = wrapper.querySelector('.bubble-sender, .sender-name');
-                const sender = senderEl ? senderEl.innerText : (curBubble.classList.contains('bubble-me') ? currentUser : '');
-                if (typeof contextMsgId !== 'undefined') {
-                    contextMsgId = id; contextMsgText = text; contextMsgSender = sender;
-                    if (typeof doReply === 'function') doReply();
-                }
             }
         }
-        curBubble = null; dragging = false;
-    }, { passive: true });
-}
-// Run after openChat/setup
-setInterval(setupSwipeReply, 1500);
-
-// =====================================================================
-// PHASE 4 — Group management & message search
-// =====================================================================
-let currentGroupMembers = null;  // { members, owner, all_users }
-
-async function openGroupSettings() {
-    if (!currentRoom || !currentRoom.startsWith('rm_')) return;
-    document.getElementById('groupSettingsModal').style.display = 'flex';
-    await loadGroupMembers();
-}
-
-async function loadGroupMembers() {
-    const list = document.getElementById('group-members-list');
-    list.innerHTML = '<div style="padding:20px; text-align:center; color:var(--c-gray);">Loading...</div>';
-    try {
-        const res = await apiJson('/api/action', { action: 'get_room_members', room_id: currentRoom });
-        const data = await res.json();
-        if (!data.success) {
-            list.innerHTML = `<div style="padding:14px; color:var(--c-red);">${escapeHtml(data.msg||'Error')}</div>`;
-            return;
-        }
-        currentGroupMembers = data;
-        const owner = data.owner;
-        const isOwner = owner === currentUser;
-        const groupName = document.getElementById('room-title').innerText || 'Group';
-
-        document.getElementById('group-info-bar').innerHTML =
-            `<strong style="color:var(--c-white);">${escapeHtml(groupName)}</strong><br>${data.members.length} member${data.members.length===1?'':'s'} · Owner: <strong style="color:var(--c-white);">${escapeHtml(owner)}</strong>`;
-
-        // Add member section: only for owner
-        const addSection = document.getElementById('group-add-member');
-        if (isOwner) {
-            addSection.style.display = 'block';
-            const sel = document.getElementById('group-add-select');
-            const candidates = (data.all_users || []).filter(u => !data.members.includes(u));
-            sel.innerHTML = candidates.length
-                ? candidates.map(u => `<option value="${escapeAttr(u)}">${escapeHtml(u)}</option>`).join('')
-                : '<option value="">— No users to add —</option>';
-        } else {
-            addSection.style.display = 'none';
-        }
-
-        // Members list
-        list.innerHTML = data.members.map(m => {
-            const isMemOwner = m === owner;
-            const canRemove = isOwner && !isMemOwner;
-            return `
-            <div style="display:flex; justify-content:space-between; align-items:center; padding:12px 14px; background:var(--bg-input); border-radius:12px; margin-bottom:8px; border:1px solid var(--border);">
-                <div style="display:flex; align-items:center; gap:12px;">
-                    <div class="avatar" style="width:40px; height:40px; font-size:16px; background:${isMemOwner?'var(--c-orange)':'var(--c-blue)'};">${escapeHtml((m||'?').charAt(0).toUpperCase())}</div>
-                    <div>
-                        <div style="font-weight:600;">${escapeHtml(m)}${m===currentUser?' <span style="font-size:11px; color:var(--c-gray);">(you)</span>':''}</div>
-                        ${isMemOwner ? '<div style="font-size:11px; color:var(--c-orange); font-weight:600;">OWNER</div>' : (onlineUsers.includes(m) ? '<div style="font-size:11px; color:#4dcd5e;">● online</div>' : '<div style="font-size:11px; color:var(--c-gray);">offline</div>')}
-                    </div>
-                </div>
-                ${canRemove ? `<button onclick="removeGroupMember('${escapeAttr(m)}')" style="padding:6px 12px; background:transparent; color:var(--c-red); border:1px solid var(--c-red); border-radius:8px; cursor:pointer; font-size:12px;">Remove</button>` : ''}
-            </div>`;
-        }).join('');
-
-        // Owner danger zone vs member leave
-        document.getElementById('group-danger-zone').style.display = isOwner ? 'block' : 'none';
-        document.getElementById('group-leave-zone').style.display = isOwner ? 'none' : 'block';
-    } catch(e) {
-        list.innerHTML = `<div style="padding:14px; color:var(--c-red);">${escapeHtml(e.message)}</div>`;
+        renderChatList();
     }
 }
 
-async function addGroupMember() {
-    const sel = document.getElementById('group-add-select');
-    const target = sel.value;
-    if (!target) return;
-    const res = await apiJson('/api/action', { action: 'add_room_member', room_id: currentRoom, target });
-    const data = await res.json();
-    if (data.success) {
-        await loadGroupMembers();
-    } else {
-        alert(data.msg || 'Failed');
+function onDeleted(m) {
+    if (State.messages[m.room]) {
+        State.messages[m.room] = State.messages[m.room].filter(x => x.id !== m.msg_id);
     }
-}
-
-async function removeGroupMember(target) {
-    if (!confirm(`Remove "${target}" from the group?`)) return;
-    const res = await apiJson('/api/action', { action: 'remove_room_member', room_id: currentRoom, target });
-    const data = await res.json();
-    if (data.success) {
-        await loadGroupMembers();
-    } else {
-        alert(data.msg || 'Failed');
-    }
-}
-
-async function leaveCurrentGroup() {
-    if (!confirm('Are you sure you want to leave this group?')) return;
-    const res = await apiJson('/api/action', { action: 'remove_room_member', room_id: currentRoom, target: currentUser });
-    const data = await res.json();
-    if (data.success) {
-        closeModal('groupSettingsModal');
-        currentRoom = null;
-        targetUserForDM = null;
-        document.getElementById('sidebar').classList.remove('hidden');
-        if (typeof loadInitData === 'function') loadInitData();
-    } else {
-        alert(data.msg || 'Failed');
-    }
-}
-
-async function deleteCurrentGroup() {
-    if (!confirm('⚠️ This will permanently delete the group, all messages, and remove all members. Continue?')) return;
-    const res = await apiJson('/api/action', { action: 'delete_room', room_id: currentRoom });
-    const data = await res.json();
-    if (data.success) {
-        closeModal('groupSettingsModal');
-        currentRoom = null;
-        targetUserForDM = null;
-        document.getElementById('sidebar').classList.remove('hidden');
-        if (typeof loadInitData === 'function') loadInitData();
-    } else {
-        alert(data.msg || 'Failed');
-    }
-}
-
-// =====================================================================
-// Message Search
-// =====================================================================
-let searchDebounceTimer = null;
-
-function openSearchBar() {
-    if (!currentRoom) return;
-    const sb = document.getElementById('searchBar');
-    sb.style.display = 'flex';
-    const inp = document.getElementById('searchInput');
-    inp.value = '';
-    setTimeout(() => inp.focus(), 50);
-    document.getElementById('searchResults').style.display = 'none';
-    if (!inp._searchHooked) {
-        inp._searchHooked = true;
-        inp.addEventListener('input', handleSearchInput);
-        inp.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSearchBar(); });
-    }
-}
-
-function closeSearchBar() {
-    document.getElementById('searchBar').style.display = 'none';
-    document.getElementById('searchResults').style.display = 'none';
-    document.getElementById('searchInput').value = '';
-}
-
-function handleSearchInput() {
-    const q = document.getElementById('searchInput').value.trim();
-    if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
-    if (q.length < 2) {
-        document.getElementById('searchResults').style.display = 'none';
-        return;
-    }
-    searchDebounceTimer = setTimeout(() => doSearch(q), 350);
-}
-
-async function doSearch(q) {
-    const box = document.getElementById('searchResults');
-    box.style.display = 'block';
-    box.innerHTML = '<div style="padding:24px; text-align:center; color:var(--c-gray);">Searching...</div>';
-    try {
-        const res = await apiJson('/api/action', { action: 'search_messages', room: currentRoom, q });
-        const data = await res.json();
-        if (!data.success && data.msg) {
-            box.innerHTML = `<div style="padding:14px; color:var(--c-red);">${escapeHtml(data.msg)}</div>`;
-            return;
-        }
-        const results = data.results || [];
-        if (!results.length) {
-            box.innerHTML = `<div style="padding:24px; text-align:center; color:var(--c-gray);">No messages found for "<strong>${escapeHtml(q)}</strong>"</div>`;
-            return;
-        }
-        const lower = q.toLowerCase();
-        box.innerHTML = `<div style="padding:8px 14px; font-size:12px; color:var(--c-gray); font-weight:600;">${results.length} result${results.length===1?'':'s'}</div>` + results.map(r => {
-            const text = r.text || '';
-            // Highlight match
-            const idx = text.toLowerCase().indexOf(lower);
-            let highlighted;
-            if (idx >= 0) {
-                highlighted = escapeHtml(text.substring(0, idx)) +
-                    '<mark style="background:var(--c-blue); color:white; padding:1px 3px; border-radius:3px;">' + escapeHtml(text.substring(idx, idx+q.length)) + '</mark>' +
-                    escapeHtml(text.substring(idx+q.length));
-            } else {
-                highlighted = escapeHtml(text);
-            }
-            return `
-            <div onclick="jumpToSearchResult('${escapeAttr(r.id)}')" style="padding:12px 14px; margin:4px 8px; background:var(--bg-input); border-radius:10px; cursor:pointer; border:1px solid var(--border);">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-                    <strong style="color:var(--c-blue); font-size:13px;">${escapeHtml(r.user)}</strong>
-                    <span style="font-size:11px; color:var(--c-gray);">${escapeHtml(formatSearchTimestamp(r.timestamp))}</span>
-                </div>
-                <div style="font-size:13px; color:var(--c-text, var(--c-white)); line-height:1.5; word-break:break-word;">${highlighted}</div>
-            </div>`;
-        }).join('');
-    } catch(e) {
-        box.innerHTML = `<div style="padding:14px; color:var(--c-red);">${escapeHtml(e.message)}</div>`;
-    }
-}
-
-function formatSearchTimestamp(iso) {
-    try {
-        const d = new Date(iso.replace(' ', 'T') + 'Z');
-        const now = new Date();
-        const sameDay = d.toDateString() === now.toDateString();
-        if (sameDay) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        return d.toLocaleDateString();
-    } catch { return ''; }
-}
-
-function jumpToSearchResult(msgId) {
-    closeSearchBar();
-    setTimeout(() => {
-        const el = document.getElementById('msg-' + msgId);
-        if (el) {
-            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            const bubble = el.querySelector('.bubble');
-            if (bubble) {
-                bubble.style.transition = 'box-shadow 0.5s';
-                bubble.style.boxShadow = '0 0 0 3px var(--c-blue)';
-                setTimeout(() => { bubble.style.boxShadow = ''; }, 1800);
-            }
-        }
-    }, 100);
-}
-
-// =====================================================================
-// Phase 4 — i18n additions (best-effort, only used if translations object exists)
-// =====================================================================
-try {
-    if (typeof translations === 'object') {
-        Object.assign(translations.en || {}, {
-            online: 'online', offline: 'offline', typing: 'typing',
-            search_msgs_ph: 'Search messages...', no_results: 'No messages found',
-            group_members: 'Group Members', add_member: 'Add Member', leave_group: 'Leave Group', delete_group: 'Delete Group',
-        });
-        Object.assign(translations.fa || {}, {
-            online: 'آنلاین', offline: 'آفلاین', typing: 'در حال تایپ',
-            search_msgs_ph: 'جستجو در پیام‌ها...', no_results: 'پیامی یافت نشد',
-            group_members: 'اعضای گروه', add_member: 'افزودن عضو', leave_group: 'خروج از گروه', delete_group: 'حذف گروه',
-        });
-    }
-} catch {}
-
-// =====================================================================
-// Pinned messages
-// =====================================================================
-let pinnedMessages = [];     // current room's pinned list
-let pinnedIndex = 0;         // which one is showing in the bar
-
-function refreshPinnedBar() {
-    const bar = document.getElementById('pinnedBar');
-    if (!bar) return;
-    if (!pinnedMessages.length) {
-        bar.style.display = 'none';
-        return;
-    }
-    bar.style.display = 'flex';
-    pinnedIndex = pinnedIndex % pinnedMessages.length;
-    const p = pinnedMessages[pinnedIndex];
-    const preview = p.msgType === 'text'
-        ? (p.text || '').slice(0, 120)
-        : (p.msgType === 'image' ? '🖼️ Photo' : (p.msgType === 'video' ? '🎥 Video' : (p.msgType === 'audio' ? '🎤 Voice' : '📎 ' + (p.fileName||'File'))));
-    document.getElementById('pinnedPreview').innerText = `${p.user}: ${preview}`;
-    document.getElementById('pinnedCount').innerText = pinnedMessages.length > 1 ? `(${pinnedIndex+1}/${pinnedMessages.length})` : '';
-    bar.onclick = () => {
-        // Jump to pinned message
-        const el = document.getElementById('msg-' + p.id);
-        if (el) {
-            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            const bubble = el.querySelector('.bubble');
-            if (bubble) {
-                bubble.style.transition = 'box-shadow 0.5s';
-                bubble.style.boxShadow = '0 0 0 3px var(--c-blue)';
-                setTimeout(() => { bubble.style.boxShadow = ''; }, 1500);
-            }
-        }
-    };
-}
-function cyclePinned() {
-    if (!pinnedMessages.length) return;
-    pinnedIndex = (pinnedIndex + 1) % pinnedMessages.length;
-    refreshPinnedBar();
-}
-async function unpinCurrentPinned() {
-    if (!pinnedMessages.length) return;
-    if (!confirm('Unpin this message?')) return;
-    const p = pinnedMessages[pinnedIndex];
-    if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ action: 'unpin_msg', msg_id: p.id }));
-    }
-}
-function doPin() {
-    if (!contextMsgId) return;
-    const isPinned = pinnedMessages.some(p => p.id === contextMsgId);
-    if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ action: isPinned ? 'unpin_msg' : 'pin_msg', msg_id: contextMsgId }));
-    }
-    closeContextMenu();
-}
-// Update pin button label when context menu opens
-function updatePinButtonLabel(msgId) {
-    const t = document.getElementById('pinBtnText');
-    if (!t) return;
-    const isPinned = pinnedMessages.some(p => p.id === msgId);
-    t.innerText = isPinned ? 'Unpin' : 'Pin';
-}
-
-// Hook into context menu opening
-const __origShowContextMenu = (typeof showContextMenu === 'function') ? showContextMenu : null;
-if (__origShowContextMenu) {
-    window.showContextMenu = function(...args) {
-        __origShowContextMenu.apply(this, args);
-        if (typeof contextMsgId !== 'undefined') updatePinButtonLabel(contextMsgId);
-    };
-}
-
-// Hook WS for pinned_changed events
-const __origInitWS_Pin = (typeof initWebSocket === 'function') ? initWebSocket : null;
-if (__origInitWS_Pin) {
-    const wrapped = window.initWebSocket;
-    window.initWebSocket = function() {
-        wrapped();
-        if (!ws) return;
-        const prev = ws.onmessage;
-        ws.onmessage = async function(event) {
-            if (prev) await prev(event);
-            try {
-                const m = JSON.parse(event.data);
-                if (m.type === 'pinned_changed' && m.room === currentRoom) {
-                    pinnedMessages = m.pinned || [];
-                    pinnedIndex = 0;
-                    refreshPinnedBar();
-                }
-                else if (m.type === 'history' && m.room === currentRoom) {
-                    // Request pinned list when history arrives
-                    if (ws && ws.readyState === WebSocket.OPEN) {
-                        ws.send(JSON.stringify({ action: 'get_pinned', room: currentRoom }));
-                    }
-                }
-            } catch {}
-        };
-    };
-}
-
-// Reset pinned bar when switching rooms
-const __origOpenChat_Pin = (typeof openChat === 'function') ? openChat : null;
-if (__origOpenChat_Pin) {
-    const wrapped = window.openChat;
-    window.openChat = function(...args) {
-        wrapped.apply(this, args);
-        pinnedMessages = [];
-        pinnedIndex = 0;
-        const bar = document.getElementById('pinnedBar');
-        if (bar) bar.style.display = 'none';
-        // get_pinned will be triggered by history hook above
-    };
-}
-
-// =====================================================================
-// Upload Progress Bar (XHR-based to track progress)
-// =====================================================================
-function createUploadProgressEl() {
-    let el = document.getElementById('uploadProgressEl');
-    if (el) return el;
-    el = document.createElement('div');
-    el.id = 'uploadProgressEl';
-    el.style.cssText = 'position:absolute; bottom:78px; left:50%; transform:translateX(-50%); z-index:10; background:var(--bg-panel); backdrop-filter:blur(15px); border:1px solid var(--border); padding:10px 14px; border-radius:14px; box-shadow:0 8px 28px rgba(0,0,0,0.4); min-width:240px; max-width:90%;';
-    el.innerHTML = `
-        <div style="display:flex; align-items:center; gap:10px;">
-            <div id="uploadProgressIcon" style="width:32px; height:32px; border-radius:8px; background:var(--c-blue); display:flex; align-items:center; justify-content:center; color:white; flex-shrink:0;"><svg viewBox="0 0 24 24" style="width:18px; fill:currentColor;"><path d="M9 16h6v-6h4l-7-7-7 7h4zm-4 2h14v2H5z"/></svg></div>
-            <div style="flex:1; min-width:0;">
-                <div id="uploadProgressName" style="font-size:13px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Uploading...</div>
-                <div style="display:flex; align-items:center; gap:8px; margin-top:4px;">
-                    <div style="flex:1; height:5px; background:rgba(255,255,255,0.1); border-radius:10px; overflow:hidden;">
-                        <div id="uploadProgressBar" style="height:100%; width:0%; background:linear-gradient(90deg, var(--c-blue), #4ba2ee); border-radius:10px; transition:width 0.2s;"></div>
-                    </div>
-                    <span id="uploadProgressPct" style="font-size:11px; font-weight:600; color:var(--c-gray); min-width:36px; text-align:right;">0%</span>
-                </div>
-            </div>
-            <button onclick="cancelCurrentUpload()" style="background:transparent; border:none; color:var(--c-red); cursor:pointer; padding:4px;" title="Cancel"><svg viewBox="0 0 24 24" style="width:18px; fill:currentColor;"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></button>
-        </div>
-    `;
-    document.querySelector('.chat-area')?.appendChild(el) || document.body.appendChild(el);
-    return el;
-}
-let currentUploadXHR = null;
-function cancelCurrentUpload() {
-    if (currentUploadXHR) {
-        try { currentUploadXHR.abort(); } catch {}
-        currentUploadXHR = null;
-    }
-    const el = document.getElementById('uploadProgressEl');
+    const el = document.getElementById('msg-' + m.msg_id);
     if (el) el.remove();
 }
 
-async function uploadWithProgress(file, fileName) {
-    return new Promise((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        currentUploadXHR = xhr;
-        const fd = new FormData();
-        fd.append('file', file, fileName || file.name);
+function onEdited(m) {
+    if (State.messages[m.room]) {
+        const msg = State.messages[m.room].find(x => x.id === m.msg_id);
+        if (msg) msg.text = m.new_text;
+    }
+    const el = document.getElementById('msg-' + m.msg_id);
+    if (el) {
+        const txt = el.querySelector('.text');
+        if (txt) {
+            txt.innerHTML = esc(m.new_text) + ' <span style="opacity:0.6;font-size:11px">(edited)</span>';
+        }
+    }
+}
 
-        const progressEl = createUploadProgressEl();
-        document.getElementById('uploadProgressName').innerText = fileName || file.name || 'File';
-        document.getElementById('uploadProgressBar').style.width = '0%';
-        document.getElementById('uploadProgressPct').innerText = '0%';
+function onReaction(m) {
+    if (State.messages[m.room]) {
+        const msg = State.messages[m.room].find(x => x.id === m.msg_id);
+        if (msg) msg.reactions = m.reactions;
+    }
+    const r = document.getElementById('reacts-' + m.msg_id);
+    if (r) r.outerHTML = reactionsHTML(m.msg_id, m.reactions);
+}
 
-        xhr.upload.addEventListener('progress', (e) => {
-            if (e.lengthComputable) {
-                const pct = Math.round((e.loaded / e.total) * 100);
-                document.getElementById('uploadProgressBar').style.width = pct + '%';
-                document.getElementById('uploadProgressPct').innerText = pct + '%';
-            }
-        });
-        xhr.addEventListener('load', () => {
-            currentUploadXHR = null;
-            const el = document.getElementById('uploadProgressEl');
-            if (el) el.remove();
-            if (xhr.status >= 200 && xhr.status < 300) {
-                try { resolve(JSON.parse(xhr.responseText)); }
-                catch { reject(new Error('Invalid response')); }
-            } else {
-                let detail = xhr.responseText;
-                try { detail = JSON.parse(xhr.responseText).detail || detail; } catch {}
-                reject(new Error(`HTTP ${xhr.status}: ${detail}`));
-            }
-        });
-        xhr.addEventListener('error', () => {
-            currentUploadXHR = null;
-            const el = document.getElementById('uploadProgressEl');
-            if (el) el.remove();
-            reject(new Error('Network error'));
-        });
-        xhr.addEventListener('abort', () => {
-            currentUploadXHR = null;
-            const el = document.getElementById('uploadProgressEl');
-            if (el) el.remove();
-            reject(new Error('Upload cancelled'));
-        });
-
-        xhr.open('POST', '/api/upload', true);
-        if (currentToken) xhr.setRequestHeader('Authorization', 'Bearer ' + currentToken);
-        xhr.send(fd);
+function onReadReceipt(m) {
+    // m.msg_ids_per_sender = { senderUser: [msgIds...] }
+    const myIds = m.msg_ids_per_sender[State.user];
+    if (!myIds) return;
+    myIds.forEach(id => {
+        const el = document.getElementById('msg-' + id);
+        if (el) {
+            const ticks = el.querySelector('.ticks');
+            if (ticks) ticks.classList.add('read');
+        }
     });
 }
 
-// =====================================================================
-// In-bubble upload preview with progress ring + cancel
-// =====================================================================
-function detectUploadKind(file) {
-    if (!file) return 'file';
-    const t = file.type || '';
-    if (t.startsWith('image/')) return 'image';
-    if (t.startsWith('video/')) return 'video';
-    if (t.startsWith('audio/')) return 'audio';
-    return 'file';
+function onTyping(m) {
+    if (!State.currentRoom || m.room !== State.currentRoom.id) return;
+    if (m.user === State.user) return;
+    State.typing[m.room] = { user: m.user, expires: Date.now() + 4000 };
+    renderHeader();
+    setTimeout(() => {
+        const t = State.typing[m.room];
+        if (t && Date.now() >= t.expires) {
+            delete State.typing[m.room];
+            renderHeader();
+        }
+    }, 4500);
 }
 
-function createUploadPlaceholder(file) {
-    const messages = document.getElementById('messages');
-    if (!messages) return null;
-    const kind = detectUploadKind(file);
-    const tempId = 'up_' + Math.random().toString(36).slice(2, 9);
+// ============================================================
+// 7. RENDER SIDEBAR (chat list)
+// ============================================================
+function renderChatList() {
+    const list = document.getElementById('chat-list');
+    if (!list) return;
+    const q = (document.getElementById('sidebar-search').value || '').toLowerCase();
 
-    // Generate object URL for image/video preview
-    let previewUrl = null;
-    if (kind === 'image' || kind === 'video') {
-        try { previewUrl = URL.createObjectURL(file); } catch {}
-    }
+    list.innerHTML = '';
+    State.rooms.forEach(r => {
+        if (q && !r.name.toLowerCase().includes(q)) return;
+        const unread = State.unread[r.id] || 0;
+        const active = State.currentRoom && State.currentRoom.id === r.id;
+        const isOnline = r.type === 'dm' && State.onlineUsers.includes(r.partner);
 
-    const row = document.createElement('div');
-    row.className = 'msg-row out';
-    row.id = 'upload-' + tempId;
+        // Avatar
+        let avatar;
+        if (r.type === 'channel') {
+            avatar = '<div class="avatar" style="background:var(--red)">📢</div>';
+        } else if (r.type === 'group') {
+            avatar = '<div class="avatar" style="background:#9c27b0">👥</div>';
+        } else {
+            const av = State.avatars[r.partner];
+            if (av) {
+                avatar = `<div class="avatar"><img src="${esc(av)}"></div>`;
+            } else {
+                avatar = `<div class="avatar">${esc((r.partner||'?').charAt(0).toUpperCase())}</div>`;
+            }
+        }
 
-    let mediaHtml = '';
-    if (kind === 'image' && previewUrl) {
-        mediaHtml = `<img src="${previewUrl}" style="max-width:280px; max-height:340px; border-radius:14px; display:block;">`;
-    } else if (kind === 'video' && previewUrl) {
-        mediaHtml = `<video src="${previewUrl}" muted style="max-width:280px; max-height:340px; border-radius:14px; display:block;"></video>`;
-    } else if (kind === 'audio') {
-        mediaHtml = `<div style="display:flex; align-items:center; gap:10px; padding:10px 14px; min-width:230px;">
-            <div style="width:42px; height:42px; border-radius:50%; background:var(--c-blue); display:flex; align-items:center; justify-content:center; color:white;">🎤</div>
-            <div><div style="font-weight:600; font-size:13px;">${(file.name||'Voice').replace(/[<>]/g,'')}</div><div style="font-size:11px; opacity:0.7;">${fmtBytes(file.size)}</div></div>
-        </div>`;
-    } else {
-        // generic file
-        mediaHtml = `<div class="file-link" style="margin-top:0;">
-            <div class="file-icon"><svg style="width:24px;fill:white;"><use href="#icon-doc"></use></svg></div>
-            <div style="display:flex; flex-direction:column; overflow:hidden;">
-                <span style="font-weight:bold; font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" dir="auto">${(file.name||'File').replace(/[<>]/g,'')}</span>
-                <span style="font-size:11px; opacity:0.7;">${fmtBytes(file.size)} · Uploading...</span>
-            </div>
-        </div>`;
-    }
-
-    row.innerHTML = `
-        <div class="bubble uploading-bubble" style="padding:4px; max-width:90%;">
-            <div style="position:relative; border-radius:14px; overflow:hidden;">
-                ${mediaHtml}
-                <div class="upload-overlay">
-                    <button class="upload-cancel-btn" type="button" data-temp-id="${tempId}" title="Cancel upload">
-                        <div class="upload-ring">
-                            <svg viewBox="0 0 56 56" width="56" height="56">
-                                <circle class="ring-bg" cx="28" cy="28" r="24" fill="none" stroke-width="3"/>
-                                <circle class="ring-fg" data-ring-for="${tempId}" cx="28" cy="28" r="24" fill="none" stroke-width="3" stroke-dasharray="150.8" stroke-dashoffset="150.8"/>
-                            </svg>
-                            <div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center;">
-                                <svg viewBox="0 0 24 24" style="width:18px; fill:white;"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
-                            </div>
-                        </div>
-                    </button>
+        const div = document.createElement('div');
+        div.className = 'chat-item' + (active ? ' active' : '');
+        div.dataset.roomId = r.id;
+        div.innerHTML = `
+            ${avatar}
+            <div class="chat-item-body">
+                <div class="chat-item-row">
+                    <div class="chat-item-name">${esc(r.name)}${isOnline ? ' <span style="color:var(--green);font-size:10px">●</span>' : ''}</div>
+                </div>
+                <div class="chat-item-preview">
+                    <span>${esc(getLastPreview(r.id))}</span>
+                    ${unread > 0 ? `<span class="chat-item-badge">${unread > 99 ? '99+' : unread}</span>` : ''}
                 </div>
             </div>
-            <div class="upload-status" data-status-for="${tempId}" style="font-size:11px; color:var(--c-gray); margin-top:6px; text-align:right;">0% · Uploading...</div>
+        `;
+        div.addEventListener('click', () => openChat(r));
+        list.appendChild(div);
+    });
+}
+
+function getLastPreview(roomId) {
+    const msgs = State.messages[roomId];
+    if (!msgs || !msgs.length) {
+        const room = State.rooms.find(r => r.id === roomId);
+        if (room) {
+            if (room.type === 'dm') return 'Private chat';
+            if (room.type === 'group') return 'Group';
+            if (room.type === 'channel') return 'System channel';
+        }
+        return '';
+    }
+    const m = msgs[msgs.length - 1];
+    if (m.msgType === 'text') return m.text.slice(0, 50);
+    if (m.msgType === 'image') return '🖼️ Photo';
+    if (m.msgType === 'video') return '🎥 Video';
+    if (m.msgType === 'audio') return '🎤 Voice';
+    return '📎 ' + (m.fileName || 'File');
+}
+
+// ============================================================
+// 8. OPEN CHAT
+// ============================================================
+function openChat(room) {
+    State.currentRoom = room;
+    State.unread[room.id] = 0;
+
+    document.getElementById('chat-empty').style.display = 'none';
+    document.getElementById('chat-content').style.display = 'flex';
+    document.getElementById('chat-view').classList.add('active');
+
+    renderHeader();
+    renderChatList();
+
+    // Show/hide call buttons
+    const isDM = room.type === 'dm';
+    document.getElementById('chat-call-btn').style.display = isDM ? '' : 'none';
+    document.getElementById('chat-video-btn').style.display = isDM ? '' : 'none';
+
+    // Request history
+    State.messages[room.id] = null;
+    document.getElementById('messages').innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-3)"><div class="spinner" style="margin:0 auto 12px auto"></div>Loading...</div>';
+    wsSend({ action: 'get_history', room: room.id });
+}
+
+function closeChat() {
+    State.currentRoom = null;
+    document.getElementById('chat-content').style.display = 'none';
+    document.getElementById('chat-empty').style.display = '';
+    document.getElementById('chat-view').classList.remove('active');
+    renderChatList();
+}
+
+// ============================================================
+// 9. RENDER HEADER
+// ============================================================
+function renderHeader() {
+    if (!State.currentRoom) return;
+    const r = State.currentRoom;
+    document.getElementById('chat-header-title').innerText = r.name;
+
+    // Avatar
+    const av = document.getElementById('chat-header-avatar');
+    if (r.type === 'channel') {
+        av.innerHTML = '📢';
+        av.style.background = 'var(--red)';
+    } else if (r.type === 'group') {
+        av.innerHTML = '👥';
+        av.style.background = '#9c27b0';
+    } else {
+        const aURL = State.avatars[r.partner];
+        if (aURL) {
+            av.innerHTML = `<img src="${esc(aURL)}">`;
+        } else {
+            av.innerHTML = esc((r.partner || '?').charAt(0).toUpperCase());
+        }
+        av.style.background = 'var(--accent)';
+    }
+
+    // Status
+    const status = document.getElementById('chat-header-status');
+    // Typing indicator
+    const typing = State.typing[r.id];
+    if (typing && Date.now() < typing.expires) {
+        status.innerText = typing.user + ' is typing…';
+        status.className = 'chat-header-status online';
+        return;
+    }
+    if (r.type === 'dm') {
+        if (State.onlineUsers.includes(r.partner)) {
+            status.innerText = 'online';
+            status.className = 'chat-header-status online';
+        } else {
+            const ls = State.lastSeen[r.partner];
+            status.innerText = ls ? 'last seen ' + fmtRelative(ls) : 'offline';
+            status.className = 'chat-header-status';
+        }
+    } else if (r.type === 'group') {
+        status.innerText = '';
+        status.className = 'chat-header-status';
+    } else {
+        status.innerText = '';
+        status.className = 'chat-header-status';
+    }
+}
+
+// ============================================================
+// 10. RENDER MESSAGES
+// ============================================================
+function renderMessages() {
+    const container = document.getElementById('messages');
+    if (!container || !State.currentRoom) return;
+    const msgs = State.messages[State.currentRoom.id] || [];
+    container.innerHTML = '';
+
+    let lastDate = null;
+    let lastSender = null;
+    let prevRow = null;
+
+    msgs.forEach((m, i) => {
+        const d = new Date((m.timestamp || '').replace(' ', 'T') + 'Z');
+        const dayKey = isNaN(d) ? '' : d.toDateString();
+        if (dayKey && dayKey !== lastDate) {
+            const div = document.createElement('div');
+            div.className = 'date-divider';
+            div.innerText = fmtDateLabel(d);
+            container.appendChild(div);
+            lastDate = dayKey;
+            lastSender = null;
+        }
+        const isSame = (lastSender === m.user);
+        const next = msgs[i + 1];
+        const nextSameDate = next && (new Date((next.timestamp || '').replace(' ', 'T') + 'Z').toDateString() === dayKey);
+        const isLastInGroup = !next || next.user !== m.user || !nextSameDate;
+
+        const row = buildMessageRow(m, isSame, isLastInGroup);
+        container.appendChild(row);
+        lastSender = m.user;
+        prevRow = row;
+    });
+
+    // Scroll to bottom
+    requestAnimationFrame(() => { container.scrollTop = container.scrollHeight; });
+}
+
+function appendMessage(m, scrollIfNearBottom = false) {
+    const container = document.getElementById('messages');
+    if (!container) return;
+    const msgs = State.messages[State.currentRoom.id] || [];
+    const idx = msgs.length - 1;
+    const prev = idx > 0 ? msgs[idx - 1] : null;
+
+    // Need a date divider?
+    const d = new Date((m.timestamp || '').replace(' ', 'T') + 'Z');
+    const dayKey = isNaN(d) ? '' : d.toDateString();
+    const lastDivider = container.querySelector('.date-divider:last-of-type');
+    let needDivider = false;
+    if (!prev) needDivider = true;
+    else {
+        const pd = new Date((prev.timestamp || '').replace(' ', 'T') + 'Z');
+        needDivider = !isNaN(pd) && pd.toDateString() !== dayKey;
+    }
+    // If there are no message rows yet, ensure divider
+    if (!container.querySelector('.msg-row')) needDivider = true;
+    if (needDivider) {
+        const div = document.createElement('div');
+        div.className = 'date-divider';
+        div.innerText = fmtDateLabel(d);
+        container.appendChild(div);
+    }
+
+    const isSame = prev && prev.user === m.user;
+    const row = buildMessageRow(m, isSame, true);
+    container.appendChild(row);
+
+    if (scrollIfNearBottom) {
+        const nearBottom = (container.scrollHeight - container.scrollTop - container.clientHeight) < 200;
+        if (nearBottom || m.user === State.user) {
+            requestAnimationFrame(() => { container.scrollTop = container.scrollHeight; });
+        } else {
+            // Show scroll-to-bottom badge with +1
+            const pill = document.getElementById('unread-pill');
+            const btn = document.getElementById('scroll-bottom-btn');
+            if (btn && pill) {
+                btn.style.display = 'flex';
+                pill.style.display = '';
+                pill.innerText = (parseInt(pill.innerText || '0', 10) + 1);
+            }
+        }
+    }
+}
+
+function buildMessageRow(m, isSame, isLastInGroup) {
+    const isOut = m.user === State.user;
+    const row = document.createElement('div');
+    row.className = 'msg-row ' + (isOut ? 'out' : 'in') + (isSame ? ' same' : '') + (isLastInGroup ? ' last-in-group' : '');
+    row.id = 'msg-' + m.id;
+    row.dataset.msgId = m.id;
+    row.dataset.user = m.user;
+
+    let mediaHTML = '';
+    let isMedia = false;
+    if (m.msgType === 'image' && m.url) {
+        mediaHTML = `<div class="media"><img src="${esc(m.url)}" onclick="openLightbox('${esc(m.url)}', 'image')"></div>`;
+        isMedia = true;
+    } else if (m.msgType === 'video' && m.url) {
+        mediaHTML = `<div class="media"><video src="${esc(m.url)}" controls playsinline></video></div>`;
+        isMedia = true;
+    } else if (m.msgType === 'audio' && m.url) {
+        mediaHTML = voiceBubble(m.id, m.url);
+    } else if (m.msgType === 'file' && m.url) {
+        mediaHTML = fileBubble(m);
+    }
+
+    // For groups, show sender name
+    const showSender = !isOut && !isSame && (State.currentRoom.type === 'group' || State.currentRoom.id === 'Announcements');
+
+    // Reply quote
+    let replyHTML = '';
+    if (m.replyTo && m.replyTo.id) {
+        replyHTML = `<div class="bubble-reply" onclick="jumpToMessage('${esc(m.replyTo.id)}')">
+            <div class="bubble-reply-name">${esc(m.replyTo.user || '')}</div>
+            <div class="bubble-reply-text">${esc((m.replyTo.text || '').slice(0, 80))}</div>
+        </div>`;
+    }
+
+    // Text
+    const textHTML = m.msgType === 'text' && m.text ? `<div class="text">${esc(m.text)}</div>` : '';
+
+    // Meta (time + ticks for outgoing)
+    let ticks = '';
+    if (isOut) {
+        const isRead = m.read_by && m.read_by.length > 0;
+        ticks = `<svg class="ticks${isRead ? ' read' : ''}"><use href="#${isRead ? 'i-check2' : 'i-check'}"/></svg>`;
+    }
+    const metaHTML = `<span class="meta">${fmtTime(m.timestamp)}${ticks}</span>`;
+
+    // Reactions
+    const reactionsRender = m.reactions ? reactionsHTML(m.id, m.reactions) : '';
+
+    const bubbleClass = 'bubble' + (isMedia ? ' with-media' : '');
+    row.innerHTML = `
+        <div class="${bubbleClass}">
+            ${showSender ? `<div class="sender">${esc(m.user)}</div>` : ''}
+            ${replyHTML}
+            ${mediaHTML}
+            ${textHTML}
+            ${metaHTML}
+            ${reactionsRender}
         </div>
     `;
 
-    messages.appendChild(row);
-    // Smooth-scroll to bottom
-    requestAnimationFrame(() => { messages.scrollTop = messages.scrollHeight; });
+    // Right-click / long-press for context menu
+    attachLongPress(row, () => openContextMenu(row, m));
 
-    // Track for cancel
-    row._previewUrl = previewUrl;
-    row._tempId = tempId;
-    return { row, tempId, previewUrl };
+    return row;
 }
 
-function updateUploadPlaceholder(tempId, pct) {
-    const ring = document.querySelector(`circle[data-ring-for="${tempId}"]`);
-    const status = document.querySelector(`[data-status-for="${tempId}"]`);
-    if (ring) {
-        const circumference = 150.8; // 2*PI*24
-        const offset = circumference * (1 - (pct / 100));
-        ring.style.strokeDashoffset = offset;
-    }
-    if (status) status.innerText = `${pct}% · Uploading...`;
-}
-
-function removeUploadPlaceholder(tempId) {
-    const row = document.getElementById('upload-' + tempId);
-    if (!row) return;
-    if (row._previewUrl) { try { URL.revokeObjectURL(row._previewUrl); } catch{} }
-    row.remove();
-}
-
-function setUploadPlaceholderError(tempId, errMsg) {
-    const status = document.querySelector(`[data-status-for="${tempId}"]`);
-    if (status) {
-        status.innerText = '❌ ' + (errMsg || 'Upload failed');
-        status.style.color = 'var(--c-red)';
-    }
-    const row = document.getElementById('upload-' + tempId);
-    if (row) {
-        row.querySelector('.uploading-bubble')?.classList.remove('uploading-bubble');
-        // Auto remove after 4s
-        setTimeout(() => removeUploadPlaceholder(tempId), 4000);
-    }
-}
-
-// Better uploadWithProgress that integrates with in-bubble placeholder
-async function uploadWithProgressInBubble(file, fileName, tempId) {
-    return new Promise((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        const fd = new FormData();
-        fd.append('file', file, fileName || file.name);
-
-        // Track XHR by tempId so we can cancel by clicking the cancel button
-        window._activeUploads = window._activeUploads || {};
-        window._activeUploads[tempId] = xhr;
-
-        xhr.upload.addEventListener('progress', (e) => {
-            if (e.lengthComputable) {
-                const pct = Math.round((e.loaded / e.total) * 100);
-                updateUploadPlaceholder(tempId, pct);
-            }
-        });
-        xhr.addEventListener('load', () => {
-            delete window._activeUploads[tempId];
-            if (xhr.status >= 200 && xhr.status < 300) {
-                try { resolve(JSON.parse(xhr.responseText)); }
-                catch { reject(new Error('Invalid response')); }
-            } else {
-                let detail = xhr.responseText;
-                try { detail = JSON.parse(xhr.responseText).detail || detail; } catch {}
-                reject(new Error(`HTTP ${xhr.status}: ${detail}`));
-            }
-        });
-        xhr.addEventListener('error', () => {
-            delete window._activeUploads[tempId];
-            reject(new Error('Network error'));
-        });
-        xhr.addEventListener('abort', () => {
-            delete window._activeUploads[tempId];
-            reject(new Error('Upload cancelled'));
-        });
-
-        xhr.open('POST', '/api/upload', true);
-        if (currentToken) xhr.setRequestHeader('Authorization', 'Bearer ' + currentToken);
-        xhr.send(fd);
-    });
-}
-
-// Wire up cancel button via event delegation
-document.addEventListener('click', function(e) {
-    const btn = e.target.closest('.upload-cancel-btn');
-    if (!btn) return;
-    e.stopPropagation();
-    const tempId = btn.getAttribute('data-temp-id');
-    if (!tempId) return;
-    const xhr = window._activeUploads && window._activeUploads[tempId];
-    if (xhr) { try { xhr.abort(); } catch{} }
-    removeUploadPlaceholder(tempId);
-});
-
-// Replace uploadFile to use in-bubble preview
-window.uploadFile = async function() {
-    const file = document.getElementById('fileInput').files[0];
-    if (!file) return;
-    if (myQuotaMB > 0) {
-        const remaining = myQuotaMB * 1024 * 1024 - myUsedBytes;
-        if (file.size > remaining) {
-            alert(`Quota exceeded.\nRemaining: ${fmtBytes(Math.max(0, remaining))}\nFile size: ${fmtBytes(file.size)}`);
-            document.getElementById('fileInput').value = '';
-            return;
-        }
-    }
-    const ph = createUploadPlaceholder(file);
-    if (!ph) return;
-    try {
-        const data = await uploadWithProgressInBubble(file, file.name, ph.tempId);
-        if (data.used_bytes != null) myUsedBytes = data.used_bytes;
-        if (data.url) {
-            // Send actual message; the placeholder will be replaced when the WS
-            // echoes our own message back (or after a short delay if WS lags).
-            removeUploadPlaceholder(ph.tempId);
-            ws.send(JSON.stringify({
-                action: 'send_msg', room: currentRoom, user: currentUser,
-                targetUser: targetUserForDM, msgType: data.type,
-                url: data.url, fileName: data.name, replyTo: replyToMsg
-            }));
-            cancelReply();
-        } else {
-            removeUploadPlaceholder(ph.tempId);
-        }
-    } catch (e) {
-        if (e.message === 'Upload cancelled') {
-            // already removed
-        } else {
-            setUploadPlaceholderError(ph.tempId, e.message);
-        }
-    }
-    document.getElementById('fileInput').value = '';
-};
-
-// Also wire the album / multi-upload path
-window.uploadMultipleImages = async function(files) {
-    if (!files || !files.length) return;
-    if (files.length === 1) {
-        const dt = new DataTransfer();
-        dt.items.add(files[0]);
-        document.getElementById('fileInput').files = dt.files;
-        return uploadFile();
-    }
-    const albumId = 'alb_' + Math.random().toString(36).slice(2, 10);
-    for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        const ph = createUploadPlaceholder(file);
-        if (!ph) continue;
-        try {
-            const data = await uploadWithProgressInBubble(file, file.name, ph.tempId);
-            if (data.used_bytes != null) myUsedBytes = data.used_bytes;
-            if (data.url) {
-                removeUploadPlaceholder(ph.tempId);
-                ws.send(JSON.stringify({
-                    action: 'send_msg', room: currentRoom, user: currentUser,
-                    targetUser: targetUserForDM, msgType: data.type,
-                    url: data.url, fileName: data.name,
-                    replyTo: i === 0 ? replyToMsg : null,
-                    albumId, albumIndex: i, albumTotal: files.length,
-                }));
-            } else {
-                removeUploadPlaceholder(ph.tempId);
-            }
-        } catch (e) {
-            if (e.message !== 'Upload cancelled') {
-                setUploadPlaceholderError(ph.tempId, e.message);
-            }
-        }
-    }
-    cancelReply();
-};
-
-
-// =====================================================================
-// Telegram-style image collage (album)
-// When a user selects multiple images at once, group them into an album.
-// =====================================================================
-async function uploadMultipleImages(files) {
-    if (!files || !files.length) return;
-    if (files.length === 1) {
-        // Just one file - use the regular uploadFile flow
-        document.getElementById('fileInput').files = createDataTransfer(files).files;
-        return uploadFile();
-    }
-    const albumId = 'alb_' + Math.random().toString(36).slice(2, 10);
-    let success = 0;
-    for (let i = 0; i < files.length; i++) {
-        try {
-            const data = await uploadWithProgress(files[i]);
-            if (data.used_bytes != null) myUsedBytes = data.used_bytes;
-            if (data.url) {
-                ws.send(JSON.stringify({
-                    action: 'send_msg', room: currentRoom, user: currentUser,
-                    targetUser: targetUserForDM, msgType: data.type,
-                    url: data.url, fileName: data.name,
-                    replyTo: i === 0 ? replyToMsg : null,
-                    albumId: albumId,
-                    albumIndex: i,
-                    albumTotal: files.length,
-                }));
-                success++;
-            }
-        } catch (e) {
-            if (e.message !== 'Upload cancelled') {
-                alert('Upload failed for "' + files[i].name + '": ' + e.message);
-            }
-        }
-    }
-    if (success > 0) cancelReply();
-}
-
-function createDataTransfer(files) {
-    const dt = new DataTransfer();
-    Array.from(files).forEach(f => dt.items.add(f));
-    return dt;
-}
-
-// Hook the file input to detect multi-select
-function setupMultiUploadHook() {
-    const input = document.getElementById('fileInput');
-    if (!input || input._multiHooked) return;
-    input._multiHooked = true;
-    // Make the input accept multiple files
-    input.setAttribute('multiple', 'multiple');
-    // Listen for changes; if multiple, route through album uploader
-    input.addEventListener('change', async () => {
-        const files = input.files;
-        if (!files || files.length === 0) return;
-        if (files.length > 1) {
-            // Filter only images for album mode
-            const allImages = Array.from(files).every(f => f.type && f.type.startsWith('image/'));
-            if (allImages) {
-                await uploadMultipleImages(Array.from(files));
-                input.value = '';
-                return;
-            }
-            // Mixed types: upload one by one
-            for (const f of Array.from(files)) {
-                const dt = new DataTransfer();
-                dt.items.add(f);
-                input.files = dt.files;
-                await uploadFile();
-            }
-            input.value = '';
-            return;
-        }
-        // single file: default flow handled by original onchange attribute
-    }, { capture: true });
-}
-setInterval(setupMultiUploadHook, 1500);
-
-// =====================================================================
-// Lightbox (tap image/video to view full)
-// =====================================================================
-function openLightbox(url, isVideo = false) {
-    const lb = document.getElementById('lightbox');
-    const content = document.getElementById('lightbox-content');
-    if (!lb || !content) return;
-    content.innerHTML = isVideo
-        ? `<video src="${url}" controls autoplay style="max-width:95vw; max-height:95vh; border-radius:8px;"></video>`
-        : `<img src="${url}" style="max-width:95vw; max-height:95vh; object-fit:contain; border-radius:8px;">`;
-    lb.style.display = 'flex';
-}
-function closeLightbox() {
-    const lb = document.getElementById('lightbox');
-    if (lb) {
-        lb.style.display = 'none';
-        document.getElementById('lightbox-content').innerHTML = '';
-    }
-}
-// ESC to close
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeLightbox(); });
-
-// =====================================================================
-// Album/collage rendering — group consecutive images with same albumId
-// =====================================================================
-let albumGroups = {};  // albumId -> { images: [...], firstMsgId, lastUpdated }
-
-function tryAttachToAlbum(data) {
-    if (!data.albumId || data.msgType !== 'image') return false;
-    const grp = albumGroups[data.albumId] = albumGroups[data.albumId] || { images: [], firstMsgId: null, owner: data.user };
-    grp.images.push({ id: data.id, url: data.url });
-    grp.lastUpdated = Date.now();
-
-    // If this is the first one, render the album container
-    if (!grp.firstMsgId) {
-        grp.firstMsgId = data.id;
-        return false;  // Let normal append happen for first; we'll convert after
-    }
-    // Hide subsequent message rows; just append the URL to the album in firstMsgId's bubble
-    setTimeout(() => collapseAlbumIntoFirst(data.albumId), 30);
-    return false;  // Don't block the original render; we'll mutate post-render
-}
-
-function collapseAlbumIntoFirst(albumId) {
-    const grp = albumGroups[albumId];
-    if (!grp || !grp.firstMsgId) return;
-    const firstEl = document.getElementById('msg-' + grp.firstMsgId);
-    if (!firstEl) return;
-    const bubble = firstEl.querySelector('.bubble');
-    if (!bubble) return;
-
-    // Remove subsequent album items from DOM
-    grp.images.slice(1).forEach(im => {
-        const el = document.getElementById('msg-' + im.id);
-        if (el) el.style.display = 'none';
-    });
-
-    // Replace existing image inside first bubble with the album grid
-    const existingImg = bubble.querySelector('img');
-    if (existingImg && !bubble.querySelector('.album')) {
-        const albumDiv = document.createElement('div');
-        const total = grp.images.length;
-        let cls = 'album ';
-        if (total === 2) cls += 'album-2';
-        else if (total === 3) cls += 'album-3';
-        else if (total === 4) cls += 'album-4';
-        else cls += 'album-many';
-        albumDiv.className = cls;
-        const visibleCount = Math.min(total, total <= 4 ? total : 5);
-        for (let i = 0; i < visibleCount; i++) {
-            const img = grp.images[i];
-            const itemDiv = document.createElement('div');
-            itemDiv.style.position = 'relative';
-            const imgEl = document.createElement('img');
-            imgEl.className = 'album-item';
-            imgEl.src = img.url;
-            imgEl.onclick = (e) => { e.stopPropagation(); openLightbox(img.url, false); };
-            itemDiv.appendChild(imgEl);
-            // Show "+N" overlay on last item if more
-            if (i === visibleCount - 1 && total > visibleCount) {
-                const overlay = document.createElement('div');
-                overlay.className = 'album-overlay-count';
-                overlay.innerText = '+' + (total - visibleCount + 1);
-                overlay.onclick = (e) => { e.stopPropagation(); openLightbox(img.url, false); };
-                itemDiv.appendChild(overlay);
-            }
-            albumDiv.appendChild(itemDiv);
-        }
-        existingImg.replaceWith(albumDiv);
-    } else if (bubble.querySelector('.album')) {
-        // Already have an album; just append a new item if room
-        const albumDiv = bubble.querySelector('.album');
-        const newImage = grp.images[grp.images.length - 1];
-        if (!albumDiv.querySelector(`img[src="${newImage.url}"]`)) {
-            const itemDiv = document.createElement('div');
-            itemDiv.style.position = 'relative';
-            const imgEl = document.createElement('img');
-            imgEl.className = 'album-item';
-            imgEl.src = newImage.url;
-            imgEl.onclick = (e) => { e.stopPropagation(); openLightbox(newImage.url, false); };
-            itemDiv.appendChild(imgEl);
-            albumDiv.appendChild(itemDiv);
-            // Update class based on new count
-            const cnt = albumDiv.children.length;
-            albumDiv.className = 'album ' + (cnt === 2 ? 'album-2' : cnt === 3 ? 'album-3' : cnt === 4 ? 'album-4' : 'album-many');
-        }
-    }
-}
-
-// Hook appendMessage to attach to albums and add date dividers
-const __origAppendMessage_ph4x = (typeof appendMessage === 'function') ? appendMessage : null;
-if (__origAppendMessage_ph4x) {
-    const wrapped = window.appendMessage;
-    window.appendMessage = function(data) {
-        // Insert date divider if needed (when day changes)
-        try {
-            const tsRaw = data.timestamp;
-            if (tsRaw) {
-                const dStr = formatDateDividerLabel(tsRaw);
-                if (dStr && dStr !== window.__lastInsertedDateDivider) {
-                    window.__lastInsertedDateDivider = dStr;
-                    const messages = document.getElementById('messages');
-                    if (messages) {
-                        const div = document.createElement('div');
-                        div.className = 'date-divider';
-                        div.innerHTML = `<span>${dStr}</span>`;
-                        messages.appendChild(div);
-                    }
-                }
-            }
-        } catch {}
-        wrapped(data);
-        // Attach to album if applicable
-        if (data.albumId) {
-            tryAttachToAlbum(data);
-        }
-    };
-}
-
-function formatDateDividerLabel(iso) {
-    try {
-        const d = new Date((iso.includes('T') ? iso : iso.replace(' ', 'T')) + (iso.endsWith('Z') ? '' : 'Z'));
-        if (isNaN(d.getTime())) return '';
-        const today = new Date();
-        const yesterday = new Date(today.getTime() - 86400000);
-        const sameDay = (a, b) => a.toDateString() === b.toDateString();
-        if (sameDay(d, today)) return 'Today';
-        if (sameDay(d, yesterday)) return 'Yesterday';
-        const sevenDays = new Date(today.getTime() - 7 * 86400000);
-        if (d > sevenDays) {
-            return d.toLocaleDateString(undefined, { weekday: 'long' });
-        }
-        return d.toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: d.getFullYear() !== today.getFullYear() ? 'numeric' : undefined });
-    } catch { return ''; }
-}
-
-// Reset divider tracker when switching rooms / loading history
-const __origOpenChat_ph4x = (typeof openChat === 'function') ? openChat : null;
-if (__origOpenChat_ph4x) {
-    const wrapped = window.openChat;
-    window.openChat = function(...args) {
-        window.__lastInsertedDateDivider = null;
-        wrapped.apply(this, args);
-    };
-}
-
-// Auto-open lightbox when single bubble images are tapped
-function setupSingleImageLightbox() {
-    const messages = document.getElementById('messages');
-    if (!messages || messages._lbHooked) return;
-    messages._lbHooked = true;
-    messages.addEventListener('click', (e) => {
-        const t = e.target;
-        if (t.tagName === 'IMG' && t.closest('.bubble') && !t.classList.contains('album-item')) {
-            e.stopPropagation();
-            openLightbox(t.src, false);
-        }
-        if (t.tagName === 'VIDEO' && t.closest('.bubble') && !t.closest('.video-msg-bubble')) {
-            // Round video messages have their own controls; don't intercept
-        }
-    }, true);
-}
-setInterval(setupSingleImageLightbox, 1500);
-
-
-// =====================================================================
-// Telegram-style voice message player
-// =====================================================================
-function generateWaveformBars(count = 32) {
-    // Pseudo-random heights based on a seed for a "natural" waveform look
-    let bars = '';
-    for (let i = 0; i < count; i++) {
-        // Predictable but irregular heights between 25% and 100%
+function voiceBubble(id, url) {
+    const bars = Array.from({ length: 28 }, (_, i) => {
         const h = 25 + ((Math.sin(i * 1.7) + Math.sin(i * 0.9 + 1) + 2) * 18);
-        bars += `<div class="wfbar" style="flex:1; min-width:2px; background:rgba(255,255,255,0.35); height:${Math.round(h)}%; border-radius:2px; transition:background 0.15s;"></div>`;
-    }
-    return bars;
+        return `<div class="voice-bar" style="height:${Math.round(h)}%"></div>`;
+    }).join('');
+    return `
+        <div class="voice-row" data-voice-id="${id}">
+            <audio data-voice-audio="${id}" src="${esc(url)}" preload="metadata" style="display:none"></audio>
+            <button class="voice-play" data-voice-play="${id}">
+                <svg><use href="#i-play"/></svg>
+            </button>
+            <div class="voice-bars-wrap">
+                <div class="voice-bars" data-voice-bars="${id}">${bars}</div>
+                <div class="voice-time" data-voice-time="${id}">0:00</div>
+            </div>
+        </div>
+    `;
 }
 
-let __activeVoiceId = null;
+function fileBubble(m) {
+    return `
+        <div class="file-row" onclick="window.open('${esc(m.url)}', '_blank')">
+            <div class="file-icon"><svg><use href="#i-file"/></svg></div>
+            <div class="file-meta">
+                <div class="file-name">${esc(m.fileName || 'File')}</div>
+                <div class="file-size">${fmtBytes(m.fileSize || 0)}</div>
+            </div>
+        </div>
+    `;
+}
 
-function toggleVoicePlay(audioId) {
-    const audio = document.getElementById(audioId);
-    if (!audio) return;
-    // Stop any other currently-playing voice message
-    if (__activeVoiceId && __activeVoiceId !== audioId) {
-        const other = document.getElementById(__activeVoiceId);
-        if (other) { try { other.pause(); } catch{} }
-        const otherWrap = document.querySelector(`[data-audio-id="${__activeVoiceId}"]`);
-        if (otherWrap) {
-            otherWrap.querySelector('.voice-icon-play').style.display = 'block';
-            otherWrap.querySelector('.voice-icon-pause').style.display = 'none';
-        }
+function reactionsHTML(msgId, reactions) {
+    if (!reactions || Object.keys(reactions).length === 0) return `<div class="reactions" id="reacts-${msgId}"></div>`;
+    const counts = {};
+    let mine = null;
+    for (const u in reactions) {
+        const em = reactions[u];
+        counts[em] = (counts[em] || 0) + 1;
+        if (u === State.user) mine = em;
     }
-    const wrap = document.querySelector(`[data-audio-id="${audioId}"]`);
-    if (!wrap) return;
-    const iconPlay = wrap.querySelector('.voice-icon-play');
-    const iconPause = wrap.querySelector('.voice-icon-pause');
+    const pills = Object.entries(counts).map(([em, c]) =>
+        `<span class="reaction-pill ${mine === em ? 'mine' : ''}" onclick="sendReaction('${esc(msgId)}', '${esc(em)}')">${em} ${c}</span>`
+    ).join('');
+    return `<div class="reactions" id="reacts-${msgId}">${pills}</div>`;
+}
 
+// ============================================================
+// 11. VOICE PLAYER
+// ============================================================
+let __activeVoice = null;
+function setupVoiceClicks() {
+    document.addEventListener('click', e => {
+        const btn = e.target.closest('[data-voice-play]');
+        if (btn) { toggleVoice(btn.dataset.voicePlay); return; }
+        const bars = e.target.closest('[data-voice-bars]');
+        if (bars) { seekVoiceByClick(e, bars); return; }
+    });
+}
+
+function toggleVoice(id) {
+    const audio = document.querySelector(`[data-voice-audio="${id}"]`);
+    if (!audio) return;
+    if (__activeVoice && __activeVoice !== id) {
+        const other = document.querySelector(`[data-voice-audio="${__activeVoice}"]`);
+        if (other) { try { other.pause(); } catch {} }
+        setVoiceIcon(__activeVoice, false);
+    }
+    const playBtn = document.querySelector(`[data-voice-play="${id}"]`);
     if (audio.paused) {
-        audio.play().catch(e => console.warn('Voice play failed:', e));
-        iconPlay.style.display = 'none';
-        iconPause.style.display = 'block';
-        __activeVoiceId = audioId;
-        attachVoiceProgressListeners(audio, wrap);
+        audio.play().catch(() => {});
+        setVoiceIcon(id, true);
+        __activeVoice = id;
+        attachVoiceUpdater(id, audio);
     } else {
         audio.pause();
-        iconPlay.style.display = 'block';
-        iconPause.style.display = 'none';
+        setVoiceIcon(id, false);
     }
 }
 
-function attachVoiceProgressListeners(audio, wrap) {
-    if (audio._listenersAttached) return;
-    audio._listenersAttached = true;
+function setVoiceIcon(id, playing) {
+    const btn = document.querySelector(`[data-voice-play="${id}"]`);
+    if (!btn) return;
+    btn.innerHTML = `<svg><use href="#${playing ? 'i-pause' : 'i-play'}"/></svg>`;
+}
 
-    const timeEl = wrap.querySelector('.voice-time');
-    const bars = wrap.querySelectorAll('.wfbar');
-    const total = bars.length;
+function attachVoiceUpdater(id, audio) {
+    if (audio._upHooked) return;
+    audio._upHooked = true;
+    const barsWrap = document.querySelector(`[data-voice-bars="${id}"]`);
+    const timeEl = document.querySelector(`[data-voice-time="${id}"]`);
+    const bars = barsWrap ? barsWrap.querySelectorAll('.voice-bar') : [];
 
-    const updateBars = () => {
+    audio.addEventListener('timeupdate', () => {
         if (!audio.duration || !isFinite(audio.duration)) return;
         const pct = audio.currentTime / audio.duration;
-        const filledCount = Math.floor(pct * total);
         bars.forEach((b, i) => {
-            b.style.background = i < filledCount ? 'var(--c-blue)' : 'rgba(255,255,255,0.35)';
+            if (i / bars.length < pct) b.classList.add('active');
+            else b.classList.remove('active');
         });
-    };
-    const updateTime = () => {
-        if (timeEl) timeEl.innerText = formatVoiceTime(audio.currentTime || 0) +
-            (audio.duration && isFinite(audio.duration) ? ' / ' + formatVoiceTime(audio.duration) : '');
-    };
-
-    audio.addEventListener('timeupdate', () => { updateBars(); updateTime(); });
-    audio.addEventListener('loadedmetadata', updateTime);
+        if (timeEl) timeEl.innerText = fmtVoiceTime(audio.currentTime) + ' / ' + fmtVoiceTime(audio.duration);
+    });
     audio.addEventListener('ended', () => {
-        const iconPlay = wrap.querySelector('.voice-icon-play');
-        const iconPause = wrap.querySelector('.voice-icon-pause');
-        iconPlay.style.display = 'block';
-        iconPause.style.display = 'none';
+        setVoiceIcon(id, false);
         audio.currentTime = 0;
-        bars.forEach(b => b.style.background = 'rgba(255,255,255,0.35)');
+        bars.forEach(b => b.classList.remove('active'));
     });
 }
 
-function formatVoiceTime(s) {
+function fmtVoiceTime(s) {
     if (!isFinite(s)) return '0:00';
     const m = Math.floor(s / 60);
     const sec = Math.floor(s % 60);
     return m + ':' + (sec < 10 ? '0' + sec : sec);
 }
 
-function seekVoiceByClick(e, audioId) {
-    const audio = document.getElementById(audioId);
+function seekVoiceByClick(e, barsWrap) {
+    const id = barsWrap.dataset.voiceBars;
+    const audio = document.querySelector(`[data-voice-audio="${id}"]`);
     if (!audio || !audio.duration) return;
-    const wfm = e.currentTarget;
-    const rect = wfm.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    let pct = x / rect.width;
-    if (pct < 0) pct = 0; if (pct > 1) pct = 1;
-    audio.currentTime = pct * audio.duration;
+    const r = barsWrap.getBoundingClientRect();
+    const x = e.clientX - r.left;
+    audio.currentTime = Math.max(0, Math.min(audio.duration, (x / r.width) * audio.duration));
 }
 
-// =====================================================================
-// PHASE 5b: Theme picker UI + admin settings
-// =====================================================================
-function setThemeFromUI(themeName) {
-    if (!allowUserThemeChange && currentRole !== 'admin') {
-        alert('Theme switching is disabled by the admin.');
-        return;
-    }
-    setTheme(themeName);
-    refreshThemePickerUI();
-}
-
-function refreshThemePickerUI() {
-    document.querySelectorAll('.theme-pick-btn').forEach(b => {
-        if (b.getAttribute('data-theme-pick') === savedTheme) b.classList.add('active');
-        else b.classList.remove('active');
-    });
-    const note = document.getElementById('theme-locked-note');
-    if (note) note.style.display = (!allowUserThemeChange && currentRole !== 'admin') ? 'block' : 'none';
-    // If locked, dim non-active buttons
-    document.querySelectorAll('.theme-pick-btn').forEach(b => {
-        b.style.opacity = (!allowUserThemeChange && currentRole !== 'admin' && !b.classList.contains('active')) ? '0.4' : '1';
-        b.style.cursor = (!allowUserThemeChange && currentRole !== 'admin') ? 'not-allowed' : 'pointer';
-    });
-}
-
-// Hook refreshThemePickerUI into settings open
-const __origOpenModal_theme = window.openModal;
-if (__origOpenModal_theme) {
-    window.openModal = function(id) {
-        __origOpenModal_theme.call(this, id);
-        if (id === 'settingsModal') {
-            setTimeout(refreshThemePickerUI, 30);
+// ============================================================
+// 12. PINNED BAR
+// ============================================================
+function renderPinnedBar() {
+    const bar = document.getElementById('pinned-bar');
+    if (!State.currentRoom) { bar.style.display = 'none'; return; }
+    const arr = State.pinned[State.currentRoom.id] || [];
+    if (arr.length === 0) { bar.style.display = 'none'; return; }
+    bar.style.display = '';
+    const p = arr[State.pinnedIdx % arr.length];
+    const preview = p.msgType === 'text'
+        ? (p.text || '').slice(0, 80)
+        : (p.msgType === 'image' ? '🖼️ Photo' :
+           p.msgType === 'video' ? '🎥 Video' :
+           p.msgType === 'audio' ? '🎤 Voice' :
+           '📎 ' + (p.fileName || 'File'));
+    document.getElementById('pinned-bar-text').innerText = preview;
+    bar.onclick = () => jumpToMessage(p.id);
+    document.getElementById('pinned-unpin-btn').onclick = (e) => {
+        e.stopPropagation();
+        if (confirm('Unpin this message?')) {
+            wsSend({ action: 'unpin_msg', msg_id: p.id });
         }
     };
 }
 
-// =====================================================================
-// Admin: app-wide settings (default theme, allow user override)
-// =====================================================================
-async function loadAdminAppSettings() {
-    const box = document.getElementById('admin-appsettings-content');
-    if (!box) return;
-    box.innerHTML = '<div style="padding:20px; text-align:center; color:var(--c-gray);">Loading...</div>';
-    try {
-        const res = await apiFetch('/api/admin/settings');
-        const d = await res.json();
-        const themes = [
-            { id: 'dark', name: 'Original Dark', color: 'linear-gradient(135deg, #0e1621 0%, #17212b 100%)' },
-            { id: 'light', name: 'Light', color: 'linear-gradient(135deg, #ffffff 0%, #e4e4e7 100%)' },
-            { id: 'telegram', name: 'Telegram Dark', color: 'linear-gradient(135deg, #17212b 0%, #2b5278 100%)' },
-            { id: 'telegram-light', name: 'Telegram Light', color: 'linear-gradient(135deg, #ffffff 0%, #cfd9e0 100%)' },
-        ];
-        box.innerHTML = `
-        <div class="stat-card">
-            <div class="stat-label">Default Theme for New Users</div>
-            <div style="font-size:12px; color:var(--c-gray); margin:6px 0 12px 0;">Users who haven't picked a theme yet will see this one.</div>
-            <div style="display:grid; grid-template-columns:repeat(2, 1fr); gap:10px;">
-                ${themes.map(t => `
-                <button onclick="setAdminTheme('${t.id}')" data-admin-theme="${t.id}" class="admin-theme-pick" style="padding:10px; background:transparent; color:var(--c-text); border:2px solid ${d.default_theme === t.id ? 'var(--c-blue)' : 'var(--border)'}; border-radius:12px; cursor:pointer; text-align:left; font-weight:600;">
-                    <div style="width:100%; height:36px; background:${t.color}; border-radius:8px; margin-bottom:6px;"></div>
-                    ${t.name}${d.default_theme === t.id ? ' <span style="color:var(--c-blue);">✓</span>' : ''}
-                </button>`).join('')}
-            </div>
-        </div>
-        <div class="stat-card" style="margin-top:12px;">
-            <div style="display:flex; justify-content:space-between; align-items:center;">
-                <div>
-                    <div style="font-weight:700; font-size:14px;">Allow users to change theme</div>
-                    <div style="font-size:12px; color:var(--c-gray); margin-top:4px;">If off, users will see the default theme only.</div>
-                </div>
-                <input type="checkbox" id="admin-allow-theme" ${d.allow_user_theme_change === '1' ? 'checked' : ''} onchange="setAdminAllowTheme(this.checked)" style="width:auto; transform:scale(1.5); cursor:pointer;">
-            </div>
-        </div>
-        <div class="stat-card" style="margin-top:12px;">
-            <div class="stat-label">App Name</div>
-            <div style="display:flex; gap:8px; margin-top:8px;">
-                <input id="admin-app-name" type="text" value="${escapeHtml(d.app_name || 'Black Chat')}" maxlength="50" style="flex:1; padding:10px; background:var(--bg-base); border:1px solid var(--border); color:var(--c-white); border-radius:10px;">
-                <button onclick="setAdminAppName()" style="padding:10px 16px; background:var(--c-blue); color:white; border:none; border-radius:10px; cursor:pointer; font-weight:700;">Save</button>
+// ============================================================
+// 13. CONTEXT MENU (long press / right click)
+// ============================================================
+let __pressTimer = null;
+let __pressStart = null;
+function attachLongPress(el, callback) {
+    el.addEventListener('contextmenu', e => { e.preventDefault(); callback(e); });
+    el.addEventListener('touchstart', e => {
+        if (__pressTimer) clearTimeout(__pressTimer);
+        __pressStart = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+        __pressTimer = setTimeout(() => {
+            __pressTimer = null;
+            // Vibrate if available
+            if (navigator.vibrate) navigator.vibrate(40);
+            callback({ clientX: __pressStart.x, clientY: __pressStart.y, target: el });
+        }, 500);
+    }, { passive: true });
+    el.addEventListener('touchmove', e => {
+        if (!__pressStart) return;
+        const dx = e.touches[0].clientX - __pressStart.x;
+        const dy = e.touches[0].clientY - __pressStart.y;
+        if (Math.abs(dx) > 8 || Math.abs(dy) > 8) {
+            if (__pressTimer) { clearTimeout(__pressTimer); __pressTimer = null; }
+        }
+    }, { passive: true });
+    el.addEventListener('touchend', () => {
+        if (__pressTimer) { clearTimeout(__pressTimer); __pressTimer = null; }
+    });
+    el.addEventListener('touchcancel', () => {
+        if (__pressTimer) { clearTimeout(__pressTimer); __pressTimer = null; }
+    });
+}
+
+let __ctxMsg = null;
+function openContextMenu(rowEl, msg) {
+    __ctxMsg = msg;
+    const menu = document.getElementById('ctx-menu');
+    const editBtn = document.getElementById('ctx-edit');
+    const pinBtn = document.getElementById('ctx-pin');
+
+    // Only show edit for own text messages
+    if (msg.user === State.user && msg.msgType === 'text') {
+        editBtn.style.display = '';
+    } else {
+        editBtn.style.display = 'none';
+    }
+    // Pin label
+    const isPinned = (State.pinned[State.currentRoom.id] || []).some(p => p.id === msg.id);
+    pinBtn.querySelector('span').innerText = isPinned ? 'Unpin' : 'Pin';
+
+    // Show menu
+    menu.style.display = 'flex';
+    // Add backdrop click-outside
+    showBackdrop(() => closeContextMenu());
+
+    // Position
+    const bubble = rowEl.querySelector('.bubble');
+    const r = bubble ? bubble.getBoundingClientRect() : rowEl.getBoundingClientRect();
+    requestAnimationFrame(() => positionMenu(menu, r));
+}
+
+function positionMenu(menu, anchorRect) {
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const w = menu.offsetWidth || 230;
+    const h = menu.offsetHeight || 280;
+    const PAD = 10;
+
+    let left, top;
+    const isMobile = vw <= 768;
+
+    if (isMobile) {
+        // Center horizontally; place above the bubble if room, else below
+        left = (vw - w) / 2;
+        const spaceAbove = anchorRect.top;
+        const spaceBelow = vh - anchorRect.bottom;
+        if (spaceAbove >= h + PAD) {
+            top = anchorRect.top - h - 8;
+        } else if (spaceBelow >= h + PAD) {
+            top = anchorRect.bottom + 8;
+        } else {
+            top = (vh - h) / 2;
+        }
+    } else {
+        // Desktop: position right of cursor (or right of bubble for outgoing)
+        left = anchorRect.right - w;
+        top = anchorRect.bottom + 6;
+        if (top + h > vh - PAD) top = anchorRect.top - h - 6;
+        if (left < PAD) left = PAD;
+    }
+    if (left < PAD) left = PAD;
+    if (left + w > vw - PAD) left = vw - w - PAD;
+    if (top < PAD) top = PAD;
+    if (top + h > vh - PAD) top = vh - h - PAD;
+    menu.style.left = left + 'px';
+    menu.style.top = top + 'px';
+}
+
+function closeContextMenu() {
+    document.getElementById('ctx-menu').style.display = 'none';
+    hideBackdrop();
+    __ctxMsg = null;
+}
+
+function showBackdrop(onClick) {
+    let bd = document.getElementById('ctx-backdrop');
+    if (!bd) {
+        bd = document.createElement('div');
+        bd.id = 'ctx-backdrop';
+        document.body.appendChild(bd);
+    }
+    bd.onclick = onClick;
+}
+function hideBackdrop() {
+    const bd = document.getElementById('ctx-backdrop');
+    if (bd) bd.remove();
+}
+
+function handleCtxAction(action) {
+    if (!__ctxMsg) return;
+    const msg = __ctxMsg;
+    switch (action) {
+        case 'reply':
+            State.replyTo = { id: msg.id, user: msg.user, text: msg.text || `[${msg.msgType}]` };
+            renderReplyBar();
+            document.getElementById('msg-input').focus();
+            break;
+        case 'copy':
+            try { navigator.clipboard.writeText(msg.text || msg.url || ''); } catch {}
+            break;
+        case 'edit':
+            State.editId = msg.id;
+            document.getElementById('msg-input').value = msg.text || '';
+            document.getElementById('msg-input').focus();
+            updateComposerButton();
+            break;
+        case 'forward':
+            openForwardModal(msg);
+            break;
+        case 'pin':
+            const isPinned = (State.pinned[State.currentRoom.id] || []).some(p => p.id === msg.id);
+            wsSend({ action: isPinned ? 'unpin_msg' : 'pin_msg', msg_id: msg.id });
+            break;
+        case 'select':
+            State.selectionMode = true;
+            State.selectedIds.add(msg.id);
+            // (Selection UI can be extended later)
+            break;
+        case 'delete':
+            if (confirm('Delete this message?')) {
+                wsSend({ action: 'delete_msg', msg_ids: [msg.id] });
+            }
+            break;
+    }
+    closeContextMenu();
+}
+
+function renderReplyBar() {
+    const bar = document.getElementById('reply-bar');
+    if (!State.replyTo) { bar.style.display = 'none'; return; }
+    document.getElementById('reply-bar-name').innerText = State.replyTo.user;
+    document.getElementById('reply-bar-text').innerText = State.replyTo.text;
+    bar.style.display = 'flex';
+}
+function cancelReply() {
+    State.replyTo = null;
+    State.editId = null;
+    document.getElementById('reply-bar').style.display = 'none';
+    updateComposerButton();
+}
+
+// ============================================================
+// 14. COMPOSER (input)
+// ============================================================
+function autoResize(el) {
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 132) + 'px';
+}
+
+function updateComposerButton() {
+    const input = document.getElementById('msg-input');
+    const sendBtn = document.getElementById('send-btn');
+    const micBtn = document.getElementById('mic-btn');
+    const hasText = input.value.trim().length > 0;
+    sendBtn.style.display = hasText ? 'flex' : 'none';
+    micBtn.style.display = hasText ? 'none' : 'flex';
+}
+
+function sendText() {
+    const input = document.getElementById('msg-input');
+    const text = input.value.trim();
+    if (!text || !State.currentRoom) return;
+
+    if (State.editId) {
+        wsSend({ action: 'edit_msg', msg_id: State.editId, text });
+    } else {
+        wsSend({
+            action: 'send_msg',
+            room: State.currentRoom.id,
+            user: State.user,
+            targetUser: State.currentRoom.type === 'dm' ? State.currentRoom.partner : null,
+            msgType: 'text',
+            text,
+            replyTo: State.replyTo,
+        });
+    }
+
+    // RESET textarea - force back to single-line
+    input.value = '';
+    input.style.height = 'auto';
+    requestAnimationFrame(() => {
+        input.style.height = Math.max(40, input.scrollHeight) + 'px';
+    });
+
+    cancelReply();
+    updateComposerButton();
+}
+
+// Typing indicator: notify other side
+let __lastTypingSent = 0;
+function notifyTyping() {
+    if (!State.currentRoom) return;
+    const now = Date.now();
+    if (now - __lastTypingSent < 3000) return;
+    __lastTypingSent = now;
+    wsSend({ action: 'typing', room: State.currentRoom.id });
+}
+
+// ============================================================
+// 15. UPLOAD WITH PROGRESS (in-bubble)
+// ============================================================
+function uploadFiles(files) {
+    if (!files || !files.length) return;
+    Array.from(files).forEach(f => uploadOne(f));
+}
+
+function uploadOne(file) {
+    if (!State.currentRoom) return;
+    // Quota check
+    if (State.quotaMB > 0) {
+        const rem = State.quotaMB * 1024 * 1024 - State.usedBytes;
+        if (file.size > rem) {
+            alert(`Quota exceeded. ${fmtBytes(Math.max(0, rem))} remaining.`);
+            return;
+        }
+    }
+
+    const tempId = 'up_' + Math.random().toString(36).slice(2, 9);
+    const previewURL = (file.type.startsWith('image/') || file.type.startsWith('video/')) ? URL.createObjectURL(file) : null;
+    const row = createUploadPlaceholder(file, tempId, previewURL);
+
+    const xhr = new XMLHttpRequest();
+    State['xhr_' + tempId] = xhr;
+    const fd = new FormData();
+    fd.append('file', file, file.name);
+
+    xhr.upload.addEventListener('progress', e => {
+        if (e.lengthComputable) {
+            const pct = Math.round((e.loaded / e.total) * 100);
+            updateUploadProgress(tempId, pct);
+        }
+    });
+    xhr.addEventListener('load', () => {
+        delete State['xhr_' + tempId];
+        if (previewURL) URL.revokeObjectURL(previewURL);
+        if (xhr.status >= 200 && xhr.status < 300) {
+            try {
+                const data = JSON.parse(xhr.responseText);
+                if (data.used_bytes != null) State.usedBytes = data.used_bytes;
+                wsSend({
+                    action: 'send_msg',
+                    room: State.currentRoom.id,
+                    user: State.user,
+                    targetUser: State.currentRoom.type === 'dm' ? State.currentRoom.partner : null,
+                    msgType: data.type,
+                    url: data.url,
+                    fileName: data.name,
+                    fileSize: data.size,
+                    replyTo: State.replyTo,
+                });
+                cancelReply();
+                row.remove();
+            } catch (e) {
+                showUploadError(tempId, 'Bad response');
+            }
+        } else {
+            let detail = 'Failed';
+            try { detail = JSON.parse(xhr.responseText).detail || detail; } catch {}
+            showUploadError(tempId, detail);
+        }
+    });
+    xhr.addEventListener('error', () => {
+        if (previewURL) URL.revokeObjectURL(previewURL);
+        delete State['xhr_' + tempId];
+        showUploadError(tempId, 'Network error');
+    });
+    xhr.addEventListener('abort', () => {
+        if (previewURL) URL.revokeObjectURL(previewURL);
+        delete State['xhr_' + tempId];
+        row.remove();
+    });
+
+    xhr.open('POST', '/api/upload', true);
+    if (State.token) xhr.setRequestHeader('Authorization', 'Bearer ' + State.token);
+    xhr.send(fd);
+}
+
+function createUploadPlaceholder(file, tempId, previewURL) {
+    const container = document.getElementById('messages');
+    const row = document.createElement('div');
+    row.className = 'msg-row out';
+    row.dataset.uploadId = tempId;
+
+    let mediaHTML;
+    if (previewURL && file.type.startsWith('image/')) {
+        mediaHTML = `<div class="media"><img src="${previewURL}"></div>`;
+    } else if (previewURL && file.type.startsWith('video/')) {
+        mediaHTML = `<div class="media"><video src="${previewURL}" muted></video></div>`;
+    } else {
+        mediaHTML = `<div class="file-row">
+            <div class="file-icon"><svg><use href="#i-file"/></svg></div>
+            <div class="file-meta">
+                <div class="file-name">${esc(file.name)}</div>
+                <div class="file-size">${fmtBytes(file.size)}</div>
             </div>
         </div>`;
-    } catch(e) {
-        box.innerHTML = `<div style="color:var(--c-red); padding:10px;">${escapeHtml(e.message)}</div>`;
+    }
+
+    row.innerHTML = `
+        <div class="bubble with-media" style="position:relative">
+            ${mediaHTML}
+            <div class="upload-overlay">
+                <div class="upload-ring">
+                    <svg width="56" height="56" viewBox="0 0 56 56">
+                        <circle cx="28" cy="28" r="24" fill="none" stroke="rgba(255,255,255,0.25)" stroke-width="3"/>
+                        <circle data-ring-fg="${tempId}" cx="28" cy="28" r="24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-dasharray="150.8" stroke-dashoffset="150.8"/>
+                    </svg>
+                    <button class="upload-cancel-btn" onclick="cancelUpload('${tempId}')">
+                        <svg><use href="#i-close"/></svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+    `;
+    container.appendChild(row);
+    container.scrollTop = container.scrollHeight;
+    return row;
+}
+
+function updateUploadProgress(tempId, pct) {
+    const ring = document.querySelector(`[data-ring-fg="${tempId}"]`);
+    if (!ring) return;
+    const C = 150.8;
+    ring.setAttribute('stroke-dashoffset', String(C * (1 - pct / 100)));
+}
+
+function showUploadError(tempId, msg) {
+    const row = document.querySelector(`[data-upload-id="${tempId}"]`);
+    if (!row) return;
+    const ov = row.querySelector('.upload-overlay');
+    if (ov) ov.innerHTML = `<div style="background:rgba(0,0,0,0.7);padding:8px 14px;border-radius:10px;color:white;font-size:13px">❌ ${esc(msg)}</div>`;
+    setTimeout(() => row.remove(), 3500);
+}
+
+function cancelUpload(tempId) {
+    const xhr = State['xhr_' + tempId];
+    if (xhr) { try { xhr.abort(); } catch {} }
+}
+
+// ============================================================
+// 16. VOICE RECORDING
+// ============================================================
+let mediaRecorder = null;
+let recChunks = [];
+let recStart = null;
+
+async function startRecording() {
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+        mediaRecorder = new MediaRecorder(stream, { mimeType: getRecordingMime() });
+        recChunks = [];
+        recStart = Date.now();
+        mediaRecorder.ondataavailable = e => { if (e.data.size > 0) recChunks.push(e.data); };
+        mediaRecorder.onstop = async () => {
+            stream.getTracks().forEach(t => t.stop());
+            const blob = new Blob(recChunks, { type: getRecordingMime() });
+            const filename = `voice_${Date.now()}.${blob.type.includes('webm') ? 'webm' : 'ogg'}`;
+            const file = new File([blob], filename, { type: blob.type });
+            uploadOne(file);
+        };
+        mediaRecorder.start();
+        updateMicUI(true);
+    } catch (e) {
+        alert('Could not start recording: ' + (e.message || e));
     }
 }
 
-async function setAdminTheme(themeName) {
-    const res = await apiJson('/api/admin/settings', { default_theme: themeName });
-    if (res.ok) {
-        // Update local snapshot so users with no theme pick get it too
-        serverDefaultTheme = themeName;
-        loadAdminAppSettings();
-        alert('✅ Default theme set to "' + themeName + '". New users will see it.');
+function getRecordingMime() {
+    if (typeof MediaRecorder !== 'undefined') {
+        if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) return 'audio/webm;codecs=opus';
+        if (MediaRecorder.isTypeSupported('audio/webm')) return 'audio/webm';
+        if (MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')) return 'audio/ogg;codecs=opus';
+    }
+    return '';
+}
+
+function stopRecording() {
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+        mediaRecorder.stop();
+    }
+    updateMicUI(false);
+}
+
+function updateMicUI(recording) {
+    const btn = document.getElementById('mic-btn');
+    if (!btn) return;
+    if (recording) {
+        btn.style.background = 'var(--red)';
+        btn.style.color = 'white';
+    } else {
+        btn.style.background = '';
+        btn.style.color = '';
     }
 }
 
-async function setAdminAllowTheme(allow) {
-    await apiJson('/api/admin/settings', { allow_user_theme_change: allow });
-    allowUserThemeChange = allow;
-    if (!allow) {
-        // Force everyone to default
-        setTheme(serverDefaultTheme);
-    }
-    alert('✅ Saved.');
+// ============================================================
+// 17. WEBRTC CALLS
+// ============================================================
+let pc = null, localStream = null, remoteStream = null;
+let callPeer = null, callDir = null, callMode = 'audio', callState = 'idle';
+let pendingICE = [];
+let callStartedAt = null, callTimer = null;
+let isMuted = false, isCamOff = false, facing = 'user';
+let iceServersCache = null;
+
+async function getIceServers() {
+    if (iceServersCache) return iceServersCache;
+    try {
+        const res = await api('/api/turn-config');
+        if (res.ok) {
+            const d = await res.json();
+            iceServersCache = d.iceServers;
+            return iceServersCache;
+        }
+    } catch {}
+    iceServersCache = [{ urls: ['stun:stun.l.google.com:19302'] }];
+    return iceServersCache;
 }
 
-async function setAdminAppName() {
-    const name = document.getElementById('admin-app-name').value.trim();
+async function startCall(mode) {
+    if (callState !== 'idle') { alert('Already in a call'); return; }
+    if (!State.currentRoom || State.currentRoom.type !== 'dm') return;
+    if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost') {
+        alert('Calls require HTTPS.');
+        return;
+    }
+    callPeer = State.currentRoom.partner;
+    callMode = mode;
+    callDir = 'out';
+    callState = 'ringing';
+    pendingICE = [];
+    showCallUI({ title: callPeer, status: mode === 'video' ? 'Video calling…' : 'Calling…', mode });
+
+    try {
+        localStream = await navigator.mediaDevices.getUserMedia(mediaConstraints(mode));
+        attachLocalVideo();
+        const ice = await getIceServers();
+        pc = new RTCPeerConnection({ iceServers: ice });
+        bindPCEvents();
+        localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+        const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: mode === 'video' });
+        await pc.setLocalDescription(offer);
+        wsSend({ action: 'webrtc', type: 'offer', mode, targetUser: callPeer, offer, from: State.user });
+    } catch (e) {
+        alert('Call start failed: ' + (e.message || e));
+        endCall(false);
+    }
+}
+
+function mediaConstraints(mode) {
+    if (mode === 'video') {
+        return {
+            audio: { echoCancellation: true, noiseSuppression: true },
+            video: { facingMode: facing, width: { ideal: 640 }, height: { ideal: 480 } },
+        };
+    }
+    return { audio: { echoCancellation: true, noiseSuppression: true }, video: false };
+}
+
+function bindPCEvents() {
+    pc.onicecandidate = e => {
+        if (e.candidate && callPeer) {
+            wsSend({ action: 'webrtc', type: 'ice', targetUser: callPeer, candidate: e.candidate, from: State.user });
+        }
+    };
+    pc.ontrack = e => {
+        if (!remoteStream) remoteStream = new MediaStream();
+        e.streams[0].getTracks().forEach(t => { try { remoteStream.addTrack(t); } catch {} });
+        attachRemoteMedia();
+    };
+    pc.oniceconnectionstatechange = () => {
+        const s = pc.iceConnectionState;
+        if (s === 'connected' || s === 'completed') {
+            if (callState !== 'in-call') {
+                callState = 'in-call';
+                callStartedAt = Date.now();
+                if (callTimer) clearInterval(callTimer);
+                callTimer = setInterval(updateCallDuration, 1000);
+                setInCallButtons();
+            }
+        } else if (s === 'failed') {
+            setTimeout(() => endCall(true), 2000);
+        }
+    };
+}
+
+function attachLocalVideo() {
+    const lv = document.getElementById('local-video');
+    if (lv && callMode === 'video') {
+        lv.srcObject = localStream;
+        lv.style.display = '';
+        try { lv.play(); } catch {}
+    } else if (lv) {
+        lv.style.display = 'none';
+    }
+}
+function attachRemoteMedia() {
+    const rv = document.getElementById('remote-video');
+    const ra = document.getElementById('remote-audio');
+    if (callMode === 'video' && rv) {
+        rv.srcObject = remoteStream;
+        rv.style.display = '';
+        try { rv.play(); } catch {}
+    }
+    if (ra) {
+        ra.srcObject = remoteStream;
+        try { ra.play(); } catch {}
+    }
+}
+
+function handleWebRTC(d) {
+    if (d.targetUser !== State.user) return;
+    if (d.type === 'offer') {
+        if (callState !== 'idle') {
+            wsSend({ action: 'webrtc', type: 'busy', targetUser: d.from, from: State.user });
+            return;
+        }
+        callPeer = d.from;
+        callMode = d.mode || 'audio';
+        callDir = 'in';
+        callState = 'ringing';
+        pendingICE = [];
+        window._pendingOffer = d.offer;
+        showCallUI({ title: callPeer, status: 'Incoming ' + callMode + ' call', mode: callMode, incoming: true });
+        try { document.getElementById('notif-sound').play(); } catch {}
+    } else if (d.type === 'answer') {
+        if (pc) pc.setRemoteDescription(new RTCSessionDescription(d.answer)).then(flushICE).catch(e => console.error(e));
+    } else if (d.type === 'ice') {
+        if (pc && pc.remoteDescription) {
+            pc.addIceCandidate(new RTCIceCandidate(d.candidate)).catch(() => {});
+        } else {
+            pendingICE.push(d.candidate);
+        }
+    } else if (d.type === 'busy') {
+        document.getElementById('call-status').innerText = 'Busy';
+        setTimeout(() => endCall(false), 1500);
+    } else if (d.type === 'end') {
+        endCall(false);
+    }
+}
+
+async function flushICE() {
+    while (pendingICE.length && pc) {
+        const c = pendingICE.shift();
+        try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch {}
+    }
+}
+
+async function acceptCall() {
+    if (!window._pendingOffer) return endCall(true);
+    const offer = window._pendingOffer;
+    delete window._pendingOffer;
+    callState = 'connecting';
+    setInCallButtons();
+    document.getElementById('call-status').innerText = 'Connecting…';
+    try {
+        localStream = await navigator.mediaDevices.getUserMedia(mediaConstraints(callMode));
+        attachLocalVideo();
+        const ice = await getIceServers();
+        pc = new RTCPeerConnection({ iceServers: ice });
+        bindPCEvents();
+        localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+        await pc.setRemoteDescription(new RTCSessionDescription(offer));
+        await flushICE();
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        wsSend({ action: 'webrtc', type: 'answer', targetUser: callPeer, answer, from: State.user });
+    } catch (e) {
+        alert('Accept failed: ' + (e.message || e));
+        endCall(true);
+    }
+}
+
+function endCall(notify = true) {
+    if (callTimer) { clearInterval(callTimer); callTimer = null; }
+    if (pc) { try { pc.close(); } catch {} pc = null; }
+    if (localStream) { try { localStream.getTracks().forEach(t => t.stop()); } catch {} localStream = null; }
+    remoteStream = null;
+    const rv = document.getElementById('remote-video');
+    const ra = document.getElementById('remote-audio');
+    const lv = document.getElementById('local-video');
+    if (rv) { rv.srcObject = null; rv.style.display = 'none'; }
+    if (ra) ra.srcObject = null;
+    if (lv) { lv.srcObject = null; lv.style.display = 'none'; }
+    if (notify && callPeer) wsSend({ action: 'webrtc', type: 'end', targetUser: callPeer, from: State.user });
+    document.getElementById('call-modal').style.display = 'none';
+    callPeer = null;
+    callState = 'idle';
+    isMuted = false;
+    isCamOff = false;
+    pendingICE = [];
+}
+
+function showCallUI({ title, status, mode, incoming = false }) {
+    document.getElementById('call-modal').style.display = 'flex';
+    document.getElementById('call-name').innerText = title;
+    document.getElementById('call-status').innerText = status;
+    const av = document.getElementById('call-avatar');
+    const aURL = State.avatars[title];
+    if (aURL) av.innerHTML = `<img src="${esc(aURL)}">`;
+    else av.innerText = (title || '?').charAt(0).toUpperCase();
+    if (incoming) setIncomingButtons();
+    else setOutgoingButtons();
+}
+
+function setIncomingButtons() {
+    document.getElementById('call-controls').innerHTML = `
+        <button class="call-btn accept" onclick="acceptCall()"><svg><use href="#i-phone"/></svg></button>
+        <button class="call-btn reject" onclick="endCall()"><svg><use href="#i-close"/></svg></button>
+    `;
+}
+function setOutgoingButtons() {
+    document.getElementById('call-controls').innerHTML = `
+        <button class="call-btn end" onclick="endCall()"><svg><use href="#i-close"/></svg></button>
+    `;
+}
+function setInCallButtons() {
+    const isVideo = callMode === 'video';
+    document.getElementById('call-controls').innerHTML = `
+        <button class="call-btn ${isMuted ? 'active' : ''}" onclick="toggleMute()"><svg><use href="#${isMuted ? 'i-mic-off' : 'i-mic'}"/></svg></button>
+        ${isVideo ? `<button class="call-btn ${isCamOff ? 'active' : ''}" onclick="toggleCamera()"><svg><use href="#${isCamOff ? 'i-cam-off' : 'i-video'}"/></svg></button>` : ''}
+        ${isVideo ? `<button class="call-btn" onclick="switchCamera()"><svg><use href="#i-switch-cam"/></svg></button>` : ''}
+        <button class="call-btn end" onclick="endCall()"><svg><use href="#i-close"/></svg></button>
+    `;
+}
+
+function updateCallDuration() {
+    if (!callStartedAt) return;
+    const s = Math.floor((Date.now() - callStartedAt) / 1000);
+    const m = Math.floor(s / 60);
+    const sec = s % 60;
+    document.getElementById('call-status').innerText = m + ':' + (sec < 10 ? '0' + sec : sec);
+}
+
+function toggleMute() {
+    if (!localStream) return;
+    isMuted = !isMuted;
+    localStream.getAudioTracks().forEach(t => t.enabled = !isMuted);
+    setInCallButtons();
+}
+function toggleCamera() {
+    if (!localStream || callMode !== 'video') return;
+    isCamOff = !isCamOff;
+    localStream.getVideoTracks().forEach(t => t.enabled = !isCamOff);
+    setInCallButtons();
+}
+async function switchCamera() {
+    if (!localStream || callMode !== 'video') return;
+    const newFacing = facing === 'user' ? 'environment' : 'user';
+    try {
+        const s = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: { facingMode: newFacing, width: { ideal: 640 }, height: { ideal: 480 } },
+        });
+        const newTrack = s.getVideoTracks()[0];
+        if (!newTrack) return;
+        const sender = pc.getSenders().find(x => x.track && x.track.kind === 'video');
+        if (sender) await sender.replaceTrack(newTrack);
+        localStream.getVideoTracks().forEach(t => { try { t.stop(); } catch {}; localStream.removeTrack(t); });
+        localStream.addTrack(newTrack);
+        attachLocalVideo();
+        facing = newFacing;
+    } catch (e) {
+        alert('Camera switch failed: ' + (e.message || e));
+    }
+}
+
+// ============================================================
+// 18. REACTIONS
+// ============================================================
+function sendReaction(msgId, emoji) {
+    wsSend({ action: 'react_msg', msg_id: msgId, emoji });
+}
+
+// ============================================================
+// 19. JUMP TO MESSAGE
+// ============================================================
+function jumpToMessage(id) {
+    const el = document.getElementById('msg-' + id);
+    if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        const bubble = el.querySelector('.bubble');
+        if (bubble) {
+            bubble.style.transition = 'box-shadow 0.4s';
+            bubble.style.boxShadow = '0 0 0 3px var(--accent)';
+            setTimeout(() => { bubble.style.boxShadow = ''; }, 1500);
+        }
+    }
+}
+
+// ============================================================
+// 20. LIGHTBOX
+// ============================================================
+function openLightbox(url, type) {
+    document.getElementById('lightbox').style.display = 'flex';
+    document.getElementById('lightbox-content').innerHTML =
+        type === 'video' ? `<video src="${esc(url)}" controls autoplay></video>`
+                         : `<img src="${esc(url)}">`;
+}
+function closeLightbox() {
+    document.getElementById('lightbox').style.display = 'none';
+    document.getElementById('lightbox-content').innerHTML = '';
+}
+
+// ============================================================
+// 21. MODALS
+// ============================================================
+function showModal(html) {
+    document.getElementById('modal-box').innerHTML = html;
+    document.getElementById('modal-overlay').style.display = 'flex';
+}
+function closeModal() {
+    document.getElementById('modal-overlay').style.display = 'none';
+    document.getElementById('modal-box').innerHTML = '';
+}
+
+function openNewChatModal() {
+    closeMenu();
+    showModal(`
+        <h3 class="modal-title">New Chat or Group</h3>
+        <div class="modal-row" style="border:none">
+            <div style="width:100%">
+                <button class="btn-primary" onclick="openNewDMModal()" style="width:100%;margin-bottom:8px">
+                    <svg style="width:18px;height:18px;fill:currentColor;vertical-align:middle;margin-right:6px"><use href="#i-user-plus"/></svg>
+                    New Private Chat
+                </button>
+                <button class="btn-primary" onclick="openNewGroupModal()" style="width:100%">
+                    <svg style="width:18px;height:18px;fill:currentColor;vertical-align:middle;margin-right:6px"><use href="#i-users"/></svg>
+                    New Group
+                </button>
+            </div>
+        </div>
+        <div class="modal-actions">
+            <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+        </div>
+    `);
+}
+
+function openNewDMModal() {
+    showModal(`
+        <h3 class="modal-title">Start Private Chat</h3>
+        <input type="text" id="new-dm-username" placeholder="Username">
+        <div class="modal-actions">
+            <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+            <button class="btn-primary" onclick="submitNewDM()">Start</button>
+        </div>
+    `);
+    setTimeout(() => document.getElementById('new-dm-username').focus(), 100);
+}
+
+async function submitNewDM() {
+    const u = document.getElementById('new-dm-username').value.trim();
+    if (!u) return;
+    const res = await apiPost('/api/action', { action: 'add_contact', target: u });
+    const d = await res.json();
+    if (!d.success) { alert(d.msg || 'Failed'); return; }
+    closeModal();
+    await loadInitData();
+    const roomId = dmRoomId(State.user, d.target);
+    const room = State.rooms.find(r => r.id === roomId);
+    if (room) openChat(room);
+}
+
+function openNewGroupModal() {
+    const userList = State.allUsers.filter(u => u !== State.user).map(u =>
+        `<label style="display:flex;align-items:center;gap:8px;padding:8px;border-radius:8px;cursor:pointer">
+            <input type="checkbox" value="${esc(u)}" style="width:18px;height:18px"> ${esc(u)}
+        </label>`
+    ).join('');
+    showModal(`
+        <h3 class="modal-title">Create Group</h3>
+        <input type="text" id="new-group-name" placeholder="Group name">
+        <div style="font-size:13px;color:var(--text-3);margin:8px 0">Select members:</div>
+        <div id="new-group-members" style="max-height:240px;overflow-y:auto;background:var(--bg-input);border-radius:10px;padding:6px">
+            ${userList || '<div style="padding:14px;color:var(--text-3);text-align:center">No other users</div>'}
+        </div>
+        <div class="modal-actions">
+            <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+            <button class="btn-primary" onclick="submitNewGroup()">Create</button>
+        </div>
+    `);
+}
+
+async function submitNewGroup() {
+    const name = document.getElementById('new-group-name').value.trim();
     if (!name) return;
-    await apiJson('/api/admin/settings', { app_name: name });
-    alert('✅ Saved.');
+    const members = Array.from(document.querySelectorAll('#new-group-members input:checked')).map(c => c.value);
+    const res = await apiPost('/api/action', { action: 'create_room', type: 'group', name, members });
+    const d = await res.json();
+    if (!d.success) { alert(d.msg || 'Failed'); return; }
+    closeModal();
+    await loadInitData();
+    const room = State.rooms.find(r => r.id === d.room_id);
+    if (room) openChat(room);
 }
+
+function openSettingsModal() {
+    closeMenu();
+    const usedMB = (State.usedBytes / (1024*1024)).toFixed(1);
+    const pct = State.quotaMB > 0 ? Math.min(100, (State.usedBytes / (State.quotaMB*1024*1024) * 100)) : 0;
+    showModal(`
+        <h3 class="modal-title">Settings</h3>
+        <div style="text-align:center;padding:14px 0;border-bottom:1px solid var(--border)">
+            <div style="width:80px;height:80px;border-radius:50%;background:var(--accent);margin:0 auto 10px auto;display:flex;align-items:center;justify-content:center;font-size:28px;color:white">${esc(State.user.charAt(0).toUpperCase())}</div>
+            <div style="font-weight:600;font-size:16px">${esc(State.user)}</div>
+            <div style="font-size:12px;color:var(--text-3)">${esc(State.role)}</div>
+        </div>
+        <div class="modal-row">
+            <div>
+                <div class="modal-row-label">Storage</div>
+                <div class="modal-row-sub">${usedMB} MB / ${State.quotaMB} MB</div>
+                <div style="width:200px;height:5px;background:rgba(255,255,255,0.1);border-radius:10px;margin-top:6px">
+                    <div style="width:${pct}%;height:100%;background:${pct>90?'var(--red)':'var(--accent)'};border-radius:10px"></div>
+                </div>
+            </div>
+        </div>
+        <div class="modal-actions">
+            <button class="btn-cancel" onclick="closeModal()">Close</button>
+            <button class="btn-danger" onclick="doLogout()">Logout</button>
+        </div>
+    `);
+}
+
+function openForwardModal(msg) {
+    const items = State.rooms.filter(r => r.id !== State.currentRoom.id).map(r =>
+        `<div onclick="doForward('${esc(msg.id)}', '${esc(r.id)}')" style="display:flex;align-items:center;gap:10px;padding:10px;border-radius:8px;cursor:pointer" onmouseover="this.style.background='var(--bg-hover)'" onmouseout="this.style.background=''">
+            <div class="avatar" style="width:36px;height:36px;font-size:14px">${esc(r.name.charAt(0).toUpperCase())}</div>
+            <div>${esc(r.name)}</div>
+        </div>`
+    ).join('');
+    showModal(`
+        <h3 class="modal-title">Forward to…</h3>
+        <div style="max-height:340px;overflow-y:auto">${items}</div>
+        <div class="modal-actions">
+            <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+        </div>
+    `);
+}
+function doForward(msgId, targetRoom) {
+    wsSend({ action: 'forward_msg', msg_ids: [msgId], target_room: targetRoom });
+    closeModal();
+}
+
+// ============================================================
+// 22. MENUS (dropdown)
+// ============================================================
+function openMenu(menuId, anchorEl) {
+    closeMenu();
+    const menu = document.getElementById(menuId);
+    menu.style.display = 'flex';
+    showBackdrop(() => closeMenu());
+    requestAnimationFrame(() => {
+        const r = anchorEl.getBoundingClientRect();
+        const w = menu.offsetWidth;
+        const h = menu.offsetHeight;
+        let left = r.right - w;
+        let top = r.bottom + 6;
+        if (left < 8) left = 8;
+        if (top + h > window.innerHeight - 8) top = r.top - h - 6;
+        menu.style.left = left + 'px';
+        menu.style.top = top + 'px';
+    });
+}
+function closeMenu() {
+    document.getElementById('main-menu').style.display = 'none';
+    document.getElementById('chat-menu').style.display = 'none';
+    hideBackdrop();
+}
+
+// ============================================================
+// 23. SETUP HANDLERS
+// ============================================================
+function setupHandlers() {
+    // Sidebar
+    document.getElementById('menu-btn').addEventListener('click', e => {
+        openMenu('main-menu', e.currentTarget);
+    });
+    document.getElementById('sidebar-search').addEventListener('input', renderChatList);
+    document.getElementById('new-chat-btn').addEventListener('click', () => openNewChatModal());
+
+    // Main menu actions
+    document.getElementById('main-menu').addEventListener('click', e => {
+        const btn = e.target.closest('button[data-action]');
+        if (!btn) return;
+        const a = btn.dataset.action;
+        closeMenu();
+        if (a === 'new-group') openNewGroupModal();
+        else if (a === 'contacts') openNewDMModal();
+        else if (a === 'settings') openSettingsModal();
+        else if (a === 'admin') openAdminPanel();
+        else if (a === 'logout') doLogout();
+    });
+
+    // Chat header
+    document.getElementById('back-btn').addEventListener('click', closeChat);
+    document.getElementById('chat-call-btn').addEventListener('click', () => startCall('audio'));
+    document.getElementById('chat-video-btn').addEventListener('click', () => startCall('video'));
+    document.getElementById('chat-menu-btn').addEventListener('click', e => {
+        openMenu('chat-menu', e.currentTarget);
+    });
+    document.getElementById('chat-menu').addEventListener('click', e => {
+        const btn = e.target.closest('button[data-action]');
+        if (!btn) return;
+        closeMenu();
+        if (btn.dataset.action === 'clear') {
+            if (confirm('Clear chat history (visible only on your side)?')) {
+                document.getElementById('messages').innerHTML = '';
+                State.messages[State.currentRoom.id] = [];
+            }
+        }
+    });
+
+    // Context menu actions
+    document.getElementById('ctx-menu').addEventListener('click', e => {
+        const btn = e.target.closest('button[data-action]');
+        if (!btn) return;
+        handleCtxAction(btn.dataset.action);
+    });
+
+    // Composer
+    const input = document.getElementById('msg-input');
+    input.addEventListener('input', () => {
+        autoResize(input);
+        updateComposerButton();
+        notifyTyping();
+    });
+    input.addEventListener('keydown', e => {
+        if (e.key === 'Enter' && !e.shiftKey && window.innerWidth > 768) {
+            e.preventDefault();
+            sendText();
+        }
+    });
+    document.getElementById('send-btn').addEventListener('click', sendText);
+    document.getElementById('attach-btn').addEventListener('click', () => {
+        document.getElementById('file-input').click();
+    });
+    document.getElementById('file-input').addEventListener('change', e => {
+        uploadFiles(e.target.files);
+        e.target.value = '';
+    });
+
+    // Voice recording
+    const mic = document.getElementById('mic-btn');
+    let micDown = false;
+    mic.addEventListener('mousedown', () => { micDown = true; startRecording(); });
+    mic.addEventListener('mouseup', () => { if (micDown) { micDown = false; stopRecording(); } });
+    mic.addEventListener('mouseleave', () => { if (micDown) { micDown = false; stopRecording(); } });
+    mic.addEventListener('touchstart', e => { e.preventDefault(); micDown = true; startRecording(); }, { passive: false });
+    mic.addEventListener('touchend', () => { if (micDown) { micDown = false; stopRecording(); } });
+    mic.addEventListener('touchcancel', () => { if (micDown) { micDown = false; stopRecording(); } });
+
+    // Scroll-to-bottom button
+    const messagesList = document.getElementById('messages');
+    messagesList.addEventListener('scroll', () => {
+        const near = (messagesList.scrollHeight - messagesList.scrollTop - messagesList.clientHeight) < 100;
+        const btn = document.getElementById('scroll-bottom-btn');
+        if (near) {
+            btn.style.display = 'none';
+            document.getElementById('unread-pill').innerText = '0';
+            document.getElementById('unread-pill').style.display = 'none';
+            if (State.currentRoom) wsSend({ action: 'read_messages', room: State.currentRoom.id });
+        } else {
+            btn.style.display = 'flex';
+        }
+    });
+    document.getElementById('scroll-bottom-btn').addEventListener('click', () => {
+        messagesList.scrollTop = messagesList.scrollHeight;
+    });
+
+    // Voice clicks (delegate)
+    setupVoiceClicks();
+
+    // Window focus → mark as read
+    window.addEventListener('focus', () => {
+        if (State.currentRoom) wsSend({ action: 'read_messages', room: State.currentRoom.id });
+    });
+
+    // ESC closes things
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape') {
+            closeContextMenu();
+            closeMenu();
+            if (document.getElementById('lightbox').style.display === 'flex') closeLightbox();
+        }
+    });
+
+    // Initial composer state
+    updateComposerButton();
+}
+
+// ============================================================
+// 24. ADMIN PANEL (lazy)
+// ============================================================
+function openAdminPanel() {
+    if (State.role !== 'admin') return;
+    showModal(`
+        <h3 class="modal-title">Admin Panel</h3>
+        <div style="display:flex;gap:6px;border-bottom:1px solid var(--border);margin-bottom:14px;flex-wrap:wrap">
+            <button class="admin-tab active" data-tab="users" onclick="loadAdminTab('users', this)" style="padding:8px 12px;font-size:13px;border-bottom:2px solid var(--accent);font-weight:600">Users</button>
+            <button class="admin-tab" data-tab="stats" onclick="loadAdminTab('stats', this)" style="padding:8px 12px;font-size:13px;border-bottom:2px solid transparent;color:var(--text-3)">Stats</button>
+            <button class="admin-tab" data-tab="theme" onclick="loadAdminTab('theme', this)" style="padding:8px 12px;font-size:13px;border-bottom:2px solid transparent;color:var(--text-3)">Theme</button>
+            <button class="admin-tab" data-tab="updates" onclick="loadAdminTab('updates', this)" style="padding:8px 12px;font-size:13px;border-bottom:2px solid transparent;color:var(--text-3)">Updates</button>
+        </div>
+        <div id="admin-content">Loading…</div>
+        <div class="modal-actions">
+            <button class="btn-cancel" onclick="closeModal()">Close</button>
+        </div>
+    `);
+    loadAdminTab('users');
+}
+
+function loadAdminTab(tab, btnEl) {
+    if (btnEl) {
+        document.querySelectorAll('.admin-tab').forEach(t => { t.style.borderBottomColor = 'transparent'; t.style.color = 'var(--text-3)'; });
+        btnEl.style.borderBottomColor = 'var(--accent)';
+        btnEl.style.color = 'var(--text)';
+    }
+    const c = document.getElementById('admin-content');
+    if (tab === 'users') loadAdminUsers(c);
+    else if (tab === 'stats') loadAdminStats(c);
+    else if (tab === 'theme') loadAdminTheme(c);
+    else if (tab === 'updates') loadAdminUpdates(c);
+}
+
+async function loadAdminUsers(c) {
+    c.innerHTML = '<div class="spinner" style="margin:24px auto"></div>';
+    try {
+        const res = await api('/api/admin/users');
+        const d = await res.json();
+        let html = `
+            <div style="background:var(--bg-input);padding:12px;border-radius:10px;margin-bottom:12px">
+                <div style="font-weight:600;margin-bottom:8px">Add user</div>
+                <input id="adm-user-u" type="text" placeholder="Username" style="margin-bottom:6px">
+                <input id="adm-user-p" type="text" placeholder="Password" style="margin-bottom:6px">
+                <div style="display:flex;gap:6px;margin-bottom:6px">
+                    <select id="adm-user-r" style="flex:1;margin:0">
+                        <option value="user">user</option>
+                        <option value="admin">admin</option>
+                    </select>
+                    <input id="adm-user-q" type="number" value="500" placeholder="MB" style="flex:1;margin:0">
+                </div>
+                <button class="btn-primary" onclick="adminAddUser()" style="width:100%;margin:0">Add</button>
+            </div>
+        `;
+        d.users.forEach(u => {
+            const usedMB = (u.used_bytes / (1024*1024)).toFixed(1);
+            html += `
+                <div style="background:var(--bg-input);padding:10px;border-radius:8px;margin-bottom:8px">
+                    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
+                        <div>
+                            <div style="font-weight:600">${u.online ? '<span style="color:var(--green)">●</span> ' : ''}${esc(u.username)}
+                                <span style="background:${u.role==='admin'?'var(--red)':'var(--accent)'};padding:1px 6px;border-radius:5px;font-size:10px;color:white">${u.role}</span>
+                            </div>
+                            <div style="font-size:11px;color:var(--text-3);margin-top:2px">${usedMB} MB / ${u.quota_mb} MB</div>
+                        </div>
+                        <div style="display:flex;gap:4px">
+                            <button onclick="adminEditUser('${esc(u.username)}',${u.quota_mb})" style="padding:6px 10px;background:var(--accent);color:white;border-radius:6px;font-size:12px">Edit</button>
+                            <button onclick="adminDelUser('${esc(u.username)}')" style="padding:6px 10px;background:var(--red);color:white;border-radius:6px;font-size:12px">×</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        });
+        c.innerHTML = html;
+    } catch (e) {
+        c.innerHTML = `<div style="color:var(--red)">${esc(e.message)}</div>`;
+    }
+}
+
+async function adminAddUser() {
+    const u = document.getElementById('adm-user-u').value.trim();
+    const p = document.getElementById('adm-user-p').value.trim();
+    const r = document.getElementById('adm-user-r').value;
+    const q = parseInt(document.getElementById('adm-user-q').value, 10) || 500;
+    if (!u || !p) return alert('Username/password required');
+    const res = await apiPost('/api/admin/users/add', { username: u, password: p, role: r, quota_mb: q });
+    if (res.ok) loadAdminUsers(document.getElementById('admin-content'));
+    else alert((await res.json()).detail || 'Failed');
+}
+async function adminEditUser(u, q) {
+    const newQ = prompt(`Quota MB for "${u}":`, q);
+    if (newQ === null) return;
+    const newP = prompt(`New password (empty to keep):`, '');
+    const body = { username: u, quota_mb: parseInt(newQ, 10) || q };
+    if (newP) body.password = newP;
+    const res = await apiPost('/api/admin/users/update', body);
+    if (res.ok) loadAdminUsers(document.getElementById('admin-content'));
+    else alert('Failed');
+}
+async function adminDelUser(u) {
+    if (!confirm(`Delete user "${u}"?`)) return;
+    const res = await apiPost('/api/admin/users/delete', { username: u });
+    if (res.ok) loadAdminUsers(document.getElementById('admin-content'));
+    else alert('Failed');
+}
+
+async function loadAdminStats(c) {
+    c.innerHTML = '<div class="spinner" style="margin:24px auto"></div>';
+    try {
+        const res = await api('/api/admin/stats');
+        const d = await res.json();
+        const diskPct = d.disk_total ? (d.disk_used / d.disk_total * 100).toFixed(1) : 0;
+        c.innerHTML = `
+            <div style="background:var(--bg-input);padding:12px;border-radius:10px;margin-bottom:8px">
+                <div style="font-size:11px;color:var(--text-3);text-transform:uppercase">Online</div>
+                <div style="font-size:20px;font-weight:700">${d.online_count} / ${d.users_count}</div>
+            </div>
+            <div style="background:var(--bg-input);padding:12px;border-radius:10px;margin-bottom:8px">
+                <div style="font-size:11px;color:var(--text-3);text-transform:uppercase">Messages</div>
+                <div style="font-size:20px;font-weight:700">${d.messages_count.toLocaleString()}</div>
+            </div>
+            <div style="background:var(--bg-input);padding:12px;border-radius:10px;margin-bottom:8px">
+                <div style="font-size:11px;color:var(--text-3);text-transform:uppercase">Uploads</div>
+                <div style="font-size:20px;font-weight:700">${d.uploads_files.toLocaleString()} <span style="font-size:12px;color:var(--text-3)">${fmtBytes(d.uploads_bytes)}</span></div>
+            </div>
+            <div style="background:var(--bg-input);padding:12px;border-radius:10px">
+                <div style="font-size:11px;color:var(--text-3);text-transform:uppercase">Disk</div>
+                <div style="font-size:16px;font-weight:600">${fmtBytes(d.disk_used)} / ${fmtBytes(d.disk_total)}</div>
+                <div style="height:5px;background:rgba(255,255,255,0.1);border-radius:10px;margin-top:6px">
+                    <div style="height:100%;width:${diskPct}%;background:${diskPct>85?'var(--red)':'var(--accent)'};border-radius:10px"></div>
+                </div>
+            </div>
+        `;
+    } catch (e) {
+        c.innerHTML = `<div style="color:var(--red)">${esc(e.message)}</div>`;
+    }
+}
+
+async function loadAdminTheme(c) {
+    c.innerHTML = `
+        <div style="background:var(--bg-input);padding:12px;border-radius:10px">
+            <div style="font-weight:600;margin-bottom:10px">Theme settings will appear here.</div>
+            <div style="font-size:12px;color:var(--text-3)">In this version, the dark Telegram theme is the only one. Customization comes in a later update.</div>
+        </div>
+    `;
+}
+
+async function loadAdminUpdates(c) {
+    c.innerHTML = `
+        <div style="background:var(--bg-input);padding:12px;border-radius:10px;margin-bottom:8px">
+            <div style="font-weight:600;font-size:14px;margin-bottom:6px">🔄 Update from GitHub</div>
+            <div style="font-size:12px;color:var(--text-3);margin-bottom:10px">Creates a backup first and restarts the service.</div>
+            <button class="btn-primary" id="adm-update-btn" onclick="adminUpdate()" style="width:100%;margin:0">Update Now</button>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+            <button onclick="adminBackup()" style="padding:10px;background:var(--bg-input);border-radius:8px;font-weight:500">Manual Backup</button>
+            <button onclick="adminRestart()" style="padding:10px;background:var(--bg-input);border-radius:8px;font-weight:500">Restart Service</button>
+        </div>
+        <div id="adm-backup-list" style="margin-top:12px"></div>
+    `;
+    try {
+        const res = await api('/api/admin/backups');
+        const d = await res.json();
+        const list = document.getElementById('adm-backup-list');
+        if (!d.backups.length) { list.innerHTML = '<div style="color:var(--text-3);text-align:center;padding:10px">No backups</div>'; return; }
+        list.innerHTML = d.backups.map(b => `
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;background:var(--bg-input);border-radius:8px;margin-bottom:6px;font-size:12px">
+                <div>
+                    <div>${esc(b.name)}</div>
+                    <div style="color:var(--text-3)">${new Date(b.created).toLocaleString()} · ${fmtBytes(b.size_bytes)}</div>
+                </div>
+                <button onclick="adminRollback('${esc(b.name)}')" style="padding:5px 10px;background:var(--orange);color:white;border-radius:6px;font-size:12px">Rollback</button>
+            </div>
+        `).join('');
+    } catch {}
+}
+async function adminUpdate() {
+    if (!confirm('Update from GitHub now?')) return;
+    const btn = document.getElementById('adm-update-btn');
+    if (btn) { btn.disabled = true; btn.innerText = 'Updating…'; }
+    try {
+        const res = await apiPost('/api/admin/update', {});
+        if (res.ok) {
+            alert('✅ Update applied. Reloading…');
+            setTimeout(() => location.reload(), 4000);
+        } else alert('Failed');
+    } catch (e) { alert(e.message); }
+}
+async function adminBackup() {
+    const res = await apiPost('/api/admin/backup', {});
+    if (res.ok) { alert('Backup created'); loadAdminTab('updates'); }
+}
+async function adminRestart() {
+    if (!confirm('Restart service?')) return;
+    await apiPost('/api/admin/restart', {});
+    alert('Restarting…');
+    setTimeout(() => location.reload(), 4000);
+}
+async function adminRollback(name) {
+    if (!confirm('Rollback to ' + name + '?')) return;
+    const res = await apiPost('/api/admin/rollback', { name });
+    if (res.ok) { alert('Rolled back, reloading…'); setTimeout(() => location.reload(), 4000); }
+    else alert('Failed');
+}
+
+// ============================================================
+// 25. SERVICE WORKER
+// ============================================================
+function registerSW() {
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/static/service-worker.js').catch(() => {});
+    }
+}
+
+// ============================================================
+// 26. INIT
+// ============================================================
+window.addEventListener('DOMContentLoaded', () => {
+    // Login handlers
+    document.getElementById('login-btn').addEventListener('click', doLogin);
+    ['login-username', 'login-password'].forEach(id => {
+        document.getElementById(id).addEventListener('keydown', e => {
+            if (e.key === 'Enter') doLogin();
+        });
+    });
+
+    // Auto-login if token exists
+    if (State.token && State.user) {
+        // verify token by fetching quota
+        api('/api/quota').then(res => {
+            if (res.ok) enterApp();
+            else {
+                localStorage.clear();
+                State.token = null;
+            }
+        }).catch(() => {
+            localStorage.clear();
+            State.token = null;
+        });
+    }
+
+    // ESC handlers for lightbox/menus already in setupHandlers
+});
+
+// Expose globals for inline onclicks
+window.doLogout = doLogout;
+window.cancelReply = cancelReply;
+window.cancelUpload = cancelUpload;
+window.openLightbox = openLightbox;
+window.closeLightbox = closeLightbox;
+window.acceptCall = acceptCall;
+window.endCall = endCall;
+window.toggleMute = toggleMute;
+window.toggleCamera = toggleCamera;
+window.switchCamera = switchCamera;
+window.sendReaction = sendReaction;
+window.jumpToMessage = jumpToMessage;
+window.closeModal = closeModal;
+window.openNewDMModal = openNewDMModal;
+window.openNewGroupModal = openNewGroupModal;
+window.submitNewDM = submitNewDM;
+window.submitNewGroup = submitNewGroup;
+window.doForward = doForward;
+window.loadAdminTab = loadAdminTab;
+window.adminAddUser = adminAddUser;
+window.adminEditUser = adminEditUser;
+window.adminDelUser = adminDelUser;
+window.adminUpdate = adminUpdate;
+window.adminBackup = adminBackup;
+window.adminRestart = adminRestart;
+window.adminRollback = adminRollback;
