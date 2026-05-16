@@ -50,6 +50,10 @@
     <symbol id="i-switch-cam" viewBox="0 0 24 24"><path d="M9.4 10.5l4.77-8.26C13.47 2.09 12.75 2 12 2c-2.4 0-4.6.85-6.32 2.25l3.66 6.35.06-.1zM21.54 9c-.92-2.92-3.15-5.26-6-6.34L11.88 9h9.66zm.26 1h-7.49l.29.5 4.76 8.25C21 16.97 22 14.61 22 12c0-.69-.07-1.35-.2-2zM8.54 12l-3.9-6.75C3.01 7.03 2 9.39 2 12c0 .69.07 1.35.2 2h7.49l-1.15-2zm-6.08 3c.92 2.92 3.15 5.26 6 6.34L12.12 15H2.46zm11.27 0l-3.9 6.76c.7.15 1.42.24 2.17.24 2.4 0 4.6-.85 6.32-2.25l-3.66-6.35-.93 1.6z"/></symbol>
     <symbol id="i-mic-off" viewBox="0 0 24 24"><path d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zM15 11.16L9 5.18V5c0-1.66 1.34-3 3-3s3 1.34 3 3v6.16zM4.27 3L3 4.27l6.01 6.01V11c0 1.66 1.33 3 2.99 3 .22 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52-2.76 0-5.3-2.1-5.3-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c.91-.13 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z"/></symbol>
     <symbol id="i-cam-off" viewBox="0 0 24 24"><path d="M21 6.5l-4 4V7c0-.55-.45-1-1-1H9.82L21 17.18V6.5zM3.27 2L2 3.27 4.73 6H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.21 0 .39-.08.54-.18L19.73 21 21 19.73 3.27 2z"/></symbol>
+    <symbol id="i-video-msg" viewBox="0 0 24 24"><path d="M17 10.5V6c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v12c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-4.5l4 4v-11l-4 4z"/></symbol>
+    <symbol id="i-key" viewBox="0 0 24 24"><path d="M12.65 10C11.83 7.67 9.61 6 7 6c-3.31 0-6 2.69-6 6s2.69 6 6 6c2.61 0 4.83-1.67 5.65-4H17v4h4v-4h2v-4H12.65zM7 14c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z"/></symbol>
+    <symbol id="i-camera" viewBox="0 0 24 24"><path d="M9.4 10.5l4.77-8.26C13.47 2.09 12.75 2 12 2 6.48 2 2 6.48 2 12c0 5.52 4.48 10 10 10 5.52 0 10-4.48 10-10 0-2.96-1.29-5.62-3.34-7.46L13.91 12H22"/></symbol>
+    <symbol id="i-trash-can" viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></symbol>
 </svg>
 
 <!-- ============= LOGIN ============= -->
@@ -64,6 +68,10 @@
         <input type="password" id="login-password" placeholder="Password" autocomplete="current-password">
         <button id="login-btn" class="btn-primary">Sign In</button>
         <p id="login-error" class="login-error"></p>
+    </div>
+    <div class="login-footer">
+        <span>Developed by</span>
+        <strong>Saeed Eramy</strong>
     </div>
 </div>
 
@@ -167,7 +175,10 @@
                 <button id="send-btn" class="icon-btn primary" title="Send" style="display:none">
                     <svg><use href="#i-send"/></svg>
                 </button>
-                <button id="mic-btn" class="icon-btn" title="Voice message">
+                <button id="video-msg-btn" class="icon-btn" title="Video message">
+                    <svg><use href="#i-video-msg"/></svg>
+                </button>
+                <button id="mic-btn" class="icon-btn" title="Voice message (hold)">
                     <svg><use href="#i-mic"/></svg>
                 </button>
             </footer>
@@ -232,9 +243,23 @@
     <div id="lightbox-content"></div>
 </div>
 
+<!-- ============= VIDEO MESSAGE RECORDER ============= -->
+<div id="video-rec-modal" class="video-rec-modal" style="display:none">
+    <div class="video-rec-preview" id="video-rec-preview">
+        <video id="video-rec-preview-video" autoplay playsinline muted></video>
+    </div>
+    <div class="video-rec-info">
+        <div class="video-rec-timer" id="video-rec-timer">0:00</div>
+        <div class="video-rec-hint" id="video-rec-hint">Tap the red button to start recording</div>
+    </div>
+    <div class="video-rec-controls" id="video-rec-controls">
+        <!-- buttons inserted dynamically -->
+    </div>
+</div>
+
 <!-- ============= AUDIO ELEMENTS ============= -->
 <audio id="notif-sound" src="data:audio/mp3;base64,SUQzBAAAAAABEVRYWFgAAAAtAAADY29tbWVudABCaWdTb3VuZEJhbmsuY29tIC8gTGFTb25vdGhlcXVlLm9yZwBURU5DAAAAHQAAA1N3aXRjaCBQbHVzIMKpIE5DSCBTb2Z0d2FyZQBUSVQyAAAABgAAAzIyMzUAVFNTRQAAAA8AAANMYXZmNTcuODMuMTAwAAAAAAAAAAAAAAD/80DEAAAAA0gAAAAATEFNRTMuMTAwVVVVVVVVVVVVVUxBTUUzLjEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV"></audio>
 
-<script src="/static/script.js?v=2.0.0"></script>
+<script src="/static/script.js?v=2.1.0"></script>
 </body>
 </html>
