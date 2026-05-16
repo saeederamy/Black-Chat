@@ -1215,59 +1215,483 @@ function cancelUpload(tempId) {
 }
 
 // ============================================================
-// 16. VOICE RECORDING
+// 16. VOICE RECORDING — Telegram-style with live waveform, pause, cancel/send
 // ============================================================
-let mediaRecorder = null;
-let recChunks = [];
-let recStart = null;
+const Rec = {
+    state: 'idle',          // 'idle' | 'recording' | 'paused'
+    mediaRecorder: null,
+    stream: null,
+    chunks: [],
+    startTime: 0,
+    pausedTime: 0,          // total ms spent paused
+    pauseStartedAt: 0,
+    timerInterval: null,
+    audioCtx: null,
+    analyser: null,
+    sourceNode: null,
+    rafId: null,
+    waveBars: [],
+    mimeType: '',
+};
 
-async function startRecording() {
-    try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
-        mediaRecorder = new MediaRecorder(stream, { mimeType: getRecordingMime() });
-        recChunks = [];
-        recStart = Date.now();
-        mediaRecorder.ondataavailable = e => { if (e.data.size > 0) recChunks.push(e.data); };
-        mediaRecorder.onstop = async () => {
-            stream.getTracks().forEach(t => t.stop());
-            const blob = new Blob(recChunks, { type: getRecordingMime() });
-            const filename = `voice_${Date.now()}.${blob.type.includes('webm') ? 'webm' : 'ogg'}`;
-            const file = new File([blob], filename, { type: blob.type });
-            uploadOne(file);
-        };
-        mediaRecorder.start();
-        updateMicUI(true);
-    } catch (e) {
-        alert('Could not start recording: ' + (e.message || e));
-    }
-}
-
-function getRecordingMime() {
-    if (typeof MediaRecorder !== 'undefined') {
-        if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) return 'audio/webm;codecs=opus';
-        if (MediaRecorder.isTypeSupported('audio/webm')) return 'audio/webm';
-        if (MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')) return 'audio/ogg;codecs=opus';
+function recGetMime() {
+    if (typeof MediaRecorder === 'undefined') return '';
+    const candidates = [
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/ogg;codecs=opus',
+        'audio/mp4',          // Safari iOS
+        'audio/aac',
+    ];
+    for (const m of candidates) {
+        try { if (MediaRecorder.isTypeSupported(m)) return m; } catch {}
     }
     return '';
 }
 
-function stopRecording() {
-    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-        mediaRecorder.stop();
+async function startRecording() {
+    if (Rec.state !== 'idle') return;
+    // Check support
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        alert('Your browser does not support voice recording. Try Chrome or Firefox.');
+        return;
     }
-    updateMicUI(false);
+    if (typeof MediaRecorder === 'undefined') {
+        alert('Your browser does not support MediaRecorder API.');
+        return;
+    }
+    // HTTPS requirement check
+    if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+        alert('Voice recording requires HTTPS. Please use HTTPS or localhost.');
+        return;
+    }
+    try {
+        Rec.stream = await navigator.mediaDevices.getUserMedia({
+            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+        });
+    } catch (e) {
+        let msg = 'Microphone access denied.';
+        if (e.name === 'NotAllowedError') msg = 'Microphone permission denied. Please allow microphone access in browser settings.';
+        else if (e.name === 'NotFoundError') msg = 'No microphone found.';
+        else if (e.message) msg = e.message;
+        alert(msg);
+        return;
+    }
+    Rec.mimeType = recGetMime();
+    try {
+        Rec.mediaRecorder = Rec.mimeType
+            ? new MediaRecorder(Rec.stream, { mimeType: Rec.mimeType })
+            : new MediaRecorder(Rec.stream);
+    } catch (e) {
+        alert('Cannot start recorder: ' + (e.message || e));
+        recCleanupStream();
+        return;
+    }
+    Rec.chunks = [];
+    Rec.startTime = Date.now();
+    Rec.pausedTime = 0;
+    Rec.state = 'recording';
+
+    Rec.mediaRecorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) Rec.chunks.push(e.data);
+    };
+    Rec.mediaRecorder.onstop = onRecordingStopped;
+    Rec.mediaRecorder.onerror = (e) => {
+        console.error('Recorder error:', e);
+        alert('Recording error: ' + (e.error ? e.error.message : 'unknown'));
+        recAbort();
+    };
+
+    try { Rec.mediaRecorder.start(100); }   // collect data every 100ms
+    catch (e) {
+        alert('Failed to start recording: ' + (e.message || e));
+        recCleanupStream();
+        Rec.state = 'idle';
+        return;
+    }
+
+    showRecordingBar();
+    startWaveAnimation();
+    startRecTimer();
 }
 
-function updateMicUI(recording) {
-    const btn = document.getElementById('mic-btn');
-    if (!btn) return;
-    if (recording) {
-        btn.style.background = 'var(--red)';
-        btn.style.color = 'white';
-    } else {
-        btn.style.background = '';
-        btn.style.color = '';
+function pauseResumeRecording() {
+    if (!Rec.mediaRecorder) return;
+    if (Rec.state === 'recording') {
+        try { Rec.mediaRecorder.pause(); } catch (e) {
+            // Some browsers don't support pause; fallback to a no-op
+            console.warn('Pause not supported');
+            return;
+        }
+        Rec.state = 'paused';
+        Rec.pauseStartedAt = Date.now();
+        if (Rec.rafId) { cancelAnimationFrame(Rec.rafId); Rec.rafId = null; }
+        updateRecPauseUI(true);
+    } else if (Rec.state === 'paused') {
+        try { Rec.mediaRecorder.resume(); } catch {}
+        Rec.state = 'recording';
+        Rec.pausedTime += Date.now() - Rec.pauseStartedAt;
+        startWaveAnimation();
+        updateRecPauseUI(false);
     }
+}
+
+function cancelRecording() {
+    if (Rec.state === 'idle') return;
+    recAbort();
+    hideRecordingBar();
+}
+
+function sendRecording() {
+    if (Rec.state === 'idle' || !Rec.mediaRecorder) return;
+    // Stop the recorder; the onstop handler will upload
+    try { Rec.mediaRecorder.stop(); } catch {}
+    // state will be set to 'idle' in onRecordingStopped
+}
+
+function onRecordingStopped() {
+    if (Rec.timerInterval) { clearInterval(Rec.timerInterval); Rec.timerInterval = null; }
+    if (Rec.rafId) { cancelAnimationFrame(Rec.rafId); Rec.rafId = null; }
+    hideRecordingBar();
+    recCleanupStream();
+
+    if (!Rec.chunks.length) {
+        Rec.state = 'idle';
+        return;
+    }
+    const type = Rec.mimeType || 'audio/webm';
+    const blob = new Blob(Rec.chunks, { type });
+    let ext = 'webm';
+    if (type.includes('ogg')) ext = 'ogg';
+    else if (type.includes('mp4') || type.includes('aac')) ext = 'm4a';
+    const filename = `voice_${Date.now()}.${ext}`;
+    const file = new File([blob], filename, { type });
+
+    Rec.state = 'idle';
+    Rec.chunks = [];
+    uploadOne(file);
+}
+
+function recAbort() {
+    if (Rec.timerInterval) { clearInterval(Rec.timerInterval); Rec.timerInterval = null; }
+    if (Rec.rafId) { cancelAnimationFrame(Rec.rafId); Rec.rafId = null; }
+    if (Rec.mediaRecorder && Rec.mediaRecorder.state !== 'inactive') {
+        // Stop and clear onstop so uploadOne is NOT called
+        Rec.mediaRecorder.onstop = null;
+        try { Rec.mediaRecorder.stop(); } catch {}
+    }
+    Rec.chunks = [];
+    recCleanupStream();
+    Rec.state = 'idle';
+}
+
+function recCleanupStream() {
+    if (Rec.stream) {
+        try { Rec.stream.getTracks().forEach(t => t.stop()); } catch {}
+        Rec.stream = null;
+    }
+    if (Rec.audioCtx) {
+        try { Rec.audioCtx.close(); } catch {}
+        Rec.audioCtx = null;
+        Rec.analyser = null;
+        Rec.sourceNode = null;
+    }
+    Rec.mediaRecorder = null;
+}
+
+// ----- Recording UI -----
+function showRecordingBar() {
+    const composer = document.querySelector('.composer');
+    if (!composer) return;
+    let bar = document.getElementById('recording-bar');
+    if (bar) bar.remove();
+
+    bar = document.createElement('div');
+    bar.id = 'recording-bar';
+    bar.className = 'recording-bar';
+    bar.innerHTML = `
+        <button class="rec-action-btn cancel" id="rec-cancel" title="Cancel">
+            <svg><use href="#i-trash-can"/></svg>
+        </button>
+        <div class="rec-indicator"></div>
+        <span class="rec-timer" id="rec-timer">0:00</span>
+        <div class="rec-wave" id="rec-wave">${generateLiveWaveBars(28)}</div>
+        <button class="rec-action-btn pause" id="rec-pause" title="Pause">
+            <svg><use href="#i-pause"/></svg>
+        </button>
+        <button class="rec-action-btn send" id="rec-send" title="Send">
+            <svg><use href="#i-send"/></svg>
+        </button>
+    `;
+    composer.appendChild(bar);
+
+    Rec.waveBars = Array.from(bar.querySelectorAll('.rec-wave-bar'));
+
+    document.getElementById('rec-cancel').addEventListener('click', cancelRecording);
+    document.getElementById('rec-pause').addEventListener('click', pauseResumeRecording);
+    document.getElementById('rec-send').addEventListener('click', sendRecording);
+}
+
+function hideRecordingBar() {
+    const bar = document.getElementById('recording-bar');
+    if (bar) bar.remove();
+    Rec.waveBars = [];
+}
+
+function updateRecPauseUI(isPaused) {
+    const btn = document.getElementById('rec-pause');
+    if (!btn) return;
+    if (isPaused) {
+        btn.classList.add('paused');
+        btn.innerHTML = `<svg><use href="#i-play"/></svg>`;
+        btn.title = 'Resume';
+        const ind = document.querySelector('.rec-indicator');
+        if (ind) ind.style.animationPlayState = 'paused';
+    } else {
+        btn.classList.remove('paused');
+        btn.innerHTML = `<svg><use href="#i-pause"/></svg>`;
+        btn.title = 'Pause';
+        const ind = document.querySelector('.rec-indicator');
+        if (ind) ind.style.animationPlayState = 'running';
+    }
+}
+
+function generateLiveWaveBars(count) {
+    let html = '';
+    for (let i = 0; i < count; i++) {
+        html += `<div class="rec-wave-bar" style="height:20%"></div>`;
+    }
+    return html;
+}
+
+function startRecTimer() {
+    if (Rec.timerInterval) clearInterval(Rec.timerInterval);
+    Rec.timerInterval = setInterval(() => {
+        const timer = document.getElementById('rec-timer');
+        if (!timer) return;
+        const elapsed = Date.now() - Rec.startTime - Rec.pausedTime;
+        if (Rec.state === 'paused') return;  // freeze timer when paused
+        timer.innerText = formatRecTime(elapsed);
+        // Hard cap at 5 minutes
+        if (elapsed >= 5 * 60 * 1000) sendRecording();
+    }, 200);
+}
+
+function formatRecTime(ms) {
+    const s = Math.floor(ms / 1000);
+    const m = Math.floor(s / 60);
+    const sec = s % 60;
+    return m + ':' + (sec < 10 ? '0' + sec : sec);
+}
+
+function startWaveAnimation() {
+    if (!Rec.stream) return;
+    try {
+        const AudioCtxClass = window.AudioContext || window.webkitAudioContext;
+        if (!AudioCtxClass) return;
+        if (!Rec.audioCtx) {
+            Rec.audioCtx = new AudioCtxClass();
+            Rec.sourceNode = Rec.audioCtx.createMediaStreamSource(Rec.stream);
+            Rec.analyser = Rec.audioCtx.createAnalyser();
+            Rec.analyser.fftSize = 64;
+            Rec.sourceNode.connect(Rec.analyser);
+        }
+        const data = new Uint8Array(Rec.analyser.frequencyBinCount);
+        function loop() {
+            if (Rec.state !== 'recording') return;
+            Rec.analyser.getByteFrequencyData(data);
+            const bars = Rec.waveBars;
+            if (bars.length) {
+                // Shift visualization left by one and add new bar on right
+                for (let i = 0; i < bars.length - 1; i++) {
+                    bars[i].style.height = bars[i + 1].style.height;
+                }
+                // Average of frequencies → bar height
+                let sum = 0;
+                for (let i = 0; i < data.length; i++) sum += data[i];
+                const avg = sum / data.length;
+                const h = Math.max(10, Math.min(100, (avg / 255) * 100 * 2.5));
+                bars[bars.length - 1].style.height = h + '%';
+            }
+            Rec.rafId = requestAnimationFrame(loop);
+        }
+        loop();
+    } catch (e) {
+        console.warn('Wave animation not available:', e);
+    }
+}
+
+function updateMicUI() { /* deprecated, kept for compat */ }
+
+// ============================================================
+// 16b. VIDEO MESSAGE (capsule) — Telegram-style round video
+// ============================================================
+const VidRec = {
+    state: 'idle',
+    stream: null,
+    mediaRecorder: null,
+    chunks: [],
+    startTime: 0,
+    timerInterval: null,
+    mimeType: '',
+};
+
+function vidRecGetMime() {
+    if (typeof MediaRecorder === 'undefined') return '';
+    const candidates = [
+        'video/webm;codecs=vp9,opus',
+        'video/webm;codecs=vp8,opus',
+        'video/webm',
+        'video/mp4',
+    ];
+    for (const m of candidates) {
+        try { if (MediaRecorder.isTypeSupported(m)) return m; } catch {}
+    }
+    return '';
+}
+
+async function openVideoMessageRecorder() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        alert('Your browser does not support video recording.');
+        return;
+    }
+    if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+        alert('Video recording requires HTTPS.');
+        return;
+    }
+    try {
+        VidRec.stream = await navigator.mediaDevices.getUserMedia({
+            audio: { echoCancellation: true, noiseSuppression: true },
+            video: { facingMode: 'user', width: { ideal: 480 }, height: { ideal: 480 } },
+        });
+    } catch (e) {
+        alert('Could not access camera: ' + (e.message || e.name));
+        return;
+    }
+    const modal = document.getElementById('video-rec-modal');
+    modal.style.display = 'flex';
+    const vid = document.getElementById('video-rec-preview-video');
+    vid.srcObject = VidRec.stream;
+    try { vid.play(); } catch {}
+
+    // Initial controls: start + cancel
+    VidRec.state = 'ready';
+    setVidRecControlsReady();
+}
+
+function setVidRecControlsReady() {
+    document.getElementById('video-rec-controls').innerHTML = `
+        <button class="video-rec-btn cancel" id="vrec-cancel" title="Cancel">
+            <svg><use href="#i-close"/></svg>
+        </button>
+        <button class="video-rec-btn start" id="vrec-start" title="Start recording">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="currentColor"/></svg>
+        </button>
+    `;
+    document.getElementById('vrec-cancel').addEventListener('click', closeVideoMessageRecorder);
+    document.getElementById('vrec-start').addEventListener('click', startVideoMessageRecording);
+    document.getElementById('video-rec-hint').innerText = 'Tap the red button to start recording';
+    document.getElementById('video-rec-timer').innerText = '0:00';
+}
+
+function setVidRecControlsRecording() {
+    document.getElementById('video-rec-controls').innerHTML = `
+        <button class="video-rec-btn cancel" id="vrec-cancel" title="Cancel">
+            <svg><use href="#i-close"/></svg>
+        </button>
+        <button class="video-rec-btn stop" id="vrec-stop" title="Stop & send">
+            <svg viewBox="0 0 24 24"><rect x="8" y="8" width="8" height="8" rx="1" fill="currentColor"/></svg>
+        </button>
+    `;
+    document.getElementById('vrec-cancel').addEventListener('click', cancelVideoMessageRecording);
+    document.getElementById('vrec-stop').addEventListener('click', stopAndSendVideoMessage);
+    document.getElementById('video-rec-hint').innerText = '● Recording…';
+    document.getElementById('video-rec-preview').classList.add('recording');
+}
+
+function startVideoMessageRecording() {
+    if (!VidRec.stream) return;
+    VidRec.mimeType = vidRecGetMime();
+    try {
+        VidRec.mediaRecorder = VidRec.mimeType
+            ? new MediaRecorder(VidRec.stream, { mimeType: VidRec.mimeType })
+            : new MediaRecorder(VidRec.stream);
+    } catch (e) {
+        alert('Cannot start: ' + (e.message || e));
+        return;
+    }
+    VidRec.chunks = [];
+    VidRec.startTime = Date.now();
+    VidRec.mediaRecorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) VidRec.chunks.push(e.data);
+    };
+    VidRec.mediaRecorder.onstop = onVideoMessageStopped;
+    try { VidRec.mediaRecorder.start(100); }
+    catch (e) { alert('Failed: ' + e.message); return; }
+    VidRec.state = 'recording';
+    setVidRecControlsRecording();
+    startVidRecTimer();
+}
+
+function startVidRecTimer() {
+    if (VidRec.timerInterval) clearInterval(VidRec.timerInterval);
+    VidRec.timerInterval = setInterval(() => {
+        const t = document.getElementById('video-rec-timer');
+        if (!t) return;
+        const elapsed = Date.now() - VidRec.startTime;
+        t.innerText = formatRecTime(elapsed);
+        if (elapsed >= 60 * 1000) stopAndSendVideoMessage();  // 60s cap
+    }, 200);
+}
+
+function stopAndSendVideoMessage() {
+    if (VidRec.timerInterval) { clearInterval(VidRec.timerInterval); VidRec.timerInterval = null; }
+    if (VidRec.mediaRecorder && VidRec.mediaRecorder.state !== 'inactive') {
+        try { VidRec.mediaRecorder.stop(); } catch {}
+    }
+}
+
+function onVideoMessageStopped() {
+    if (VidRec.timerInterval) { clearInterval(VidRec.timerInterval); VidRec.timerInterval = null; }
+    if (!VidRec.chunks.length) {
+        closeVideoMessageRecorder();
+        return;
+    }
+    const type = VidRec.mimeType || 'video/webm';
+    const blob = new Blob(VidRec.chunks, { type });
+    const ext = type.includes('mp4') ? 'mp4' : 'webm';
+    const filename = `vidmsg_${Date.now()}.${ext}`;
+    const file = new File([blob], filename, { type });
+
+    closeVideoMessageRecorder();
+    VidRec.state = 'idle';
+    VidRec.chunks = [];
+
+    uploadOne(file);
+}
+
+function cancelVideoMessageRecording() {
+    if (VidRec.timerInterval) { clearInterval(VidRec.timerInterval); VidRec.timerInterval = null; }
+    if (VidRec.mediaRecorder && VidRec.mediaRecorder.state !== 'inactive') {
+        VidRec.mediaRecorder.onstop = null;
+        try { VidRec.mediaRecorder.stop(); } catch {}
+    }
+    VidRec.chunks = [];
+    closeVideoMessageRecorder();
+}
+
+function closeVideoMessageRecorder() {
+    const modal = document.getElementById('video-rec-modal');
+    if (modal) modal.style.display = 'none';
+    const preview = document.getElementById('video-rec-preview');
+    if (preview) preview.classList.remove('recording');
+    const vid = document.getElementById('video-rec-preview-video');
+    if (vid) vid.srcObject = null;
+    if (VidRec.stream) {
+        try { VidRec.stream.getTracks().forEach(t => t.stop()); } catch {}
+        VidRec.stream = null;
+    }
+    VidRec.state = 'idle';
 }
 
 // ============================================================
@@ -1674,28 +2098,154 @@ async function submitNewGroup() {
 function openSettingsModal() {
     closeMenu();
     const usedMB = (State.usedBytes / (1024*1024)).toFixed(1);
+    const remMB = (State.quotaMB - State.usedBytes/(1024*1024)).toFixed(1);
     const pct = State.quotaMB > 0 ? Math.min(100, (State.usedBytes / (State.quotaMB*1024*1024) * 100)) : 0;
+    const myAvatar = State.avatars[State.user];
+    const avatarInner = myAvatar
+        ? `<img src="${esc(myAvatar)}" alt="">`
+        : esc(State.user.charAt(0).toUpperCase());
+
     showModal(`
-        <h3 class="modal-title">Settings</h3>
-        <div style="text-align:center;padding:14px 0;border-bottom:1px solid var(--border)">
-            <div style="width:80px;height:80px;border-radius:50%;background:var(--accent);margin:0 auto 10px auto;display:flex;align-items:center;justify-content:center;font-size:28px;color:white">${esc(State.user.charAt(0).toUpperCase())}</div>
-            <div style="font-weight:600;font-size:16px">${esc(State.user)}</div>
-            <div style="font-size:12px;color:var(--text-3)">${esc(State.role)}</div>
-        </div>
-        <div class="modal-row">
-            <div>
-                <div class="modal-row-label">Storage</div>
-                <div class="modal-row-sub">${usedMB} MB / ${State.quotaMB} MB</div>
-                <div style="width:200px;height:5px;background:rgba(255,255,255,0.1);border-radius:10px;margin-top:6px">
-                    <div style="width:${pct}%;height:100%;background:${pct>90?'var(--red)':'var(--accent)'};border-radius:10px"></div>
+        <div class="profile-modal-box">
+            <div class="profile-header">
+                <div class="profile-avatar-large" id="profile-avatar-btn" onclick="document.getElementById('profile-avatar-file').click()">
+                    ${avatarInner}
+                    <div class="profile-avatar-overlay">
+                        <svg><use href="#i-camera"/></svg>
+                    </div>
+                </div>
+                <input type="file" id="profile-avatar-file" accept="image/*" style="display:none">
+                <h3 class="profile-name">${esc(State.user)}</h3>
+                <p class="profile-status">${State.role === 'admin' ? '🛡️ Administrator' : '👤 Member'}</p>
+            </div>
+
+            <div class="profile-body">
+                <div class="profile-row" onclick="openChangePasswordModal()">
+                    <svg><use href="#i-key"/></svg>
+                    <div class="profile-row-content">
+                        <div class="profile-row-label">Password</div>
+                        <div class="profile-row-value">Change password</div>
+                    </div>
+                </div>
+
+                <div class="profile-row">
+                    <svg><use href="#i-shield"/></svg>
+                    <div class="profile-row-content">
+                        <div class="profile-row-label">Storage</div>
+                        <div class="profile-row-value">${usedMB} MB / ${State.quotaMB} MB</div>
+                        <div style="height:4px;background:rgba(255,255,255,0.1);border-radius:10px;margin-top:6px">
+                            <div style="width:${pct}%;height:100%;background:${pct>90?'var(--red)':'var(--accent)'};border-radius:10px"></div>
+                        </div>
+                    </div>
+                </div>
+
+                ${myAvatar ? `
+                <div class="profile-row danger" onclick="removeAvatar()">
+                    <svg><use href="#i-trash-can"/></svg>
+                    <div class="profile-row-content">
+                        <div class="profile-row-value">Remove profile photo</div>
+                    </div>
+                </div>` : ''}
+
+                <div class="profile-row danger" onclick="closeModal(); doLogout()">
+                    <svg><use href="#i-logout"/></svg>
+                    <div class="profile-row-content">
+                        <div class="profile-row-value">Logout</div>
+                    </div>
                 </div>
             </div>
-        </div>
-        <div class="modal-actions">
-            <button class="btn-cancel" onclick="closeModal()">Close</button>
-            <button class="btn-danger" onclick="doLogout()">Logout</button>
+
+            <div style="padding:0 20px 16px 20px">
+                <button class="btn-cancel" onclick="closeModal()" style="width:100%;padding:12px;border-radius:10px;font-size:14px">Close</button>
+            </div>
         </div>
     `);
+
+    // Hook the avatar file picker
+    const fileInput = document.getElementById('profile-avatar-file');
+    if (fileInput) {
+        fileInput.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            await uploadAvatar(file);
+            e.target.value = '';
+        });
+    }
+}
+
+async function uploadAvatar(file) {
+    if (file.size > 5 * 1024 * 1024) {
+        alert('Image too large (max 5MB).');
+        return;
+    }
+    try {
+        const fd = new FormData();
+        fd.append('file', file);
+        const res = await api('/api/upload_avatar', { method: 'POST', body: fd });
+        if (!res.ok) {
+            const d = await res.json().catch(() => ({}));
+            alert('Upload failed: ' + (d.detail || res.status));
+            return;
+        }
+        const d = await res.json();
+        State.avatars[State.user] = d.url;
+        renderChatList();
+        renderHeader();
+        openSettingsModal();  // refresh
+    } catch (e) {
+        alert('Upload error: ' + e.message);
+    }
+}
+
+async function removeAvatar() {
+    if (!confirm('Remove your profile photo?')) return;
+    try {
+        const res = await apiPost('/api/remove_avatar', {});
+        if (res.ok) {
+            delete State.avatars[State.user];
+            renderChatList();
+            renderHeader();
+            openSettingsModal();  // refresh
+        } else {
+            alert('Failed');
+        }
+    } catch (e) { alert(e.message); }
+}
+
+function openChangePasswordModal() {
+    showModal(`
+        <h3 class="modal-title">Change Password</h3>
+        <input type="password" id="pw-old" placeholder="Current password" autocomplete="current-password">
+        <input type="password" id="pw-new" placeholder="New password" autocomplete="new-password">
+        <input type="password" id="pw-confirm" placeholder="Confirm new password" autocomplete="new-password">
+        <div id="pw-error" style="color:var(--red);font-size:13px;min-height:18px;margin-top:6px"></div>
+        <div class="modal-actions">
+            <button class="btn-cancel" onclick="openSettingsModal()">Back</button>
+            <button class="btn-primary" onclick="submitChangePassword()">Save</button>
+        </div>
+    `);
+    setTimeout(() => document.getElementById('pw-old').focus(), 100);
+}
+
+async function submitChangePassword() {
+    const oldP = document.getElementById('pw-old').value;
+    const newP = document.getElementById('pw-new').value;
+    const conf = document.getElementById('pw-confirm').value;
+    const err = document.getElementById('pw-error');
+    err.innerText = '';
+    if (!oldP || !newP) { err.innerText = 'Both fields are required'; return; }
+    if (newP !== conf) { err.innerText = 'New passwords do not match'; return; }
+    if (newP.length < 4) { err.innerText = 'Password too short (min 4 chars)'; return; }
+    try {
+        const res = await apiPost('/api/change_password', { old_password: oldP, new_password: newP });
+        if (res.ok) {
+            alert('Password changed successfully.');
+            openSettingsModal();
+        } else {
+            const d = await res.json().catch(() => ({}));
+            err.innerText = d.detail || 'Failed';
+        }
+    } catch (e) { err.innerText = e.message; }
 }
 
 function openForwardModal(msg) {
@@ -1816,15 +2366,24 @@ function setupHandlers() {
         e.target.value = '';
     });
 
-    // Voice recording
+    // Voice recording — TAP to start (recording bar then has its own send/pause/cancel)
     const mic = document.getElementById('mic-btn');
-    let micDown = false;
-    mic.addEventListener('mousedown', () => { micDown = true; startRecording(); });
-    mic.addEventListener('mouseup', () => { if (micDown) { micDown = false; stopRecording(); } });
-    mic.addEventListener('mouseleave', () => { if (micDown) { micDown = false; stopRecording(); } });
-    mic.addEventListener('touchstart', e => { e.preventDefault(); micDown = true; startRecording(); }, { passive: false });
-    mic.addEventListener('touchend', () => { if (micDown) { micDown = false; stopRecording(); } });
-    mic.addEventListener('touchcancel', () => { if (micDown) { micDown = false; stopRecording(); } });
+    mic.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (Rec.state === 'idle') {
+            startRecording();
+        }
+        // If already recording, the recording-bar's send button handles it
+    });
+
+    // Video message button
+    const vmsg = document.getElementById('video-msg-btn');
+    if (vmsg) {
+        vmsg.addEventListener('click', (e) => {
+            e.preventDefault();
+            openVideoMessageRecorder();
+        });
+    }
 
     // Scroll-to-bottom button
     const messagesList = document.getElementById('messages');
@@ -2136,3 +2695,11 @@ window.adminUpdate = adminUpdate;
 window.adminBackup = adminBackup;
 window.adminRestart = adminRestart;
 window.adminRollback = adminRollback;
+
+// Phase 6 additions
+window.uploadAvatar = uploadAvatar;
+window.removeAvatar = removeAvatar;
+window.openChangePasswordModal = openChangePasswordModal;
+window.submitChangePassword = submitChangePassword;
+window.openSettingsModal = openSettingsModal;
+window.openVideoMessageRecorder = openVideoMessageRecorder;
