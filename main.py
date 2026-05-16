@@ -430,6 +430,57 @@ async def upload_avatar(file: UploadFile = File(...), authorization: Optional[st
     conn.close()
     return {"success": True, "url": url}
 
+@app.post("/api/remove_avatar")
+async def remove_avatar(authorization: Optional[str] = Header(None)):
+    info = await require_user(authorization)
+    username = info["user"]
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT avatar FROM profiles WHERE user=?", (username,))
+    row = c.fetchone()
+    if row and row[0]:
+        # try to delete the physical file
+        try:
+            rel = row[0]
+            if rel.startswith("/static/uploads/"):
+                fp = os.path.join(BASE_DIR, rel.lstrip("/"))
+                if os.path.exists(fp):
+                    os.remove(fp)
+        except Exception:
+            pass
+    c.execute("DELETE FROM profiles WHERE user=?", (username,))
+    conn.commit()
+    conn.close()
+    return {"success": True}
+
+@app.post("/api/change_password")
+async def change_password(request: Request, authorization: Optional[str] = Header(None)):
+    info = await require_user(authorization)
+    username = info["user"]
+    data = await request.json()
+    old_pw = (data.get("old_password") or "").strip()
+    new_pw = (data.get("new_password") or "").strip()
+    if not old_pw or not new_pw:
+        raise HTTPException(status_code=400, detail="Old and new password required")
+    if ":" in new_pw:
+        raise HTTPException(status_code=400, detail="Password cannot contain ':'")
+    if len(new_pw) < 4:
+        raise HTTPException(status_code=400, detail="New password too short (min 4 chars)")
+
+    users = read_users()
+    found = False
+    for u in users:
+        if u["username"] == username:
+            if u["password"] != old_pw:
+                raise HTTPException(status_code=403, detail="Current password is wrong")
+            u["password"] = new_pw
+            found = True
+            break
+    if not found:
+        raise HTTPException(status_code=404, detail="User not found")
+    write_users(users)
+    return {"success": True}
+
 @app.get("/api/app-settings")
 async def get_public_settings():
     """Public settings everyone needs (theme, etc) - no auth required."""
