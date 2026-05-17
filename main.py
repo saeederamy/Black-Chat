@@ -86,6 +86,24 @@ def init_db():
     )''')
     c.execute('CREATE INDEX IF NOT EXISTS idx_pinned_room ON pinned_messages(room)')
 
+    # Phase 8 tables
+    c.execute('''CREATE TABLE IF NOT EXISTS blocked_users (
+        owner TEXT,
+        blocked TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (owner, blocked)
+    )''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_blocked_owner ON blocked_users(owner)')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_blocked_blocked ON blocked_users(blocked)')
+
+    # cleared_chats: when user clears their history, store the cutoff timestamp
+    c.execute('''CREATE TABLE IF NOT EXISTS cleared_chats (
+        user TEXT,
+        room TEXT,
+        cleared_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (user, room)
+    )''')
+
     # Phase 5b: app-wide settings (admin-controlled), key/value
     c.execute('''CREATE TABLE IF NOT EXISTS app_settings (
         skey TEXT PRIMARY KEY,
@@ -639,9 +657,17 @@ async def api_action(request: Request, info: dict = Depends(require_user)):
 
     if act == "get_init_data":
         c.execute("SELECT contact FROM contacts WHERE owner=?", (username,))
-        res["contacts"] = [r[0] for r in c.fetchall()]
-        c.execute("SELECT r.room_id, r.name FROM custom_rooms r JOIN room_members m ON r.room_id = m.room_id WHERE m.user = ?", (username,))
-        res["custom_rooms"] = [{"id": r[0], "type": "group", "name": r[1]} for r in c.fetchall()]
+        all_contacts = [r[0] for r in c.fetchall()]
+        # Filter out blocked-by users
+        c.execute("SELECT owner FROM blocked_users WHERE blocked=?", (username,))
+        blocked_by_set = set(r[0] for r in c.fetchall())
+        c.execute("SELECT blocked FROM blocked_users WHERE owner=?", (username,))
+        my_blocked_set = set(r[0] for r in c.fetchall())
+        res["contacts"] = [u for u in all_contacts if u not in blocked_by_set]
+        res["blocked"] = list(my_blocked_set)
+        res["blocked_by"] = list(blocked_by_set)
+        c.execute("SELECT r.room_id, r.name, r.owner FROM custom_rooms r JOIN room_members m ON r.room_id = m.room_id WHERE m.user = ?", (username,))
+        res["custom_rooms"] = [{"id": r[0], "type": "group", "name": r[1], "owner": r[2]} for r in c.fetchall()]
         c.execute("SELECT avatar FROM profiles WHERE user=?", (username,))
         av = c.fetchone()
         res["avatar"] = av[0] if av else ""
@@ -651,6 +677,9 @@ async def api_action(request: Request, info: dict = Depends(require_user)):
         res["quota_mb"] = u["quota_mb"] if u else DEFAULT_QUOTA_MB
         res["used_bytes"] = get_user_used_bytes(username)
         res["all_users"] = get_all_usernames()
+        # Cleared chat cutoffs (per room)
+        c.execute("SELECT room, cleared_at FROM cleared_chats WHERE user=?", (username,))
+        res["cleared_chats"] = {r[0]: r[1] for r in c.fetchall()}
 
     elif act == "get_ips":
         c.execute("SELECT ip, last_seen FROM active_ips WHERE user=?", (username,))
@@ -761,6 +790,50 @@ async def api_action(request: Request, info: dict = Depends(require_user)):
                      "fileName": r[4], "timestamp": r[5]}
                     for r in c.fetchall()
                 ]
+
+    elif act == "clear_history":
+        # Clear chat history just for this user (server-side cutoff timestamp)
+        room = data.get("room")
+        if not room:
+            res = {"success": False, "msg": "Room required"}
+        else:
+            c.execute("INSERT OR REPLACE INTO cleared_chats (user, room, cleared_at) VALUES (?, ?, CURRENT_TIMESTAMP)", (username, room))
+
+    elif act == "delete_dm":
+        # Delete DM entirely from user's view (remove contact + clear history client-side)
+        target = data.get("target")
+        if not target:
+            res = {"success": False, "msg": "Target required"}
+        else:
+            c.execute("DELETE FROM contacts WHERE owner=? AND contact=?", (username, target))
+            # Set cleared cutoff to now so messages are hidden
+            pair = sorted([username, target])
+            room = f"dm_{pair[0]}-{pair[1]}"
+            c.execute("INSERT OR REPLACE INTO cleared_chats (user, room, cleared_at) VALUES (?, ?, CURRENT_TIMESTAMP)", (username, room))
+            res["target"] = target
+
+    elif act == "block_user":
+        target = data.get("target")
+        if not target or target == username:
+            res = {"success": False, "msg": "Invalid target"}
+        else:
+            c.execute("INSERT OR IGNORE INTO blocked_users (owner, blocked) VALUES (?, ?)", (username, target))
+            res["target"] = target
+
+    elif act == "unblock_user":
+        target = data.get("target")
+        if not target:
+            res = {"success": False, "msg": "Invalid target"}
+        else:
+            c.execute("DELETE FROM blocked_users WHERE owner=? AND blocked=?", (username, target))
+            res["target"] = target
+
+    elif act == "get_blocked_users":
+        c.execute("SELECT blocked FROM blocked_users WHERE owner=?", (username,))
+        res["blocked"] = [r[0] for r in c.fetchall()]
+        # Also return who blocked me (so I can hide them)
+        c.execute("SELECT owner FROM blocked_users WHERE blocked=?", (username,))
+        res["blocked_by"] = [r[0] for r in c.fetchall()]
 
     conn.commit()
     conn.close()
@@ -1225,7 +1298,13 @@ async def websocket_endpoint(websocket: WebSocket, username: str, role: str, tok
 
             if action == "get_history":
                 room = msg.get("room")
-                c.execute("SELECT msg_id, user, msg_type, content, file_name, reply_to, reactions, timestamp FROM messages WHERE room=? ORDER BY timestamp ASC", (room,))
+                # Check cleared cutoff for this user/room
+                c.execute("SELECT cleared_at FROM cleared_chats WHERE user=? AND room=?", (username, room))
+                cleared_row = c.fetchone()
+                if cleared_row:
+                    c.execute("SELECT msg_id, user, msg_type, content, file_name, reply_to, reactions, timestamp FROM messages WHERE room=? AND timestamp > ? ORDER BY timestamp ASC", (room, cleared_row[0]))
+                else:
+                    c.execute("SELECT msg_id, user, msg_type, content, file_name, reply_to, reactions, timestamp FROM messages WHERE room=? ORDER BY timestamp ASC", (room,))
                 rows = c.fetchall()
                 msg_ids = [m[0] for m in rows]
                 reads_map = get_message_reads(msg_ids)
@@ -1320,6 +1399,13 @@ async def websocket_endpoint(websocket: WebSocket, username: str, role: str, tok
                 target_user = msg.get("targetUser")
                 if room == "Announcements" and role != "admin":
                     conn.close(); continue
+                # Block check for DMs
+                if target_user:
+                    c.execute("SELECT 1 FROM blocked_users WHERE (owner=? AND blocked=?) OR (owner=? AND blocked=?)",
+                              (username, target_user, target_user, username))
+                    if c.fetchone():
+                        await websocket.send_json({"type": "send_blocked", "target": target_user})
+                        conn.close(); continue
                 room_members = []
                 if room.startswith('rm_'):
                     c.execute("SELECT user FROM room_members WHERE room_id=?", (room,))
