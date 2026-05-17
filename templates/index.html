@@ -11,7 +11,7 @@
     <link rel="apple-touch-icon" href="/static/icon-192.png">
     <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
     <title>Black Chat</title>
-    <link rel="stylesheet" href="/static/style.css?v=2.0.0">
+    <link rel="stylesheet" href="/static/style.css?v=2.2.0">
 </head>
 <body>
 
@@ -57,7 +57,7 @@
 </svg>
 
 <!-- ============= LOGIN ============= -->
-<div id="login-screen" class="screen">
+<div id="login-screen" class="screen bh-login">
     <div class="login-box">
         <div class="login-logo">
             <img src="/static/icon-192.png" alt="Black Chat" width="80" height="80">
@@ -69,9 +69,11 @@
         <button id="login-btn" class="btn-primary">Sign In</button>
         <p id="login-error" class="login-error"></p>
     </div>
-    <div class="login-footer">
-        <span>Developed by</span>
-        <strong>Saeed Eramy</strong>
+    <div class="bh-signature">
+        <a href="https://github.com/saeederamy" target="_blank" rel="noopener">
+            <svg viewBox="0 0 24 24"><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.07 3.29 9.37 7.86 10.89.58.1.79-.25.79-.55 0-.27-.01-1.16-.02-2.11-3.2.7-3.87-1.36-3.87-1.36-.53-1.32-1.3-1.68-1.3-1.68-1.05-.71.08-.7.08-.7 1.16.08 1.78 1.2 1.78 1.2 1.04 1.79 2.72 1.27 3.38.97.11-.76.41-1.27.74-1.56-2.55-.29-5.24-1.27-5.24-5.66 0-1.25.45-2.27 1.18-3.07-.12-.29-.51-1.47.11-3.06 0 0 .97-.31 3.18 1.17a11 11 0 015.79 0c2.21-1.48 3.18-1.17 3.18-1.17.62 1.59.23 2.77.11 3.06.74.8 1.18 1.82 1.18 3.07 0 4.4-2.69 5.37-5.25 5.65.42.36.79 1.07.79 2.17 0 1.57-.01 2.83-.01 3.22 0 .31.21.66.8.55C20.21 21.37 23.5 17.07 23.5 12 23.5 5.65 18.35.5 12 .5z"/></svg>
+            Developed by Saeed Eramy
+        </a>
     </div>
 </div>
 
@@ -204,6 +206,9 @@
     <button data-action="settings"><svg><use href="#i-settings"/></svg><span>Settings</span></button>
     <button data-action="admin" id="menu-admin" style="display:none"><svg><use href="#i-shield"/></svg><span>Admin Panel</span></button>
     <button data-action="logout" class="danger"><svg><use href="#i-logout"/></svg><span>Logout</span></button>
+    <div class="menu-signature">
+        <a href="https://github.com/saeederamy" target="_blank" rel="noopener">Developed by Saeed Eramy</a>
+    </div>
 </div>
 
 <!-- ============= CHAT MENU (chat header more button) ============= -->
@@ -216,6 +221,29 @@
 <!-- ============= MODAL: Generic ============= -->
 <div id="modal-overlay" class="modal-overlay" style="display:none">
     <div id="modal-box" class="modal-box"></div>
+</div>
+
+<!-- ============= PROFILE PANE (Telegram-style slide-in panel) ============= -->
+<div id="profile-pane">
+    <div class="profile-pane-header">
+        <button class="profile-pane-close" onclick="closeProfilePane()">
+            <svg><use href="#i-close"/></svg>
+        </button>
+        <div class="profile-pane-avatar-wrap">
+            <div class="profile-pane-avatar" id="profile-pane-avatar">?</div>
+            <h2 class="profile-pane-name" id="profile-pane-name">—</h2>
+            <p class="profile-pane-status" id="profile-pane-status"></p>
+        </div>
+    </div>
+    <div class="profile-pane-body">
+        <div class="profile-pane-info" id="profile-pane-info"></div>
+        <div class="media-tabs" id="media-tabs">
+            <div class="media-tab active" data-mtab="media">Media <span class="media-tab-count" id="mtab-count-media">0</span></div>
+            <div class="media-tab" data-mtab="files">Files <span class="media-tab-count" id="mtab-count-files">0</span></div>
+            <div class="media-tab" data-mtab="voice">Voice <span class="media-tab-count" id="mtab-count-voice">0</span></div>
+        </div>
+        <div class="media-content" id="media-content"></div>
+    </div>
 </div>
 
 <!-- ============= MODAL: Call ============= -->
@@ -260,6 +288,6 @@
 <!-- ============= AUDIO ELEMENTS ============= -->
 <audio id="notif-sound" src="data:audio/mp3;base64,SUQzBAAAAAABEVRYWFgAAAAtAAADY29tbWVudABCaWdTb3VuZEJhbmsuY29tIC8gTGFTb25vdGhlcXVlLm9yZwBURU5DAAAAHQAAA1N3aXRjaCBQbHVzIMKpIE5DSCBTb2Z0d2FyZQBUSVQyAAAABgAAAzIyMzUAVFNTRQAAAA8AAANMYXZmNTcuODMuMTAwAAAAAAAAAAAAAAD/80DEAAAAA0gAAAAATEFNRTMuMTAwVVVVVVVVVVVVVUxBTUUzLjEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV"></audio>
 
-<script src="/static/script.js?v=2.1.0"></script>
+<script src="/static/script.js?v=2.2.0"></script>
 </body>
 </html>
