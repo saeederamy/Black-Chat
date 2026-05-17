@@ -9,6 +9,16 @@ import tempfile
 import asyncio
 import urllib.request
 import aiofiles
+
+# Optional push notifications: requires `pywebpush` (pip install pywebpush)
+try:
+    from pywebpush import webpush, WebPushException
+    HAS_PUSH = True
+except ImportError:
+    HAS_PUSH = False
+    webpush = None
+    WebPushException = Exception
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, UploadFile, File, Form, HTTPException, Depends, Header
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -26,6 +36,8 @@ USERS_FILE = os.path.join(BASE_DIR, "users.txt")
 DB_FILE = os.path.join(BASE_DIR, "chat.db")
 BACKUP_DIR = os.path.join(BASE_DIR, "backups")
 TOKENS_FILE = os.path.join(BASE_DIR, ".tokens.json")
+VAPID_KEYS_FILE = os.path.join(BASE_DIR, ".vapid.json")
+VAPID_EMAIL = "admin@blackchat.local"
 
 # Default per-user quota in MB if not set in users.txt
 DEFAULT_QUOTA_MB = 500
@@ -35,6 +47,58 @@ MAX_FILE_SIZE_MB = 100
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(TPL_DIR, exist_ok=True)
 os.makedirs(BACKUP_DIR, exist_ok=True)
+
+# ============================================================
+# VAPID keys for Web Push (only if pywebpush is installed)
+# ============================================================
+def _generate_vapid_keys():
+    """Generate VAPID keys if missing. Requires `cryptography` (comes with pywebpush)."""
+    if not HAS_PUSH:
+        return None
+    if os.path.exists(VAPID_KEYS_FILE):
+        try:
+            with open(VAPID_KEYS_FILE) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    try:
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.backends import default_backend
+        import base64
+
+        # Generate EC P-256 keypair
+        priv = ec.generate_private_key(ec.SECP256R1(), default_backend())
+        pub = priv.public_key()
+
+        # Private key as PEM
+        priv_pem = priv.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        ).decode()
+
+        # Public key as raw bytes (65 bytes uncompressed), then URL-safe base64
+        pub_raw = pub.public_bytes(
+            encoding=serialization.Encoding.X962,
+            format=serialization.PublicFormat.UncompressedPoint,
+        )
+        pub_b64 = base64.urlsafe_b64encode(pub_raw).decode().rstrip("=")
+
+        keys = {"private_key_pem": priv_pem, "public_key_b64": pub_b64}
+        with open(VAPID_KEYS_FILE, "w") as f:
+            json.dump(keys, f)
+        try:
+            os.chmod(VAPID_KEYS_FILE, 0o600)
+        except Exception:
+            pass
+        return keys
+    except Exception as e:
+        print(f"VAPID generation failed: {e}")
+        return None
+
+VAPID_KEYS = _generate_vapid_keys()
+
 
 # ===================== DATABASE =====================
 def init_db():
@@ -102,6 +166,24 @@ def init_db():
         room TEXT,
         cleared_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (user, room)
+    )''')
+
+    # Phase 9: muted_chats — per-user, per-room mute setting
+    c.execute('''CREATE TABLE IF NOT EXISTS muted_chats (
+        user TEXT,
+        room TEXT,
+        muted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (user, room)
+    )''')
+
+    # Phase 9: push subscriptions for browser/mobile notifications
+    c.execute('''CREATE TABLE IF NOT EXISTS push_subscriptions (
+        user TEXT,
+        endpoint TEXT,
+        p256dh TEXT,
+        auth TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (user, endpoint)
     )''')
 
     # Phase 5b: app-wide settings (admin-controlled), key/value
@@ -572,48 +654,195 @@ def _read_env_file():
 
 def build_ice_servers():
     """
-    Build iceServers list for clients:
-    - Always include Google STUN (free, public)
-    - If TURN credentials are configured, include them too
+    Build the iceServers list for the WebRTC client.
+    - Always include Google STUN (works in most cases)
+    - If TURN credentials are configured (either via .env or auto-detected from
+      an existing Black Meet install), include both UDP/TCP/TLS variants
     """
     servers = [
         {"urls": ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]},
     ]
-    env = _read_env_file()
-    turn_host = env.get("TURN_HOST")
-    turn_port = env.get("TURN_PORT", "3478")
-    turn_user = env.get("TURN_USER")
-    turn_pass = env.get("TURN_PASS")
-    turn_tls_port = env.get("TURN_TLS_PORT", "5349")
-
-    if turn_host and turn_user and turn_pass:
-        # Both UDP and TCP TURN, plus TLS variant for restrictive networks
+    turn = get_effective_turn_config()
+    if turn:
+        host = turn["host"]
+        port = turn["port"]
+        tls_port = turn["tls_port"]
         urls = [
-            f"turn:{turn_host}:{turn_port}?transport=udp",
-            f"turn:{turn_host}:{turn_port}?transport=tcp",
-            f"turns:{turn_host}:{turn_tls_port}?transport=tcp",
+            f"turn:{host}:{port}?transport=udp",
+            f"turn:{host}:{port}?transport=tcp",
+            f"turns:{host}:{tls_port}?transport=tcp",
         ]
         servers.append({
             "urls": urls,
-            "username": turn_user,
-            "credential": turn_pass,
+            "username": turn["user"],
+            "credential": turn["pass"],
         })
-        # ALSO expose as STUN
-        servers[0]["urls"].insert(0, f"stun:{turn_host}:{turn_port}")
+        # Also expose as STUN
+        servers[0]["urls"].insert(0, f"stun:{host}:{port}")
     return servers
+
+def _auto_detect_turn_config():
+    """
+    Auto-detect existing TURN configuration from common locations.
+    Supports:
+    - Black Meet's /etc/turnserver.conf (Iran-style: realm=domain.ir, user=...)
+    """
+    conf_path = "/etc/turnserver.conf"
+    if not os.path.exists(conf_path):
+        return None
+    try:
+        cfg = {}
+        with open(conf_path, "r") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    k, _, v = line.partition("=")
+                    cfg[k.strip()] = v.strip()
+        # user is typically "user=username:password" in turnserver.conf
+        user_val = cfg.get("user", "")
+        if ":" in user_val:
+            tuser, _, tpass = user_val.partition(":")
+        else:
+            tuser, tpass = user_val, ""
+        host = cfg.get("realm") or cfg.get("external-ip") or ""
+        port = cfg.get("listening-port", "3478")
+        tls_port = cfg.get("tls-listening-port", "5349")
+        if host and tuser and tpass:
+            return {
+                "host": host,
+                "port": port,
+                "tls_port": tls_port,
+                "user": tuser,
+                "pass": tpass,
+                "realm": cfg.get("realm", host),
+            }
+    except Exception:
+        pass
+    return None
+
+def get_effective_turn_config():
+    """
+    Get the effective TURN config: prefers .env, falls back to auto-detected
+    /etc/turnserver.conf (e.g. from a Black Meet installation already on the server).
+    """
+    env = _read_env_file()
+    if env.get("TURN_HOST"):
+        return {
+            "host": env.get("TURN_HOST"),
+            "port": env.get("TURN_PORT", "3478"),
+            "tls_port": env.get("TURN_TLS_PORT", "5349"),
+            "user": env.get("TURN_USER", ""),
+            "pass": env.get("TURN_PASS", ""),
+            "realm": env.get("TURN_REALM", env.get("TURN_HOST", "")),
+            "source": "env",
+        }
+    detected = _auto_detect_turn_config()
+    if detected:
+        detected["source"] = "detected"
+        return detected
+    return None
 
 @app.get("/api/turn-config")
 async def get_turn_config(info: dict = Depends(require_user)):
     """Return iceServers for WebRTC. Only authenticated users get TURN credentials."""
     return {
         "iceServers": build_ice_servers(),
-        "hasTurn": bool(_read_env_file().get("TURN_HOST")),
+        "hasTurn": bool(get_effective_turn_config()),
     }
+
+# ============================================================
+# Push Notifications API (Web Push with VAPID)
+# ============================================================
+@app.get("/api/push/vapid-public-key")
+async def push_get_vapid_public_key():
+    """Return the VAPID public key so the frontend can subscribe."""
+    if not HAS_PUSH or not VAPID_KEYS:
+        return {"enabled": False, "publicKey": ""}
+    return {"enabled": True, "publicKey": VAPID_KEYS.get("public_key_b64", "")}
+
+@app.post("/api/push/subscribe")
+async def push_subscribe(request: Request, info: dict = Depends(require_user)):
+    """Save a browser/PWA push subscription for the current user."""
+    if not HAS_PUSH:
+        raise HTTPException(status_code=501, detail="Push not available on server (pywebpush not installed)")
+    data = await request.json()
+    sub = data.get("subscription", {})
+    endpoint = sub.get("endpoint")
+    keys = sub.get("keys") or {}
+    p256dh = keys.get("p256dh", "")
+    auth = keys.get("auth", "")
+    if not endpoint or not p256dh or not auth:
+        raise HTTPException(status_code=400, detail="Invalid subscription")
+    username = info["user"]
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute(
+        "INSERT OR REPLACE INTO push_subscriptions (user, endpoint, p256dh, auth) VALUES (?, ?, ?, ?)",
+        (username, endpoint, p256dh, auth),
+    )
+    conn.commit()
+    conn.close()
+    return {"success": True}
+
+@app.post("/api/push/unsubscribe")
+async def push_unsubscribe(request: Request, info: dict = Depends(require_user)):
+    data = await request.json()
+    endpoint = data.get("endpoint")
+    username = info["user"]
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    if endpoint:
+        c.execute("DELETE FROM push_subscriptions WHERE user=? AND endpoint=?", (username, endpoint))
+    else:
+        c.execute("DELETE FROM push_subscriptions WHERE user=?", (username,))
+    conn.commit()
+    conn.close()
+    return {"success": True}
+
+def send_push_to_user(target_user: str, payload: dict):
+    """Send a Web Push notification to all of target_user's subscribed devices."""
+    if not HAS_PUSH or not VAPID_KEYS:
+        return
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user=?", (target_user,))
+    subs = c.fetchall()
+    conn.close()
+    if not subs:
+        return
+    dead_endpoints = []
+    for endpoint, p256dh, auth in subs:
+        try:
+            webpush(
+                subscription_info={
+                    "endpoint": endpoint,
+                    "keys": {"p256dh": p256dh, "auth": auth},
+                },
+                data=json.dumps(payload),
+                vapid_private_key=VAPID_KEYS["private_key_pem"],
+                vapid_claims={"sub": f"mailto:{VAPID_EMAIL}"},
+            )
+        except WebPushException as e:
+            # 404 / 410 = subscription expired, remove it
+            if hasattr(e, "response") and e.response is not None and e.response.status_code in (404, 410):
+                dead_endpoints.append(endpoint)
+        except Exception:
+            pass
+    if dead_endpoints:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        for ep in dead_endpoints:
+            c.execute("DELETE FROM push_subscriptions WHERE endpoint=?", (ep,))
+        conn.commit()
+        conn.close()
 
 @app.get("/api/admin/turn")
 async def admin_turn_status(info: dict = Depends(require_admin)):
     """Admin-only: full TURN status / credentials."""
     env = _read_env_file()
+    turn = get_effective_turn_config()
     # Check if coturn service is running
     is_running = False
     try:
@@ -622,14 +851,15 @@ async def admin_turn_status(info: dict = Depends(require_admin)):
     except Exception:
         pass
     return {
-        "configured": bool(env.get("TURN_HOST")),
+        "configured": bool(turn),
+        "source": turn.get("source") if turn else None,  # "env" or "detected"
         "running": is_running,
-        "host": env.get("TURN_HOST", ""),
-        "port": env.get("TURN_PORT", ""),
-        "tls_port": env.get("TURN_TLS_PORT", ""),
-        "user": env.get("TURN_USER", ""),
-        "password": env.get("TURN_PASS", ""),
-        "realm": env.get("TURN_REALM", ""),
+        "host": (turn or {}).get("host", ""),
+        "port": (turn or {}).get("port", ""),
+        "tls_port": (turn or {}).get("tls_port", ""),
+        "user": (turn or {}).get("user", ""),
+        "password": (turn or {}).get("pass", ""),
+        "realm": (turn or {}).get("realm", ""),
         "ice_servers": build_ice_servers(),
     }
 
@@ -680,6 +910,9 @@ async def api_action(request: Request, info: dict = Depends(require_user)):
         # Cleared chat cutoffs (per room)
         c.execute("SELECT room, cleared_at FROM cleared_chats WHERE user=?", (username,))
         res["cleared_chats"] = {r[0]: r[1] for r in c.fetchall()}
+        # Muted chats (per room)
+        c.execute("SELECT room FROM muted_chats WHERE user=?", (username,))
+        res["muted_chats"] = [r[0] for r in c.fetchall()]
 
     elif act == "get_ips":
         c.execute("SELECT ip, last_seen FROM active_ips WHERE user=?", (username,))
@@ -834,6 +1067,20 @@ async def api_action(request: Request, info: dict = Depends(require_user)):
         # Also return who blocked me (so I can hide them)
         c.execute("SELECT owner FROM blocked_users WHERE blocked=?", (username,))
         res["blocked_by"] = [r[0] for r in c.fetchall()]
+
+    elif act == "mute_chat":
+        room = data.get("room")
+        if not room:
+            res = {"success": False, "msg": "Room required"}
+        else:
+            c.execute("INSERT OR REPLACE INTO muted_chats (user, room) VALUES (?, ?)", (username, room))
+
+    elif act == "unmute_chat":
+        room = data.get("room")
+        if not room:
+            res = {"success": False, "msg": "Room required"}
+        else:
+            c.execute("DELETE FROM muted_chats WHERE user=? AND room=?", (username, room))
 
     conn.commit()
     conn.close()
@@ -1102,7 +1349,19 @@ async def admin_update(info: dict = Depends(require_admin)):
         shutil.rmtree(tmpdir, ignore_errors=True)
 
     async def delayed_restart():
-        await asyncio.sleep(3)
+        await asyncio.sleep(2)
+        # Try to install any new pip dependencies (pywebpush, cryptography, etc.)
+        try:
+            pip_path = os.path.join(BASE_DIR, "venv", "bin", "pip")
+            if os.path.exists(pip_path):
+                subprocess.run(
+                    [pip_path, "install", "-q", "pywebpush", "cryptography", "aiofiles"],
+                    timeout=60,
+                    capture_output=True,
+                )
+        except Exception as e:
+            print(f"pip install during update failed: {e}")
+        await asyncio.sleep(1)
         _restart_service_async()
     asyncio.create_task(delayed_restart())
 
@@ -1430,6 +1689,61 @@ async def websocket_endpoint(websocket: WebSocket, username: str, role: str, tok
                 c.execute("INSERT INTO messages (msg_id, room, user, msg_type, content, file_name, reply_to, reactions, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                           (msg_id, room, msg['user'], msg['msgType'], msg.get('text', msg.get('url', '')), msg.get('fileName', ''), reply_to, '{}', now_str))
                 await manager.broadcast({"type": "new_msg", "room": room, "data": msg_payload})
+
+                # ============================================================
+                # Send Web Push to offline recipients (or those without open ws to this room)
+                # ============================================================
+                if HAS_PUSH:
+                    try:
+                        recipients = set()
+                        if target_user:
+                            # DM: just the other user
+                            recipients.add(target_user)
+                        elif room_members:
+                            # Group: all members except sender
+                            for m in room_members:
+                                if m != username:
+                                    recipients.add(m)
+                        elif room == "Announcements":
+                            # Send to all users
+                            all_u = get_all_usernames()
+                            for u in all_u:
+                                if u != username:
+                                    recipients.add(u)
+
+                        # Only send to recipients who haven't muted this room
+                        if recipients:
+                            push_conn = sqlite3.connect(DB_FILE)
+                            pc = push_conn.cursor()
+                            for recipient in recipients:
+                                # Skip muted
+                                pc.execute("SELECT 1 FROM muted_chats WHERE user=? AND room=?", (recipient, room))
+                                if pc.fetchone():
+                                    continue
+                                # Only push if user not currently online with this WS open
+                                # (online users get the WS event already, but we still want push for closed tabs/PWAs)
+                                # Strategy: always send push; the SW will dedupe if browser is active.
+                                preview = msg.get('text', '') if msg['msgType'] == 'text' else f"[{msg['msgType']}]"
+                                if room.startswith('rm_'):
+                                    # Group: prefix with room name
+                                    pc.execute("SELECT name FROM custom_rooms WHERE room_id=?", (room,))
+                                    rname_row = pc.fetchone()
+                                    rname = rname_row[0] if rname_row else "Group"
+                                    title = f"{msg['user']} · {rname}"
+                                else:
+                                    title = msg['user']
+                                payload = {
+                                    "title": title,
+                                    "body": (preview or "")[:120],
+                                    "room": room,
+                                    "tag": room,
+                                    "icon": "/static/icon-192.png",
+                                    "badge": "/static/icon-192.png",
+                                }
+                                send_push_to_user(recipient, payload)
+                            push_conn.close()
+                    except Exception as e:
+                        print(f"Push send failed: {e}")
 
             elif action == "webrtc":
                 await manager.broadcast({"type": "webrtc", "data": msg})

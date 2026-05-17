@@ -89,7 +89,7 @@ function install_app() {
     echo -e "${CYAN}Setting up Python Environment (FastAPI)...${RESET}"
     python3 -m venv venv
     source venv/bin/activate
-    pip install fastapi uvicorn websockets python-multipart aiofiles
+    pip install fastapi uvicorn websockets python-multipart aiofiles pywebpush cryptography
 
     cat <<EOF > /etc/systemd/system/$SERVICE_NAME
 [Unit]
@@ -135,6 +135,13 @@ function update_app() {
     # Cache-bust by adding timestamp to script.js reference in index.html
     TIMESTAMP=$(date +%s)
     sed -i "s|/static/script.js[^\"']*|/static/script.js?v=$TIMESTAMP|g" "$INSTALL_DIR/templates/index.html"
+    
+    # Ensure new dependencies are installed (pywebpush, cryptography for push notifications)
+    if [ -f "$INSTALL_DIR/venv/bin/pip" ]; then
+        echo -e "${CYAN}Checking dependencies (pywebpush, cryptography)...${RESET}"
+        "$INSTALL_DIR/venv/bin/pip" install -q pywebpush cryptography 2>/dev/null || \
+            echo -e "${YELLOW}  ⚠ Could not install pywebpush (push notifications will be disabled but app still works)${RESET}"
+    fi
     
     if systemctl is-active --quiet $SERVICE_NAME; then
         systemctl restart $SERVICE_NAME
@@ -255,6 +262,65 @@ function setup_turn() {
     echo -e "${WHITE}--- 🎙️  Setup coturn (TURN/STUN Server) ---${RESET}"
     echo -e "${CYAN}This is required for voice/video calls between users on different networks.${RESET}"
     echo ""
+
+    # ============================================================
+    # AUTO-DETECT: existing turnserver.conf (from Black Meet or similar)
+    # ============================================================
+    if [ -f /etc/turnserver.conf ] && systemctl is-active --quiet coturn 2>/dev/null; then
+        EXISTING_REALM=$(grep -E '^realm=' /etc/turnserver.conf 2>/dev/null | cut -d'=' -f2 | tr -d ' ')
+        EXISTING_USER=$(grep -E '^user=' /etc/turnserver.conf 2>/dev/null | cut -d'=' -f2 | tr -d ' ')
+        EXISTING_PORT=$(grep -E '^listening-port=' /etc/turnserver.conf 2>/dev/null | cut -d'=' -f2 | tr -d ' ')
+
+        if [ -n "$EXISTING_USER" ] && [ -n "$EXISTING_REALM" ]; then
+            echo -e "${GREEN}✓ Detected existing TURN server configuration!${RESET}"
+            echo -e "  Realm: ${YELLOW}$EXISTING_REALM${RESET}"
+            echo -e "  Port:  ${YELLOW}${EXISTING_PORT:-3478}${RESET}"
+            echo -e "  Status: ${GREEN}coturn is running${RESET}"
+            echo -e "${CYAN}This looks like an existing TURN setup (e.g. from Black Meet).${RESET}"
+            echo ""
+            read -e -p "Use the existing TURN configuration? [Y/n]: " USE_EXISTING
+            USE_EXISTING=${USE_EXISTING:-Y}
+            if [[ "$USE_EXISTING" =~ ^[Yy]$ ]]; then
+                # Parse user:password
+                TURN_USER=$(echo "$EXISTING_USER" | cut -d':' -f1)
+                TURN_PASS=$(echo "$EXISTING_USER" | cut -d':' -f2)
+                TURN_IP=$(grep -E '^external-ip=' /etc/turnserver.conf 2>/dev/null | cut -d'=' -f2 | tr -d ' ')
+                TURN_PORT="${EXISTING_PORT:-3478}"
+                TURN_TLS_PORT=$(grep -E '^tls-listening-port=' /etc/turnserver.conf 2>/dev/null | cut -d'=' -f2 | tr -d ' ')
+                TURN_TLS_PORT="${TURN_TLS_PORT:-5349}"
+                REALM="$EXISTING_REALM"
+                # Use realm as the host name (since users may set realm to their domain)
+                TURN_HOST="$EXISTING_REALM"
+
+                # Save to our .env so the app uses this config
+                grep -v -E '^TURN_' "$ENV_FILE" > "$ENV_FILE.tmp" 2>/dev/null || cp "$ENV_FILE" "$ENV_FILE.tmp"
+                mv "$ENV_FILE.tmp" "$ENV_FILE"
+                cat >> "$ENV_FILE" <<EOF
+TURN_HOST=$TURN_HOST
+TURN_PORT=$TURN_PORT
+TURN_TLS_PORT=$TURN_TLS_PORT
+TURN_USER=$TURN_USER
+TURN_PASS=$TURN_PASS
+TURN_REALM=$REALM
+EOF
+                echo -e "${GREEN}✓ Using existing TURN config!${RESET}"
+                echo -e "${CYAN}Restart the Black Chat service to apply: systemctl restart black-chat.service${RESET}"
+                read -p "Restart Black Chat now? [Y/n]: " RESTART_NOW
+                RESTART_NOW=${RESTART_NOW:-Y}
+                if [[ "$RESTART_NOW" =~ ^[Yy]$ ]]; then
+                    systemctl restart black-chat.service
+                    echo -e "${GREEN}✓ Service restarted.${RESET}"
+                fi
+                return
+            fi
+            echo -e "${YELLOW}Proceeding to set up a fresh coturn install (this will overwrite the existing config).${RESET}"
+            read -p "Are you sure? Existing TURN setup will be replaced. [y/N]: " CONFIRM_OVERWRITE
+            if [[ ! "$CONFIRM_OVERWRITE" =~ ^[Yy]$ ]]; then
+                echo -e "${CYAN}Aborted.${RESET}"
+                return
+            fi
+        fi
+    fi
 
     # Auto-detect public IP
     PUB_IP=$(curl -s4 -m 5 ifconfig.me 2>/dev/null || curl -s4 -m 5 icanhazip.com 2>/dev/null || echo "")
