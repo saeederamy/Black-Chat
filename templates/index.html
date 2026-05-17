@@ -11,7 +11,7 @@
     <link rel="apple-touch-icon" href="/static/icon-192.png">
     <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
     <title>Black Chat</title>
-    <link rel="stylesheet" href="/static/style.css?v=2.2.0">
+    <link rel="stylesheet" href="/static/style.css?v=2.3.0">
 </head>
 <body>
 
@@ -214,8 +214,13 @@
 <!-- ============= CHAT MENU (chat header more button) ============= -->
 <div id="chat-menu" class="dropdown-menu" style="display:none">
     <button data-action="search"><svg><use href="#i-search"/></svg><span>Search</span></button>
-    <button data-action="info" id="chat-menu-info"><svg><use href="#i-users"/></svg><span>Group info</span></button>
+    <button data-action="manage-group" id="chat-menu-manage" style="display:none"><svg><use href="#i-users"/></svg><span>Manage group</span></button>
     <button data-action="clear" class="danger"><svg><use href="#i-trash"/></svg><span>Clear history</span></button>
+    <button data-action="block" id="chat-menu-block" style="display:none"><svg><use href="#i-shield"/></svg><span>Block user</span></button>
+    <button data-action="unblock" id="chat-menu-unblock" style="display:none" class="danger"><svg><use href="#i-shield"/></svg><span>Unblock user</span></button>
+    <button data-action="leave-group" id="chat-menu-leave" style="display:none" class="danger"><svg><use href="#i-logout"/></svg><span>Leave group</span></button>
+    <button data-action="delete-group" id="chat-menu-delgroup" style="display:none" class="danger"><svg><use href="#i-trash"/></svg><span>Delete group</span></button>
+    <button data-action="delete-dm" id="chat-menu-deldm" style="display:none" class="danger"><svg><use href="#i-trash"/></svg><span>Delete chat</span></button>
 </div>
 
 <!-- ============= MODAL: Generic ============= -->
@@ -288,6 +293,6 @@
 <!-- ============= AUDIO ELEMENTS ============= -->
 <audio id="notif-sound" src="data:audio/mp3;base64,SUQzBAAAAAABEVRYWFgAAAAtAAADY29tbWVudABCaWdTb3VuZEJhbmsuY29tIC8gTGFTb25vdGhlcXVlLm9yZwBURU5DAAAAHQAAA1N3aXRjaCBQbHVzIMKpIE5DSCBTb2Z0d2FyZQBUSVQyAAAABgAAAzIyMzUAVFNTRQAAAA8AAANMYXZmNTcuODMuMTAwAAAAAAAAAAAAAAD/80DEAAAAA0gAAAAATEFNRTMuMTAwVVVVVVVVVVVVVUxBTUUzLjEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV"></audio>
 
-<script src="/static/script.js?v=2.2.0"></script>
+<script src="/static/script.js?v=2.3.0"></script>
 </body>
 </html>
