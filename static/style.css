@@ -1718,3 +1718,241 @@ body, button, input, textarea {
     color: var(--text-3);
     font-size: 13px;
 }
+
+/* ============================================================
+   PHASE 8: Selection mode + Swipe-to-reply + Login redo + more
+   ============================================================ */
+
+/* Selection toolbar (sticky on top of chat) */
+.selection-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    background: var(--bg-sidebar);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    z-index: 10;
+    animation: slideDown 0.2s ease;
+}
+@keyframes slideDown {
+    from { transform: translateY(-100%); }
+    to { transform: translateY(0); }
+}
+.selection-toolbar .sel-count {
+    flex: 1;
+    font-size: 14px;
+    font-weight: 500;
+}
+body.selection-mode .msg-row { cursor: pointer; }
+body.selection-mode .msg-row .bubble {
+    transition: outline 0.12s, background 0.12s;
+}
+body.selection-mode .msg-row.selected .bubble {
+    outline: 2px solid var(--accent);
+    box-shadow: 0 0 0 4px var(--accent-soft);
+}
+body.selection-mode .msg-row::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+}
+
+/* Swipe-to-reply visual feedback */
+.msg-row.swiping .bubble {
+    transition: transform 0.05s linear;
+}
+.swipe-reply-indicator {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    background: var(--bg-hover);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--accent);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s, transform 0.15s;
+}
+.msg-row.in .swipe-reply-indicator { left: 8px; }
+.msg-row.out .swipe-reply-indicator { right: 8px; }
+.swipe-reply-indicator svg { width: 20px; height: 20px; fill: currentColor; }
+.swipe-reply-indicator.show { opacity: 1; }
+.swipe-reply-indicator.active {
+    background: var(--accent);
+    color: white;
+    transform: translateY(-50%) scale(1.15);
+}
+
+/* ============================================================
+   Login redo: Black Hub style — signature BELOW box, white text
+   ============================================================ */
+#login-screen.bh-login {
+    flex-direction: column;
+}
+#login-screen.bh-login .login-box {
+    margin-bottom: 16px;
+}
+/* Override the title gradient → keep white only (no blue tint) */
+.bh-login .login-title {
+    background: none !important;
+    -webkit-text-fill-color: white !important;
+    color: white;
+}
+/* Move signature directly below login-box, not at the bottom corner */
+.bh-login .bh-signature {
+    position: static;
+    margin-top: 0;
+    z-index: 10;
+}
+.bh-login .bh-signature a {
+    color: rgba(255,255,255,0.85);
+    border: 1px solid rgba(255,255,255,0.1);
+    background: rgba(255,255,255,0.03);
+    padding: 8px 16px;
+    border-radius: 24px;
+    font-size: 12px;
+    letter-spacing: 0.5px;
+    text-decoration: none;
+    transition: 0.2s;
+    display: inline-flex; align-items: center; gap: 8px;
+    backdrop-filter: blur(10px);
+}
+.bh-login .bh-signature a:hover {
+    color: white;
+    background: rgba(255,255,255,0.08);
+    border-color: rgba(255,255,255,0.25);
+    transform: translateY(-2px);
+}
+.bh-login .bh-signature a svg {
+    fill: currentColor;
+    opacity: 0.85;
+}
+
+/* ============================================================
+   Group owner badge + members list in chat header status
+   ============================================================ */
+.owner-badge {
+    display: inline-block;
+    background: var(--orange);
+    color: white;
+    font-size: 9px;
+    font-weight: 700;
+    padding: 1px 5px;
+    border-radius: 4px;
+    margin-left: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    vertical-align: middle;
+}
+
+/* ============================================================
+   Blocked user UI
+   ============================================================ */
+.blocked-banner {
+    text-align: center;
+    padding: 20px;
+    background: rgba(229, 57, 53, 0.1);
+    color: var(--red);
+    border-radius: 12px;
+    margin: 12px;
+    font-size: 14px;
+}
+.composer.disabled {
+    opacity: 0.4;
+    pointer-events: none;
+}
+
+/* ============================================================
+   Mention (@username) highlight
+   ============================================================ */
+.bubble .mention {
+    color: var(--accent);
+    font-weight: 500;
+    cursor: pointer;
+    text-decoration: none;
+}
+.msg-row.out .bubble .mention {
+    color: #b3d4f5;
+    font-weight: 500;
+}
+.bubble .mention:hover {
+    text-decoration: underline;
+}
+.bubble .mention.self {
+    background: var(--accent-soft);
+    padding: 0 4px;
+    border-radius: 4px;
+}
+
+/* Mention autocomplete dropdown */
+.mention-dropdown {
+    position: absolute;
+    bottom: 100%;
+    left: 8px;
+    right: 8px;
+    background: var(--bg-sidebar);
+    border: 1px solid var(--border-2);
+    border-radius: 12px;
+    max-height: 240px;
+    overflow-y: auto;
+    z-index: 100;
+    box-shadow: 0 -8px 24px rgba(0,0,0,0.5);
+    margin-bottom: 4px;
+}
+.mention-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    cursor: pointer;
+    transition: background 0.12s;
+}
+.mention-item:hover, .mention-item.active {
+    background: var(--bg-hover);
+}
+.mention-item .avatar {
+    width: 32px; height: 32px;
+    font-size: 13px;
+}
+.mention-item-name { flex: 1; font-size: 14px; }
+
+/* ============================================================
+   System notification toast (in-app, slides in from top)
+   ============================================================ */
+.notif-toast {
+    position: fixed;
+    top: 16px; left: 50%;
+    transform: translateX(-50%) translateY(-120%);
+    background: var(--bg-sidebar);
+    border: 1px solid var(--border-2);
+    border-radius: 12px;
+    padding: 10px 14px;
+    display: flex; align-items: center; gap: 10px;
+    z-index: 12000;
+    max-width: 380px;
+    min-width: 280px;
+    box-shadow: 0 12px 36px rgba(0,0,0,0.55);
+    cursor: pointer;
+    transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.notif-toast.show { transform: translateX(-50%) translateY(0); }
+.notif-toast .avatar {
+    width: 36px; height: 36px;
+    flex-shrink: 0;
+    font-size: 14px;
+}
+.notif-toast-body { flex: 1; min-width: 0; }
+.notif-toast-title {
+    font-weight: 600;
+    font-size: 13px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.notif-toast-text {
+    font-size: 12px;
+    color: var(--text-2);
+    margin-top: 2px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}

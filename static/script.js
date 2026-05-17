@@ -31,6 +31,10 @@ const State = {
     typing: {},           // roomId -> {user, expires}
     ws: null,
     appName: 'Black Chat',
+    blocked: new Set(),      // users I have blocked
+    blockedBy: new Set(),    // users who blocked me
+    clearedChats: {},        // roomId -> cleared_at timestamp
+    groupMembers: {},        // roomId -> [usernames]
 };
 
 // ============================================================
@@ -180,15 +184,18 @@ async function loadInitData() {
         State.contacts = d.contacts || [];
         State.allUsers = d.all_users || [];
         State.avatars = d.all_avatars || {};
+        State.blocked = new Set(d.blocked || []);
+        State.blockedBy = new Set(d.blocked_by || []);
+        State.clearedChats = d.cleared_chats || {};
         State.rooms = [];
 
         // Build the rooms list
         // Announcements channel
         State.rooms.push({ id: 'Announcements', name: 'Announcements', type: 'channel' });
 
-        // Custom rooms (groups)
+        // Custom rooms (groups) — include owner
         (d.custom_rooms || []).forEach(r => {
-            State.rooms.push({ id: r.id, name: r.name, type: 'group' });
+            State.rooms.push({ id: r.id, name: r.name, type: 'group', owner: r.owner });
         });
 
         // DM contacts
@@ -300,6 +307,9 @@ function handleWS(m) {
         case 'webrtc':
             handleWebRTC(m.data);
             break;
+        case 'send_blocked':
+            alert(`Cannot send: you have blocked ${m.target} (or vice versa).`);
+            break;
         case 'pong':
             break;
     }
@@ -311,28 +321,44 @@ function onNewMsg(m) {
     State.messages[room] = State.messages[room] || [];
     State.messages[room].push(data);
 
+    const isMine = data.user === State.user;
+
     if (State.currentRoom && room === State.currentRoom.id) {
         appendMessage(data, true);
         // Mark as read shortly (so other side sees blue ticks)
-        if (document.hasFocus()) {
-            setTimeout(() => wsSend({ action: 'read_messages', room }), 500);
+        if (!isMine && document.hasFocus()) {
+            setTimeout(() => wsSend({ action: 'read_messages', room }), 300);
         }
     } else {
         // Increment unread for the room (unless it's my own message)
-        if (data.user !== State.user) {
+        if (!isMine) {
             State.unread[room] = (State.unread[room] || 0) + 1;
-            try { document.getElementById('notif-sound').play(); } catch {}
-            // System notification
+            try { document.getElementById('notif-sound').play().catch(()=>{}); } catch {}
+
+            // Find which room this is for the toast
+            const roomObj = State.rooms.find(r => r.id === room);
+            const senderLabel = (roomObj && roomObj.type === 'group')
+                ? `${data.user} · ${roomObj.name}`
+                : data.user;
+            const body = data.msgType === 'text' ? data.text : `[${data.msgType}]`;
+
+            // In-app toast (always shows, since they're not in that chat)
+            if (roomObj) {
+                showNotifToast(senderLabel, body, () => openChat(roomObj));
+            }
+
+            // System notification when tab is hidden
             if ('Notification' in window && Notification.permission === 'granted' && document.hidden) {
-                const sender = data.user;
-                const body = data.msgType === 'text' ? data.text : `[${data.msgType}]`;
                 try {
                     if (navigator.serviceWorker) {
                         navigator.serviceWorker.getRegistration().then(reg => {
-                            if (reg) reg.showNotification(sender, { body, icon: '/static/icon-192.png', tag: room });
+                            if (reg) reg.showNotification(senderLabel, { body, icon: '/static/icon-192.png', tag: room });
+                            else new Notification(senderLabel, { body, icon: '/static/icon-192.png' });
+                        }).catch(() => {
+                            try { new Notification(senderLabel, { body, icon: '/static/icon-192.png' }); } catch {}
                         });
                     } else {
-                        new Notification(sender, { body, icon: '/static/icon-192.png' });
+                        new Notification(senderLabel, { body, icon: '/static/icon-192.png' });
                     }
                 } catch {}
             }
@@ -488,6 +514,20 @@ function openChat(room) {
     document.getElementById('chat-call-btn').style.display = isDM ? '' : 'none';
     document.getElementById('chat-video-btn').style.display = isDM ? '' : 'none';
 
+    // For groups, load members if we don't have them
+    if (room.type === 'group' && !State.groupMembers[room.id]) {
+        apiPost('/api/action', { action: 'get_room_members', room_id: room.id })
+            .then(r => r.json())
+            .then(d => {
+                if (d.success && d.members) {
+                    State.groupMembers[room.id] = d.members;
+                    // Also update room.owner
+                    if (d.owner) room.owner = d.owner;
+                    renderHeader();
+                }
+            }).catch(() => {});
+    }
+
     // Request history
     State.messages[room.id] = null;
     document.getElementById('messages').innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-3)"><div class="spinner" style="margin:0 auto 12px auto"></div>Loading...</div>';
@@ -547,7 +587,18 @@ function renderHeader() {
             status.className = 'chat-header-status';
         }
     } else if (r.type === 'group') {
-        status.innerText = '';
+        // Show member count + online count
+        const members = State.groupMembers[r.id] || [];
+        const onlineCount = members.filter(m => State.onlineUsers.includes(m)).length;
+        if (members.length > 0) {
+            if (onlineCount > 0) {
+                status.innerText = `${members.length} members, ${onlineCount} online`;
+            } else {
+                status.innerText = `${members.length} member${members.length === 1 ? '' : 's'}`;
+            }
+        } else {
+            status.innerText = 'group';
+        }
         status.className = 'chat-header-status';
     } else {
         status.innerText = '';
@@ -676,7 +727,7 @@ function buildMessageRow(m, isSame, isLastInGroup) {
     }
 
     // Text
-    const textHTML = m.msgType === 'text' && m.text ? `<div class="text" dir="${dirOf(m.text)}">${esc(m.text)}</div>` : '';
+    const textHTML = m.msgType === 'text' && m.text ? `<div class="text" dir="${dirOf(m.text)}">${renderTextWithMentions(m.text)}</div>` : '';
 
     // Meta (time + ticks for outgoing)
     let ticks = '';
@@ -703,6 +754,14 @@ function buildMessageRow(m, isSame, isLastInGroup) {
 
     // Right-click / long-press for context menu
     attachLongPress(row, () => openContextMenu(row, m));
+
+    // Click toggle for selection mode
+    row.addEventListener('click', (e) => {
+        if (!State.selectionMode) return;
+        // Avoid triggering when clicking specific media controls
+        if (e.target.closest('audio, video, .voice-play, .file-row, img, .mention')) return;
+        toggleMsgSelection(m.id);
+    });
 
     return row;
 }
@@ -917,7 +976,11 @@ function openContextMenu(rowEl, msg) {
     // Position
     const bubble = rowEl.querySelector('.bubble');
     const r = bubble ? bubble.getBoundingClientRect() : rowEl.getBoundingClientRect();
-    requestAnimationFrame(() => positionMenu(menu, r));
+    requestAnimationFrame(() => {
+        positionMenu(menu, r);
+        // After menu is positioned, place reaction picker relative to it
+        requestAnimationFrame(positionReactionPicker);
+    });
 }
 
 // Reaction picker (4 emojis: like, dislike, heart, laugh)
@@ -941,22 +1004,35 @@ function showReactionPicker(msg, rowEl) {
         closeReactionPicker();
         closeContextMenu();
     });
+    // Positioning is done by positionReactionPicker() AFTER the menu is positioned
+    // so we know the menu's actual rect and can sit above it without overlap.
+}
 
-    // Position: above the bubble
-    requestAnimationFrame(() => {
-        const bubble = rowEl.querySelector('.bubble');
-        const r = bubble ? bubble.getBoundingClientRect() : rowEl.getBoundingClientRect();
-        const w = picker.offsetWidth;
-        const h = picker.offsetHeight;
-        const PAD = 10;
-        let left = r.left + (r.width - w) / 2;
-        let top = r.top - h - 8;
-        if (top < PAD) top = r.bottom + 8;
-        if (left < PAD) left = PAD;
-        if (left + w > window.innerWidth - PAD) left = window.innerWidth - w - PAD;
-        picker.style.left = left + 'px';
-        picker.style.top = top + 'px';
-    });
+function positionReactionPicker() {
+    const picker = document.getElementById('reaction-picker');
+    const menu = document.getElementById('ctx-menu');
+    if (!picker || !menu) return;
+    const mr = menu.getBoundingClientRect();
+    const w = picker.offsetWidth;
+    const h = picker.offsetHeight;
+    const PAD = 8;
+    // Try to place ABOVE the menu (aligned with menu's left edge)
+    let left = mr.left + (mr.width - w) / 2;
+    let top = mr.top - h - 8;
+    // If no room above the menu, place BELOW the menu
+    if (top < PAD) top = mr.bottom + 8;
+    // If picker would still overflow viewport bottom, place to the side
+    if (top + h > window.innerHeight - PAD) {
+        // try left of menu, or right
+        top = mr.top;
+        left = mr.left - w - 8;
+        if (left < PAD) left = mr.right + 8;
+    }
+    if (left < PAD) left = PAD;
+    if (left + w > window.innerWidth - PAD) left = window.innerWidth - w - PAD;
+    if (top < PAD) top = PAD;
+    picker.style.left = left + 'px';
+    picker.style.top = top + 'px';
 }
 
 function closeReactionPicker() {
@@ -1048,9 +1124,7 @@ function handleCtxAction(action) {
             wsSend({ action: isPinned ? 'unpin_msg' : 'pin_msg', msg_id: msg.id });
             break;
         case 'select':
-            State.selectionMode = true;
-            State.selectedIds.add(msg.id);
-            // (Selection UI can be extended later)
+            enterSelectionMode(msg.id);
             break;
         case 'delete':
             if (confirm('Delete this message?')) {
@@ -1059,6 +1133,126 @@ function handleCtxAction(action) {
             break;
     }
     closeContextMenu();
+}
+
+// ============================================================
+// SELECTION MODE
+// ============================================================
+function enterSelectionMode(initialMsgId) {
+    State.selectionMode = true;
+    State.selectedIds = new Set([initialMsgId]);
+    document.body.classList.add('selection-mode');
+    markSelectedInDOM(initialMsgId, true);
+    showSelectionToolbar();
+}
+
+function exitSelectionMode() {
+    State.selectionMode = false;
+    State.selectedIds.forEach(id => markSelectedInDOM(id, false));
+    State.selectedIds.clear();
+    document.body.classList.remove('selection-mode');
+    hideSelectionToolbar();
+}
+
+function toggleMsgSelection(msgId) {
+    if (State.selectedIds.has(msgId)) {
+        State.selectedIds.delete(msgId);
+        markSelectedInDOM(msgId, false);
+    } else {
+        State.selectedIds.add(msgId);
+        markSelectedInDOM(msgId, true);
+    }
+    if (State.selectedIds.size === 0) {
+        exitSelectionMode();
+    } else {
+        updateSelectionToolbar();
+    }
+}
+
+function markSelectedInDOM(msgId, selected) {
+    const el = document.getElementById('msg-' + msgId);
+    if (!el) return;
+    if (selected) el.classList.add('selected');
+    else el.classList.remove('selected');
+}
+
+function showSelectionToolbar() {
+    let bar = document.getElementById('selection-toolbar');
+    if (bar) bar.remove();
+    bar = document.createElement('div');
+    bar.id = 'selection-toolbar';
+    bar.className = 'selection-toolbar';
+    bar.innerHTML = `
+        <button class="icon-btn" id="sel-close" title="Cancel">
+            <svg><use href="#i-close"/></svg>
+        </button>
+        <span class="sel-count" id="sel-count">1 selected</span>
+        <button class="icon-btn" id="sel-copy" title="Copy">
+            <svg><use href="#i-copy"/></svg>
+        </button>
+        <button class="icon-btn" id="sel-forward" title="Forward">
+            <svg><use href="#i-forward"/></svg>
+        </button>
+        <button class="icon-btn danger" id="sel-delete" title="Delete">
+            <svg><use href="#i-trash"/></svg>
+        </button>
+    `;
+    // Insert into chat-content (above messages list)
+    const chat = document.getElementById('chat-content');
+    chat.insertBefore(bar, chat.firstChild);
+
+    document.getElementById('sel-close').addEventListener('click', exitSelectionMode);
+    document.getElementById('sel-copy').addEventListener('click', () => {
+        const msgs = State.messages[State.currentRoom.id] || [];
+        const selected = msgs.filter(m => State.selectedIds.has(m.id));
+        const text = selected.map(m => `${m.user}: ${m.text || '[' + m.msgType + ']'}`).join('\n');
+        try { navigator.clipboard.writeText(text); } catch {}
+        exitSelectionMode();
+    });
+    document.getElementById('sel-forward').addEventListener('click', () => {
+        const ids = Array.from(State.selectedIds);
+        openForwardModalMulti(ids);
+    });
+    document.getElementById('sel-delete').addEventListener('click', () => {
+        const ids = Array.from(State.selectedIds);
+        if (!ids.length) return;
+        if (confirm(`Delete ${ids.length} message(s)?`)) {
+            wsSend({ action: 'delete_msg', msg_ids: ids });
+            exitSelectionMode();
+        }
+    });
+}
+
+function updateSelectionToolbar() {
+    const c = document.getElementById('sel-count');
+    if (c) c.innerText = `${State.selectedIds.size} selected`;
+}
+
+function hideSelectionToolbar() {
+    const bar = document.getElementById('selection-toolbar');
+    if (bar) bar.remove();
+}
+
+function openForwardModalMulti(msgIds) {
+    const items = State.rooms.filter(r => r.id !== State.currentRoom.id).map(r =>
+        `<div onclick="doForwardMulti(${JSON.stringify(msgIds).replace(/"/g,'&quot;')}, '${esc(r.id)}')" style="display:flex;align-items:center;gap:10px;padding:10px;border-radius:8px;cursor:pointer" onmouseover="this.style.background='var(--bg-hover)'" onmouseout="this.style.background=''">
+            <div class="avatar" style="width:36px;height:36px;font-size:14px">${esc(r.name.charAt(0).toUpperCase())}</div>
+            <div>${esc(r.name)}</div>
+        </div>`
+    ).join('');
+    showModal(`
+        <h3 class="modal-title">Forward ${msgIds.length} message(s) to…</h3>
+        <div style="max-height:340px;overflow-y:auto">${items}</div>
+        <div class="modal-actions">
+            <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+        </div>
+    `);
+}
+
+function doForwardMulti(msgIds, targetRoom) {
+    wsSend({ action: 'forward_msg', msg_ids: msgIds, target_room: targetRoom });
+    closeModal();
+    exitSelectionMode();
 }
 
 function renderReplyBar() {
@@ -2332,6 +2526,22 @@ function doForward(msgId, targetRoom) {
 // ============================================================
 function openMenu(menuId, anchorEl) {
     closeMenu();
+    // Context-aware visibility for chat-menu
+    if (menuId === 'chat-menu' && State.currentRoom) {
+        const r = State.currentRoom;
+        const isGroup = r.type === 'group';
+        const isDM = r.type === 'dm';
+        const isOwner = isGroup && r.owner === State.user;
+        const isBlocked = isDM && State.blocked.has(r.partner);
+
+        document.getElementById('chat-menu-manage').style.display = isGroup ? '' : 'none';
+        document.getElementById('chat-menu-leave').style.display = (isGroup && !isOwner) ? '' : 'none';
+        document.getElementById('chat-menu-delgroup').style.display = (isGroup && isOwner) ? '' : 'none';
+        document.getElementById('chat-menu-deldm').style.display = isDM ? '' : 'none';
+        document.getElementById('chat-menu-block').style.display = (isDM && !isBlocked) ? '' : 'none';
+        document.getElementById('chat-menu-unblock').style.display = (isDM && isBlocked) ? '' : 'none';
+    }
+
     const menu = document.getElementById(menuId);
     menu.style.display = 'flex';
     showBackdrop(() => closeMenu());
@@ -2388,14 +2598,91 @@ function setupHandlers() {
         e.stopPropagation();
         openMenu('chat-menu', e.currentTarget);
     });
-    document.getElementById('chat-menu').addEventListener('click', e => {
+    document.getElementById('chat-menu').addEventListener('click', async e => {
         const btn = e.target.closest('button[data-action]');
         if (!btn) return;
+        const action = btn.dataset.action;
         closeMenu();
-        if (btn.dataset.action === 'clear') {
-            if (confirm('Clear chat history (visible only on your side)?')) {
-                document.getElementById('messages').innerHTML = '';
-                State.messages[State.currentRoom.id] = [];
+        if (!State.currentRoom) return;
+        const room = State.currentRoom;
+        if (action === 'search') {
+            openSearchModal();
+        }
+        else if (action === 'manage-group') {
+            openGroupManageModal(room);
+        }
+        else if (action === 'clear') {
+            if (!confirm('Clear chat history? This will hide all current messages for you only.')) return;
+            // Server-side clear
+            try {
+                const res = await apiPost('/api/action', { action: 'clear_history', room: room.id });
+                const d = await res.json();
+                if (d.success) {
+                    State.messages[room.id] = [];
+                    document.getElementById('messages').innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-3)">No messages</div>';
+                    State.clearedChats[room.id] = new Date().toISOString();
+                } else {
+                    alert(d.msg || 'Failed');
+                }
+            } catch (e) {
+                alert('Failed: ' + e.message);
+            }
+        }
+        else if (action === 'block') {
+            if (!confirm(`Block "${room.partner}"? They won't be able to message you.`)) return;
+            const res = await apiPost('/api/action', { action: 'block_user', target: room.partner });
+            const d = await res.json();
+            if (d.success) {
+                State.blocked.add(room.partner);
+                renderHeader();
+            }
+        }
+        else if (action === 'unblock') {
+            const res = await apiPost('/api/action', { action: 'unblock_user', target: room.partner });
+            const d = await res.json();
+            if (d.success) {
+                State.blocked.delete(room.partner);
+                renderHeader();
+            }
+        }
+        else if (action === 'leave-group') {
+            if (!confirm(`Leave group "${room.name}"?`)) return;
+            const res = await apiPost('/api/action', { action: 'remove_room_member', room_id: room.id, target: State.user });
+            const d = await res.json();
+            if (d.success) {
+                State.rooms = State.rooms.filter(x => x.id !== room.id);
+                delete State.messages[room.id];
+                closeChat();
+                renderChatList();
+            } else {
+                alert(d.msg || 'Failed');
+            }
+        }
+        else if (action === 'delete-group') {
+            if (!confirm(`Delete group "${room.name}" PERMANENTLY for all members?`)) return;
+            const res = await apiPost('/api/action', { action: 'delete_room', room_id: room.id });
+            const d = await res.json();
+            if (d.success) {
+                State.rooms = State.rooms.filter(x => x.id !== room.id);
+                delete State.messages[room.id];
+                closeChat();
+                renderChatList();
+            } else {
+                alert(d.msg || 'Failed');
+            }
+        }
+        else if (action === 'delete-dm') {
+            if (!confirm(`Delete chat with "${room.partner}"? This removes them from your contacts and clears history on your side.`)) return;
+            const res = await apiPost('/api/action', { action: 'delete_dm', target: room.partner });
+            const d = await res.json();
+            if (d.success) {
+                State.rooms = State.rooms.filter(x => x.id !== room.id);
+                delete State.messages[room.id];
+                State.contacts = State.contacts.filter(c => c !== room.partner);
+                closeChat();
+                renderChatList();
+            } else {
+                alert(d.msg || 'Failed');
             }
         }
     });
@@ -2471,6 +2758,8 @@ function setupHandlers() {
 
     // Voice clicks (delegate)
     setupVoiceClicks();
+    setupMentionAutocomplete();
+    setupSwipeReply();
 
     // Window focus → mark as read
     window.addEventListener('focus', () => {
@@ -2952,3 +3241,470 @@ function formatVoiceListDate(iso) {
 
 window.openProfilePane = openProfilePane;
 window.closeProfilePane = closeProfilePane;
+
+// ============================================================
+// PHASE 8: Search modal + Group management
+// ============================================================
+function openSearchModal() {
+    if (!State.currentRoom) return;
+    showModal(`
+        <h3 class="modal-title">Search in chat</h3>
+        <input type="text" id="search-input" placeholder="Type to search...">
+        <div id="search-results" style="max-height:400px;overflow-y:auto;margin-top:10px"></div>
+        <div class="modal-actions">
+            <button class="btn-cancel" onclick="closeModal()">Close</button>
+        </div>
+    `);
+    setTimeout(() => document.getElementById('search-input').focus(), 100);
+    let timer = null;
+    document.getElementById('search-input').addEventListener('input', () => {
+        const q = document.getElementById('search-input').value.trim();
+        if (timer) clearTimeout(timer);
+        if (q.length < 2) {
+            document.getElementById('search-results').innerHTML = '';
+            return;
+        }
+        timer = setTimeout(async () => {
+            const res = await apiPost('/api/action', { action: 'search_messages', room: State.currentRoom.id, q });
+            const d = await res.json();
+            const box = document.getElementById('search-results');
+            if (!d.success && d.msg) { box.innerHTML = `<div style="color:var(--red);padding:10px">${esc(d.msg)}</div>`; return; }
+            if (!d.results || !d.results.length) { box.innerHTML = `<div style="color:var(--text-3);padding:20px;text-align:center">No results</div>`; return; }
+            box.innerHTML = d.results.map(m => {
+                const t = (m.text || '').slice(0, 100);
+                return `<div onclick="closeModal();jumpToMessage('${esc(m.id)}')" style="padding:10px;background:var(--bg-input);border-radius:8px;margin-bottom:6px;cursor:pointer">
+                    <div style="font-weight:600;color:var(--accent);font-size:13px">${esc(m.user)}</div>
+                    <div style="font-size:13px;margin-top:4px">${esc(t)}</div>
+                </div>`;
+            }).join('');
+        }, 300);
+    });
+}
+
+async function openGroupManageModal(room) {
+    if (room.type !== 'group') return;
+    const res = await apiPost('/api/action', { action: 'get_room_members', room_id: room.id });
+    const d = await res.json();
+    if (!d.success) { alert(d.msg || 'Failed'); return; }
+    const isOwner = d.owner === State.user;
+    const members = d.members || [];
+    const candidates = (d.all_users || []).filter(u => !members.includes(u));
+
+    State.groupMembers[room.id] = members;
+    room.owner = d.owner;
+    renderHeader();
+
+    const membersHTML = members.map(m => {
+        const isOwn = m === d.owner;
+        const av = State.avatars[m];
+        const avHTML = av ? `<img src="${esc(av)}" style="width:100%;height:100%;object-fit:cover">` : esc(m.charAt(0).toUpperCase());
+        const online = State.onlineUsers.includes(m);
+        return `<div style="display:flex;align-items:center;gap:10px;padding:8px;background:var(--bg-input);border-radius:8px;margin-bottom:6px">
+            <div class="avatar" style="width:36px;height:36px;font-size:14px">${avHTML}</div>
+            <div style="flex:1;min-width:0">
+                <div style="font-size:14px;font-weight:500">
+                    ${esc(m)}
+                    ${isOwn ? '<span class="owner-badge">Owner</span>' : ''}
+                </div>
+                <div style="font-size:11px;color:${online ? 'var(--green)' : 'var(--text-3)'}">${online ? '● online' : 'offline'}</div>
+            </div>
+            ${(isOwner && !isOwn) ? `<button onclick="kickMember('${esc(room.id)}', '${esc(m)}')" style="padding:4px 10px;background:rgba(229,57,53,0.15);color:var(--red);border-radius:6px;font-size:12px">Kick</button>` : ''}
+        </div>`;
+    }).join('');
+
+    const addHTML = (isOwner && candidates.length) ? `
+        <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
+            <h4 style="margin:0 0 8px 0;font-size:14px;color:var(--text-3)">Add members</h4>
+            <div style="max-height:140px;overflow-y:auto">
+                ${candidates.map(u => `
+                    <div style="display:flex;align-items:center;gap:10px;padding:8px;cursor:pointer;border-radius:6px" onmouseover="this.style.background='var(--bg-hover)'" onmouseout="this.style.background=''" onclick="addGroupMember('${esc(room.id)}', '${esc(u)}')">
+                        <div class="avatar" style="width:32px;height:32px;font-size:13px">${esc(u.charAt(0).toUpperCase())}</div>
+                        <div style="flex:1">${esc(u)}</div>
+                        <svg style="width:18px;height:18px;fill:var(--accent)"><use href="#i-plus"/></svg>
+                    </div>
+                `).join('')}
+            </div>
+        </div>
+    ` : '';
+
+    showModal(`
+        <h3 class="modal-title">${esc(room.name)} · ${members.length} member${members.length === 1 ? '' : 's'}</h3>
+        <div style="max-height:320px;overflow-y:auto">
+            ${membersHTML}
+        </div>
+        ${addHTML}
+        <div class="modal-actions">
+            <button class="btn-cancel" onclick="closeModal()">Close</button>
+        </div>
+    `);
+}
+
+async function kickMember(roomId, target) {
+    if (!confirm(`Remove "${target}" from the group?`)) return;
+    const res = await apiPost('/api/action', { action: 'remove_room_member', room_id: roomId, target });
+    const d = await res.json();
+    if (d.success) {
+        State.groupMembers[roomId] = (State.groupMembers[roomId] || []).filter(u => u !== target);
+        const room = State.rooms.find(r => r.id === roomId);
+        if (room) openGroupManageModal(room);
+    } else {
+        alert(d.msg || 'Failed');
+    }
+}
+window.kickMember = kickMember;
+
+async function addGroupMember(roomId, target) {
+    const res = await apiPost('/api/action', { action: 'add_room_member', room_id: roomId, target });
+    const d = await res.json();
+    if (d.success) {
+        State.groupMembers[roomId] = [...(State.groupMembers[roomId] || []), target];
+        const room = State.rooms.find(r => r.id === roomId);
+        if (room) openGroupManageModal(room);
+    } else {
+        alert(d.msg || 'Failed');
+    }
+}
+window.addGroupMember = addGroupMember;
+
+window.openSearchModal = openSearchModal;
+window.openGroupManageModal = openGroupManageModal;
+
+// ============================================================
+// PHASE 8: Mentions (@username), Notif toast, etc.
+// ============================================================
+function renderTextWithMentions(text) {
+    if (!text) return '';
+    // Detect @username (letters, digits, _, -, .)
+    // Replace with clickable span
+    const escaped = esc(text);
+    // Re-replace mentions on the escaped string
+    return escaped.replace(/@([a-zA-Z0-9_.-]+)/g, (match, name) => {
+        const isMe = name === State.user;
+        const known = State.allUsers.includes(name);
+        const cls = 'mention' + (isMe ? ' self' : '');
+        if (known) {
+            return `<span class="${cls}" onclick="openDMWith('${esc(name)}')">@${esc(name)}</span>`;
+        }
+        return `<span class="${cls}">@${esc(name)}</span>`;
+    });
+}
+
+async function openDMWith(username) {
+    if (!username || username === State.user) return;
+    // Check if blocked
+    if (State.blockedBy && State.blockedBy.has(username)) {
+        alert(`You can't message ${username}.`);
+        return;
+    }
+    // Check existing room
+    let room = State.rooms.find(r => r.type === 'dm' && r.partner === username);
+    if (!room) {
+        // Add contact and reload
+        const res = await apiPost('/api/action', { action: 'add_contact', target: username });
+        const d = await res.json();
+        if (!d.success) { alert(d.msg || 'Failed'); return; }
+        await loadInitData();
+        room = State.rooms.find(r => r.type === 'dm' && r.partner === username);
+    }
+    if (room) openChat(room);
+}
+window.openDMWith = openDMWith;
+
+// ============================================================
+// Notif Toast (in-app banner that shows for incoming messages)
+// ============================================================
+function showNotifToast(sender, text, onClick) {
+    // Remove existing toast
+    const existing = document.querySelector('.notif-toast');
+    if (existing) existing.remove();
+
+    const toast = document.createElement('div');
+    toast.className = 'notif-toast';
+    const avURL = State.avatars[sender];
+    const avHTML = avURL
+        ? `<div class="avatar"><img src="${esc(avURL)}" style="width:100%;height:100%;object-fit:cover;border-radius:50%"></div>`
+        : `<div class="avatar">${esc((sender || '?').charAt(0).toUpperCase())}</div>`;
+    toast.innerHTML = `
+        ${avHTML}
+        <div class="notif-toast-body">
+            <div class="notif-toast-title">${esc(sender)}</div>
+            <div class="notif-toast-text">${esc(text)}</div>
+        </div>
+    `;
+    toast.addEventListener('click', () => {
+        if (onClick) onClick();
+        toast.classList.remove('show');
+        setTimeout(() => toast.remove(), 300);
+    });
+    document.body.appendChild(toast);
+    requestAnimationFrame(() => toast.classList.add('show'));
+    setTimeout(() => {
+        toast.classList.remove('show');
+        setTimeout(() => toast.remove(), 300);
+    }, 4500);
+}
+
+// ============================================================
+// Mention autocomplete (when typing @ in group)
+// ============================================================
+let __mentionDropdown = null;
+let __mentionSelectedIdx = 0;
+let __mentionMatches = [];
+
+function setupMentionAutocomplete() {
+    const input = document.getElementById('msg-input');
+    if (!input || input._mentionHooked) return;
+    input._mentionHooked = true;
+
+    input.addEventListener('input', () => updateMentionDropdown());
+    input.addEventListener('keydown', (e) => {
+        if (!__mentionDropdown) return;
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            __mentionSelectedIdx = (__mentionSelectedIdx + 1) % __mentionMatches.length;
+            renderMentionDropdown();
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            __mentionSelectedIdx = (__mentionSelectedIdx - 1 + __mentionMatches.length) % __mentionMatches.length;
+            renderMentionDropdown();
+        } else if (e.key === 'Enter' || e.key === 'Tab') {
+            if (__mentionMatches.length) {
+                e.preventDefault();
+                completeMention(__mentionMatches[__mentionSelectedIdx]);
+            }
+        } else if (e.key === 'Escape') {
+            closeMentionDropdown();
+        }
+    });
+}
+
+function getCurrentMentionQuery(input) {
+    // Returns {query, start, end} if cursor is right after an @<partial>
+    const val = input.value;
+    const pos = input.selectionStart;
+    // Find last '@' before cursor
+    let i = pos - 1;
+    while (i >= 0) {
+        const ch = val[i];
+        if (ch === '@') {
+            // Make sure '@' is at start or after whitespace
+            if (i === 0 || /\s/.test(val[i - 1])) {
+                const partial = val.slice(i + 1, pos);
+                // Only allow valid mention chars
+                if (/^[a-zA-Z0-9_.-]*$/.test(partial)) {
+                    return { query: partial.toLowerCase(), start: i, end: pos };
+                }
+            }
+            return null;
+        }
+        if (/\s/.test(ch)) return null;
+        i--;
+    }
+    return null;
+}
+
+function updateMentionDropdown() {
+    const input = document.getElementById('msg-input');
+    if (!input) return;
+    // Only in groups
+    if (!State.currentRoom || State.currentRoom.type !== 'group') {
+        closeMentionDropdown();
+        return;
+    }
+    const m = getCurrentMentionQuery(input);
+    if (!m) { closeMentionDropdown(); return; }
+
+    const members = State.groupMembers[State.currentRoom.id] || State.allUsers;
+    const matches = members
+        .filter(u => u !== State.user && u.toLowerCase().includes(m.query))
+        .slice(0, 8);
+    if (!matches.length) { closeMentionDropdown(); return; }
+    __mentionMatches = matches;
+    __mentionSelectedIdx = 0;
+    renderMentionDropdown();
+}
+
+function renderMentionDropdown() {
+    if (!__mentionMatches.length) { closeMentionDropdown(); return; }
+    let dd = document.getElementById('mention-dropdown');
+    if (!dd) {
+        dd = document.createElement('div');
+        dd.id = 'mention-dropdown';
+        dd.className = 'mention-dropdown';
+        // Append inside composer for absolute positioning
+        const composer = document.querySelector('.composer');
+        if (composer) composer.appendChild(dd);
+        else document.body.appendChild(dd);
+        __mentionDropdown = dd;
+    }
+    dd.innerHTML = __mentionMatches.map((u, i) => {
+        const avURL = State.avatars[u];
+        const avHTML = avURL
+            ? `<img src="${esc(avURL)}" style="width:100%;height:100%;object-fit:cover;border-radius:50%">`
+            : esc(u.charAt(0).toUpperCase());
+        return `<div class="mention-item ${i === __mentionSelectedIdx ? 'active' : ''}" data-user="${esc(u)}">
+            <div class="avatar">${avHTML}</div>
+            <div class="mention-item-name">${esc(u)}</div>
+        </div>`;
+    }).join('');
+    // Click handlers
+    dd.querySelectorAll('.mention-item').forEach((el, i) => {
+        el.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            completeMention(el.dataset.user);
+        });
+    });
+}
+
+function closeMentionDropdown() {
+    const dd = document.getElementById('mention-dropdown');
+    if (dd) dd.remove();
+    __mentionDropdown = null;
+    __mentionMatches = [];
+}
+
+function completeMention(user) {
+    const input = document.getElementById('msg-input');
+    const m = getCurrentMentionQuery(input);
+    if (!m) return;
+    const before = input.value.slice(0, m.start);
+    const after = input.value.slice(m.end);
+    const insert = '@' + user + ' ';
+    input.value = before + insert + after;
+    const newPos = (before + insert).length;
+    input.setSelectionRange(newPos, newPos);
+    input.focus();
+    closeMentionDropdown();
+    updateComposerButton();
+}
+
+// ============================================================
+// PHASE 8: Swipe-to-reply (drag message bubble horizontally)
+// ============================================================
+const SwipeRep = {
+    el: null,
+    bubble: null,
+    indicator: null,
+    startX: 0,
+    startY: 0,
+    currentX: 0,
+    active: false,
+    triggered: false,
+    direction: 0,    // -1 (left) for OUT msgs, +1 (right) for IN msgs
+};
+
+const SWIPE_THRESHOLD = 70;
+const SWIPE_MAX = 100;
+
+function setupSwipeReply() {
+    const messages = document.getElementById('messages');
+    if (!messages || messages._swipeHooked) return;
+    messages._swipeHooked = true;
+
+    messages.addEventListener('touchstart', handleSwipeStart, { passive: true });
+    messages.addEventListener('touchmove', handleSwipeMove, { passive: true });
+    messages.addEventListener('touchend', handleSwipeEnd);
+    messages.addEventListener('touchcancel', handleSwipeEnd);
+}
+
+function handleSwipeStart(e) {
+    if (State.selectionMode) return;  // disable swipe in selection mode
+    if (e.touches.length !== 1) return;
+    const row = e.target.closest('.msg-row');
+    if (!row || !row.dataset.msgId) return;
+    SwipeRep.el = row;
+    SwipeRep.bubble = row.querySelector('.bubble');
+    SwipeRep.startX = e.touches[0].clientX;
+    SwipeRep.startY = e.touches[0].clientY;
+    SwipeRep.currentX = 0;
+    SwipeRep.active = false;
+    SwipeRep.triggered = false;
+    SwipeRep.direction = row.classList.contains('out') ? -1 : 1;
+}
+
+function handleSwipeMove(e) {
+    if (!SwipeRep.el || e.touches.length !== 1) return;
+    const dx = e.touches[0].clientX - SwipeRep.startX;
+    const dy = e.touches[0].clientY - SwipeRep.startY;
+    // Determine if this is a horizontal swipe in the correct direction
+    if (!SwipeRep.active) {
+        if (Math.abs(dy) > Math.abs(dx)) {
+            // It's a vertical scroll, abort swipe
+            SwipeRep.el = null;
+            return;
+        }
+        if (Math.abs(dx) < 10) return;
+        // For OUT msgs: swipe LEFT (dx < 0); for IN: swipe RIGHT (dx > 0)
+        if (Math.sign(dx) !== SwipeRep.direction) {
+            SwipeRep.el = null;
+            return;
+        }
+        SwipeRep.active = true;
+        SwipeRep.el.classList.add('swiping');
+        // Create indicator
+        if (!SwipeRep.el.querySelector('.swipe-reply-indicator')) {
+            const ind = document.createElement('div');
+            ind.className = 'swipe-reply-indicator';
+            ind.innerHTML = '<svg viewBox="0 0 24 24"><use href="#i-reply"/></svg>';
+            SwipeRep.el.appendChild(ind);
+            SwipeRep.indicator = ind;
+        }
+    }
+    let move = dx;
+    if (SwipeRep.direction === -1) {
+        if (move > 0) move = 0;
+        if (move < -SWIPE_MAX) move = -SWIPE_MAX;
+    } else {
+        if (move < 0) move = 0;
+        if (move > SWIPE_MAX) move = SWIPE_MAX;
+    }
+    SwipeRep.currentX = move;
+    SwipeRep.bubble.style.transform = `translateX(${move}px)`;
+    if (SwipeRep.indicator) {
+        SwipeRep.indicator.classList.add('show');
+        const passed = Math.abs(move) >= SWIPE_THRESHOLD;
+        SwipeRep.indicator.classList.toggle('active', passed);
+        if (passed && !SwipeRep.triggered) {
+            SwipeRep.triggered = true;
+            if (navigator.vibrate) navigator.vibrate(20);
+        } else if (!passed) {
+            SwipeRep.triggered = false;
+        }
+    }
+}
+
+function handleSwipeEnd() {
+    if (!SwipeRep.el) return;
+    const triggered = Math.abs(SwipeRep.currentX) >= SWIPE_THRESHOLD;
+    if (SwipeRep.bubble) {
+        SwipeRep.bubble.style.transition = 'transform 0.2s';
+        SwipeRep.bubble.style.transform = '';
+        setTimeout(() => {
+            if (SwipeRep.bubble) SwipeRep.bubble.style.transition = '';
+        }, 220);
+    }
+    if (SwipeRep.indicator) {
+        SwipeRep.indicator.classList.remove('show');
+        const ind = SwipeRep.indicator;
+        setTimeout(() => ind.remove(), 200);
+    }
+    SwipeRep.el.classList.remove('swiping');
+
+    if (triggered) {
+        // Activate reply for this message
+        const msgId = SwipeRep.el.dataset.msgId;
+        const msgs = State.messages[State.currentRoom.id] || [];
+        const msg = msgs.find(m => m.id === msgId);
+        if (msg) {
+            State.replyTo = { id: msg.id, user: msg.user, text: msg.text || `[${msg.msgType}]` };
+            renderReplyBar();
+            document.getElementById('msg-input').focus();
+        }
+    }
+    SwipeRep.el = null;
+    SwipeRep.bubble = null;
+    SwipeRep.indicator = null;
+    SwipeRep.currentX = 0;
+    SwipeRep.active = false;
+    SwipeRep.triggered = false;
+}
