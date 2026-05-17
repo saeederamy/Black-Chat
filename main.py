@@ -686,6 +686,9 @@ def _auto_detect_turn_config():
     Auto-detect existing TURN configuration from common locations.
     Supports:
     - Black Meet's /etc/turnserver.conf (Iran-style: realm=domain.ir, user=...)
+
+    NOTE: In Black Meet setups, the actual TURN hostname is usually
+    `turn.<realm>` (a subdomain), not the realm itself. We auto-detect this.
     """
     conf_path = "/etc/turnserver.conf"
     if not os.path.exists(conf_path):
@@ -706,7 +709,18 @@ def _auto_detect_turn_config():
             tuser, _, tpass = user_val.partition(":")
         else:
             tuser, tpass = user_val, ""
-        host = cfg.get("realm") or cfg.get("external-ip") or ""
+
+        # Strategy for picking a host that DNS resolves correctly:
+        # 1. If `server-name` is set (rare), use it
+        # 2. Otherwise, the realm is typically just a domain (e.g. "example.ir")
+        #    but the actual A-record is "turn.<realm>" (Black Meet convention)
+        # 3. Fall back to external-ip
+        host = (
+            cfg.get("server-name")
+            or _pick_turn_hostname(cfg.get("realm"))
+            or cfg.get("external-ip")
+            or ""
+        )
         port = cfg.get("listening-port", "3478")
         tls_port = cfg.get("tls-listening-port", "5349")
         if host and tuser and tpass:
@@ -721,6 +735,27 @@ def _auto_detect_turn_config():
     except Exception:
         pass
     return None
+
+def _pick_turn_hostname(realm):
+    """
+    Given a realm like "example.ir", try to find the right TURN hostname.
+    The TURN server often lives at turn.<realm>, but we should verify by DNS.
+    """
+    if not realm:
+        return None
+    # Try `turn.<realm>` first (Black Meet convention)
+    candidates = [f"turn.{realm}", realm]
+    for cand in candidates:
+        try:
+            import socket
+            # Resolve with timeout
+            socket.setdefaulttimeout(2)
+            socket.gethostbyname(cand)
+            return cand
+        except Exception:
+            continue
+    # Fall back to realm even if DNS fails (manual env override still possible)
+    return realm
 
 def get_effective_turn_config():
     """

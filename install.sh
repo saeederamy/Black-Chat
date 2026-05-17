@@ -289,8 +289,23 @@ function setup_turn() {
                 TURN_TLS_PORT=$(grep -E '^tls-listening-port=' /etc/turnserver.conf 2>/dev/null | cut -d'=' -f2 | tr -d ' ')
                 TURN_TLS_PORT="${TURN_TLS_PORT:-5349}"
                 REALM="$EXISTING_REALM"
-                # Use realm as the host name (since users may set realm to their domain)
-                TURN_HOST="$EXISTING_REALM"
+
+                # Pick the right hostname:
+                # 1. Try turn.<realm> (Black Meet convention)
+                # 2. Fall back to <realm>
+                # 3. Last resort: external-ip
+                TURN_HOST=""
+                if getent hosts "turn.$REALM" >/dev/null 2>&1; then
+                    TURN_HOST="turn.$REALM"
+                    echo -e "${GREEN}  Detected TURN hostname: turn.$REALM${RESET}"
+                elif getent hosts "$REALM" >/dev/null 2>&1; then
+                    TURN_HOST="$REALM"
+                    echo -e "${GREEN}  Detected TURN hostname: $REALM${RESET}"
+                else
+                    echo -e "${YELLOW}  Could not resolve turn.$REALM or $REALM${RESET}"
+                    read -e -p "Enter TURN hostname/IP manually [Default: turn.$REALM]: " TURN_HOST
+                    TURN_HOST=${TURN_HOST:-turn.$REALM}
+                fi
 
                 # Save to our .env so the app uses this config
                 grep -v -E '^TURN_' "$ENV_FILE" > "$ENV_FILE.tmp" 2>/dev/null || cp "$ENV_FILE" "$ENV_FILE.tmp"
@@ -304,7 +319,9 @@ TURN_PASS=$TURN_PASS
 TURN_REALM=$REALM
 EOF
                 echo -e "${GREEN}✓ Using existing TURN config!${RESET}"
-                echo -e "${CYAN}Restart the Black Chat service to apply: systemctl restart black-chat.service${RESET}"
+                echo -e "${CYAN}  Host:  ${YELLOW}$TURN_HOST${RESET}"
+                echo -e "${CYAN}  Port:  ${YELLOW}$TURN_PORT${RESET}"
+                echo -e "${CYAN}  User:  ${YELLOW}$TURN_USER${RESET}"
                 read -p "Restart Black Chat now? [Y/n]: " RESTART_NOW
                 RESTART_NOW=${RESTART_NOW:-Y}
                 if [[ "$RESTART_NOW" =~ ^[Yy]$ ]]; then
