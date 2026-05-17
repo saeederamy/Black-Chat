@@ -35,6 +35,7 @@ const State = {
     blockedBy: new Set(),    // users who blocked me
     clearedChats: {},        // roomId -> cleared_at timestamp
     groupMembers: {},        // roomId -> [usernames]
+    muted: new Set(),        // muted room IDs
 };
 
 // ============================================================
@@ -172,6 +173,7 @@ async function enterApp() {
     connectWS();
     setupHandlers();
     registerSW();
+    setTimeout(() => maybeEnablePush(), 2000);
 }
 
 // ============================================================
@@ -187,6 +189,7 @@ async function loadInitData() {
         State.blocked = new Set(d.blocked || []);
         State.blockedBy = new Set(d.blocked_by || []);
         State.clearedChats = d.cleared_chats || {};
+        State.muted = new Set(d.muted_chats || []);
         State.rooms = [];
 
         // Build the rooms list
@@ -332,8 +335,11 @@ function onNewMsg(m) {
     } else {
         // Increment unread for the room (unless it's my own message)
         if (!isMine) {
+            const isMuted = State.muted && State.muted.has(room);
             State.unread[room] = (State.unread[room] || 0) + 1;
-            try { document.getElementById('notif-sound').play().catch(()=>{}); } catch {}
+            if (!isMuted) {
+                try { document.getElementById('notif-sound').play().catch(()=>{}); } catch {}
+            }
 
             // Find which room this is for the toast
             const roomObj = State.rooms.find(r => r.id === room);
@@ -343,7 +349,8 @@ function onNewMsg(m) {
             const body = data.msgType === 'text' ? data.text : `[${data.msgType}]`;
 
             // In-app toast (always shows, since they're not in that chat)
-            if (roomObj) {
+            // …unless muted
+            if (roomObj && !isMuted) {
                 showNotifToast(senderLabel, body, () => openChat(roomObj));
             }
 
@@ -467,7 +474,8 @@ function renderChatList() {
                 </div>
                 <div class="chat-item-preview">
                     <span>${esc(getLastPreview(r.id))}</span>
-                    ${unread > 0 ? `<span class="chat-item-badge">${unread > 99 ? '99+' : unread}</span>` : ''}
+                    ${State.muted && State.muted.has(r.id) ? `<span class="muted-icon" title="Muted">🔕</span>` : ''}
+                    ${unread > 0 ? `<span class="chat-item-badge${State.muted && State.muted.has(r.id) ? ' muted' : ''}">${unread > 99 ? '99+' : unread}</span>` : ''}
                 </div>
             </div>
         `;
@@ -2533,8 +2541,11 @@ function openMenu(menuId, anchorEl) {
         const isDM = r.type === 'dm';
         const isOwner = isGroup && r.owner === State.user;
         const isBlocked = isDM && State.blocked.has(r.partner);
+        const isMuted = State.muted && State.muted.has(r.id);
 
         document.getElementById('chat-menu-manage').style.display = isGroup ? '' : 'none';
+        document.getElementById('chat-menu-mute').style.display = !isMuted ? '' : 'none';
+        document.getElementById('chat-menu-unmute').style.display = isMuted ? '' : 'none';
         document.getElementById('chat-menu-leave').style.display = (isGroup && !isOwner) ? '' : 'none';
         document.getElementById('chat-menu-delgroup').style.display = (isGroup && isOwner) ? '' : 'none';
         document.getElementById('chat-menu-deldm').style.display = isDM ? '' : 'none';
@@ -2610,6 +2621,20 @@ function setupHandlers() {
         }
         else if (action === 'manage-group') {
             openGroupManageModal(room);
+        }
+        else if (action === 'mute') {
+            const res = await apiPost('/api/action', { action: 'mute_chat', room: room.id });
+            const d = await res.json();
+            if (d.success) {
+                State.muted.add(room.id);
+            }
+        }
+        else if (action === 'unmute') {
+            const res = await apiPost('/api/action', { action: 'unmute_chat', room: room.id });
+            const d = await res.json();
+            if (d.success) {
+                State.muted.delete(room.id);
+            }
         }
         else if (action === 'clear') {
             if (!confirm('Clear chat history? This will hide all current messages for you only.')) return;
@@ -3707,4 +3732,73 @@ function handleSwipeEnd() {
     SwipeRep.currentX = 0;
     SwipeRep.active = false;
     SwipeRep.triggered = false;
+}
+
+// ============================================================
+// PHASE 9: Web Push subscription (Chrome, Mobile PWA)
+// ============================================================
+function urlBase64ToUint8Array(base64String) {
+    const padding = '='.repeat((4 - base64String.length % 4) % 4);
+    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const raw = atob(base64);
+    const outputArray = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; ++i) outputArray[i] = raw.charCodeAt(i);
+    return outputArray;
+}
+
+async function setupPushSubscription() {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+        return;
+    }
+    if (Notification.permission !== 'granted') {
+        return;
+    }
+    try {
+        // Get VAPID public key
+        const r = await fetch('/api/push/vapid-public-key');
+        if (!r.ok) return;
+        const data = await r.json();
+        if (!data.enabled || !data.publicKey) return;
+
+        const reg = await navigator.serviceWorker.ready;
+        let sub = await reg.pushManager.getSubscription();
+
+        if (!sub) {
+            sub = await reg.pushManager.subscribe({
+                userVisibleOnly: true,
+                applicationServerKey: urlBase64ToUint8Array(data.publicKey),
+            });
+        }
+
+        // Send subscription to server
+        await apiPost('/api/push/subscribe', { subscription: sub.toJSON() });
+    } catch (e) {
+        console.log('Push subscribe failed:', e);
+    }
+}
+
+// Trigger push setup after login + permission granted
+function maybeEnablePush() {
+    if (!('Notification' in window)) return;
+    if (Notification.permission === 'granted') {
+        setupPushSubscription();
+    } else if (Notification.permission === 'default') {
+        // Ask after first user action — we already do this on login
+        Notification.requestPermission().then((perm) => {
+            if (perm === 'granted') setupPushSubscription();
+        }).catch(() => {});
+    }
+}
+
+// Listen for SW messages (e.g. user tapped a push notification → open room)
+if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('message', (event) => {
+        if (event.data && event.data.type === 'open_room') {
+            const roomId = event.data.room;
+            if (roomId) {
+                const room = State.rooms.find(r => r.id === roomId);
+                if (room) openChat(room);
+            }
+        }
+    });
 }

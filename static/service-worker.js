@@ -44,14 +44,43 @@ self.addEventListener('fetch', (event) => {
 // focus an existing tab or open a new one.
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
+  const targetRoom = event.notification.data && event.notification.data.room;
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientsArr) => {
       for (const client of clientsArr) {
         if (client.url.includes(self.location.origin)) {
+          if (targetRoom && 'postMessage' in client) {
+            client.postMessage({ type: 'open_room', room: targetRoom });
+          }
           return client.focus();
         }
       }
-      return self.clients.openWindow('/');
+      const url = targetRoom ? `/?room=${encodeURIComponent(targetRoom)}` : '/';
+      return self.clients.openWindow(url);
     })
   );
 });
+
+// Web Push event — show a notification when the server sends one
+self.addEventListener('push', (event) => {
+  let data = {};
+  try {
+    if (event.data) {
+      data = event.data.json();
+    }
+  } catch (e) {
+    data = { title: 'New message', body: event.data ? event.data.text() : '' };
+  }
+  const title = data.title || 'Black Chat';
+  const options = {
+    body: data.body || '',
+    icon: data.icon || '/static/icon-192.png',
+    badge: data.badge || '/static/icon-192.png',
+    tag: data.tag || data.room || 'msg',
+    renotify: true,
+    data: { room: data.room || null },
+    vibrate: [100, 50, 100],
+  };
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+

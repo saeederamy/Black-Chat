@@ -1956,3 +1956,16 @@ body.selection-mode .msg-row::after {
     margin-top: 2px;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+
+/* ============================================================
+   PHASE 9: Mute indicator
+   ============================================================ */
+.muted-icon {
+    font-size: 12px;
+    opacity: 0.55;
+    margin-right: 4px;
+}
+.chat-item-badge.muted {
+    background: var(--text-3) !important;
+    opacity: 0.7;
+}
