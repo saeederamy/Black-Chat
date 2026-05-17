@@ -39,6 +39,17 @@ const State = {
 function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
+
+// RTL detection: returns 'rtl' if first strong letter is RTL (Persian/Arabic/Hebrew), else 'ltr'
+const RTL_RE = /[\u0591-\u07FF\uFB1D-\uFDFD\uFE70-\uFEFC]/;
+function dirOf(s) {
+    if (!s) return 'ltr';
+    return RTL_RE.test(s) ? 'rtl' : 'ltr';
+}
+function applyDir(el, text) {
+    if (!el) return;
+    el.setAttribute('dir', dirOf(text));
+}
 function fmtBytes(n) {
     if (!n || n < 1024) return (n || 0) + ' B';
     if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
@@ -347,6 +358,7 @@ function onEdited(m) {
     if (el) {
         const txt = el.querySelector('.text');
         if (txt) {
+            txt.setAttribute('dir', dirOf(m.new_text));
             txt.innerHTML = esc(m.new_text) + ' <span style="opacity:0.6;font-size:11px">(edited)</span>';
         }
     }
@@ -664,7 +676,7 @@ function buildMessageRow(m, isSame, isLastInGroup) {
     }
 
     // Text
-    const textHTML = m.msgType === 'text' && m.text ? `<div class="text">${esc(m.text)}</div>` : '';
+    const textHTML = m.msgType === 'text' && m.text ? `<div class="text" dir="${dirOf(m.text)}">${esc(m.text)}</div>` : '';
 
     // Meta (time + ticks for outgoing)
     let ticks = '';
@@ -897,13 +909,59 @@ function openContextMenu(rowEl, msg) {
 
     // Show menu
     menu.style.display = 'flex';
+    // Show reaction picker
+    showReactionPicker(msg, rowEl);
     // Add backdrop click-outside
-    showBackdrop(() => closeContextMenu());
+    showBackdrop(() => { closeReactionPicker(); closeContextMenu(); });
 
     // Position
     const bubble = rowEl.querySelector('.bubble');
     const r = bubble ? bubble.getBoundingClientRect() : rowEl.getBoundingClientRect();
     requestAnimationFrame(() => positionMenu(menu, r));
+}
+
+// Reaction picker (4 emojis: like, dislike, heart, laugh)
+const REACTIONS = ['👍', '👎', '❤️', '😂'];
+
+function showReactionPicker(msg, rowEl) {
+    let picker = document.getElementById('reaction-picker');
+    if (picker) picker.remove();
+    picker = document.createElement('div');
+    picker.id = 'reaction-picker';
+    picker.className = 'reaction-picker';
+    picker.innerHTML = REACTIONS.map(em =>
+        `<button data-em="${em}">${em}</button>`
+    ).join('');
+    document.body.appendChild(picker);
+    picker.addEventListener('click', (e) => {
+        const btn = e.target.closest('button[data-em]');
+        if (!btn) return;
+        const em = btn.getAttribute('data-em');
+        sendReaction(msg.id, em);
+        closeReactionPicker();
+        closeContextMenu();
+    });
+
+    // Position: above the bubble
+    requestAnimationFrame(() => {
+        const bubble = rowEl.querySelector('.bubble');
+        const r = bubble ? bubble.getBoundingClientRect() : rowEl.getBoundingClientRect();
+        const w = picker.offsetWidth;
+        const h = picker.offsetHeight;
+        const PAD = 10;
+        let left = r.left + (r.width - w) / 2;
+        let top = r.top - h - 8;
+        if (top < PAD) top = r.bottom + 8;
+        if (left < PAD) left = PAD;
+        if (left + w > window.innerWidth - PAD) left = window.innerWidth - w - PAD;
+        picker.style.left = left + 'px';
+        picker.style.top = top + 'px';
+    });
+}
+
+function closeReactionPicker() {
+    const picker = document.getElementById('reaction-picker');
+    if (picker) picker.remove();
 }
 
 function positionMenu(menu, anchorRect) {
@@ -945,6 +1003,7 @@ function positionMenu(menu, anchorRect) {
 
 function closeContextMenu() {
     document.getElementById('ctx-menu').style.display = 'none';
+    closeReactionPicker();
     hideBackdrop();
     __ctxMsg = null;
 }
@@ -2320,9 +2379,13 @@ function setupHandlers() {
 
     // Chat header
     document.getElementById('back-btn').addEventListener('click', closeChat);
-    document.getElementById('chat-call-btn').addEventListener('click', () => startCall('audio'));
-    document.getElementById('chat-video-btn').addEventListener('click', () => startCall('video'));
-    document.getElementById('chat-menu-btn').addEventListener('click', e => {
+    document.getElementById('chat-header-info').addEventListener('click', () => {
+        if (State.currentRoom) openProfilePane(State.currentRoom);
+    });
+    document.getElementById('chat-call-btn').addEventListener('click', (e) => { e.stopPropagation(); startCall('audio'); });
+    document.getElementById('chat-video-btn').addEventListener('click', (e) => { e.stopPropagation(); startCall('video'); });
+    document.getElementById('chat-menu-btn').addEventListener('click', (e) => {
+        e.stopPropagation();
         openMenu('chat-menu', e.currentTarget);
     });
     document.getElementById('chat-menu').addEventListener('click', e => {
@@ -2350,7 +2413,10 @@ function setupHandlers() {
         autoResize(input);
         updateComposerButton();
         notifyTyping();
+        applyDir(input, input.value);
     });
+    // Also set dir when sending, to reset to LTR if empty
+    input.setAttribute('dir', 'auto');
     input.addEventListener('keydown', e => {
         if (e.key === 'Enter' && !e.shiftKey && window.innerWidth > 768) {
             e.preventDefault();
@@ -2416,6 +2482,7 @@ function setupHandlers() {
         if (e.key === 'Escape') {
             closeContextMenu();
             closeMenu();
+            closeProfilePane();
             if (document.getElementById('lightbox').style.display === 'flex') closeLightbox();
         }
     });
@@ -2703,3 +2770,185 @@ window.openChangePasswordModal = openChangePasswordModal;
 window.submitChangePassword = submitChangePassword;
 window.openSettingsModal = openSettingsModal;
 window.openVideoMessageRecorder = openVideoMessageRecorder;
+
+// ============================================================
+// PROFILE PANE — Telegram-style with media/files/voice tabs
+// ============================================================
+const ProfilePane = {
+    currentRoom: null,
+    currentTab: 'media',
+};
+
+function openProfilePane(room) {
+    if (!room) return;
+    ProfilePane.currentRoom = room;
+    const pane = document.getElementById('profile-pane');
+    if (!pane) return;
+    pane.classList.add('open');
+
+    // Header
+    const av = document.getElementById('profile-pane-avatar');
+    const nameEl = document.getElementById('profile-pane-name');
+    const statusEl = document.getElementById('profile-pane-status');
+
+    nameEl.innerText = room.name;
+    if (room.type === 'channel') {
+        av.innerHTML = '📢';
+        av.style.background = 'var(--red)';
+        statusEl.innerText = 'Broadcast channel';
+    } else if (room.type === 'group') {
+        av.innerHTML = '👥';
+        av.style.background = '#9c27b0';
+        statusEl.innerText = 'Group';
+    } else {
+        const a = State.avatars[room.partner];
+        if (a) {
+            av.innerHTML = `<img src="${esc(a)}">`;
+        } else {
+            av.innerHTML = esc((room.partner || '?').charAt(0).toUpperCase());
+        }
+        av.style.background = 'var(--accent)';
+        // Status
+        if (State.onlineUsers.includes(room.partner)) {
+            statusEl.innerText = 'online';
+        } else {
+            const ls = State.lastSeen[room.partner];
+            statusEl.innerText = ls ? 'last seen ' + fmtRelative(ls) : 'offline';
+        }
+    }
+
+    // Info section
+    const infoEl = document.getElementById('profile-pane-info');
+    let infoHTML = '';
+    if (room.type === 'dm') {
+        infoHTML += `
+            <div class="profile-pane-info-row">
+                <svg><use href="#i-user-plus"/></svg>
+                <div class="profile-pane-info-content">
+                    <div class="profile-pane-info-label">Username</div>
+                    <div class="profile-pane-info-value">@${esc(room.partner)}</div>
+                </div>
+            </div>`;
+    } else if (room.type === 'group') {
+        infoHTML += `
+            <div class="profile-pane-info-row">
+                <svg><use href="#i-users"/></svg>
+                <div class="profile-pane-info-content">
+                    <div class="profile-pane-info-label">Group</div>
+                    <div class="profile-pane-info-value">${esc(room.name)}</div>
+                </div>
+            </div>`;
+    }
+    infoEl.innerHTML = infoHTML;
+
+    // Media tabs
+    setupMediaTabs();
+    renderMediaContent('media');
+}
+
+function closeProfilePane() {
+    const pane = document.getElementById('profile-pane');
+    if (pane) pane.classList.remove('open');
+    ProfilePane.currentRoom = null;
+}
+
+function setupMediaTabs() {
+    const tabs = document.querySelectorAll('#media-tabs .media-tab');
+    tabs.forEach(t => {
+        // Remove old handlers (clone-and-replace)
+        const newT = t.cloneNode(true);
+        t.parentNode.replaceChild(newT, t);
+    });
+    document.querySelectorAll('#media-tabs .media-tab').forEach(t => {
+        t.addEventListener('click', () => {
+            document.querySelectorAll('#media-tabs .media-tab').forEach(x => x.classList.remove('active'));
+            t.classList.add('active');
+            renderMediaContent(t.dataset.mtab);
+        });
+    });
+    updateMediaTabCounts();
+}
+
+function getRoomMessages() {
+    const room = ProfilePane.currentRoom;
+    if (!room) return [];
+    return State.messages[room.id] || [];
+}
+
+function updateMediaTabCounts() {
+    const msgs = getRoomMessages();
+    const media = msgs.filter(m => m.msgType === 'image' || m.msgType === 'video').length;
+    const files = msgs.filter(m => m.msgType === 'file').length;
+    const voice = msgs.filter(m => m.msgType === 'audio').length;
+    document.getElementById('mtab-count-media').innerText = media;
+    document.getElementById('mtab-count-files').innerText = files;
+    document.getElementById('mtab-count-voice').innerText = voice;
+}
+
+function renderMediaContent(tab) {
+    ProfilePane.currentTab = tab;
+    const content = document.getElementById('media-content');
+    if (!content) return;
+    const msgs = getRoomMessages();
+
+    if (tab === 'media') {
+        const items = msgs.filter(m => m.msgType === 'image' || m.msgType === 'video');
+        if (!items.length) {
+            content.innerHTML = '<div class="media-empty">No photos or videos yet</div>';
+            return;
+        }
+        // Reverse so newest first
+        items.reverse();
+        content.innerHTML = '<div class="media-grid">' + items.map(m => {
+            if (m.msgType === 'image') {
+                return `<div class="media-grid-item" onclick="openLightbox('${esc(m.url)}', 'image')">
+                    <img src="${esc(m.url)}" loading="lazy">
+                </div>`;
+            } else {
+                return `<div class="media-grid-item video" onclick="openLightbox('${esc(m.url)}', 'video')">
+                    <video src="${esc(m.url)}" muted></video>
+                </div>`;
+            }
+        }).join('') + '</div>';
+    } else if (tab === 'files') {
+        const items = msgs.filter(m => m.msgType === 'file').reverse();
+        if (!items.length) {
+            content.innerHTML = '<div class="media-empty">No files shared yet</div>';
+            return;
+        }
+        content.innerHTML = items.map(m => `
+            <div class="media-list-item" onclick="window.open('${esc(m.url)}', '_blank')">
+                <div class="media-list-icon"><svg><use href="#i-file"/></svg></div>
+                <div class="media-list-meta">
+                    <div class="media-list-name">${esc(m.fileName || 'File')}</div>
+                    <div class="media-list-sub">${fmtBytes(m.fileSize || 0)} · ${esc(m.user)}</div>
+                </div>
+            </div>`).join('');
+    } else if (tab === 'voice') {
+        const items = msgs.filter(m => m.msgType === 'audio').reverse();
+        if (!items.length) {
+            content.innerHTML = '<div class="media-empty">No voice messages yet</div>';
+            return;
+        }
+        content.innerHTML = items.map(m => `
+            <div class="media-list-item" onclick="document.getElementById('msg-${esc(m.id)}')?.scrollIntoView({behavior:'smooth',block:'center'}); closeProfilePane();">
+                <div class="media-list-icon"><svg><use href="#i-mic"/></svg></div>
+                <div class="media-list-meta">
+                    <div class="media-list-name">Voice message</div>
+                    <div class="media-list-sub">${esc(m.user)} · ${esc(formatVoiceListDate(m.timestamp))}</div>
+                </div>
+            </div>`).join('');
+    }
+}
+
+function formatVoiceListDate(iso) {
+    if (!iso) return '';
+    try {
+        const d = new Date(iso.replace(' ', 'T') + (iso.includes('Z') ? '' : 'Z'));
+        if (isNaN(d)) return '';
+        return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } catch { return ''; }
+}
+
+window.openProfilePane = openProfilePane;
+window.closeProfilePane = closeProfilePane;

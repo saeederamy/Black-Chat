@@ -1289,3 +1289,432 @@ body, button, input, textarea {
 
 /* Compose composer area needs to be relative for recording-bar overlay */
 .composer { position: relative; }
+
+/* ============================================================
+   PHASE 7: Auto RTL per element + Login overhaul + Profile pane
+   ============================================================ */
+
+/* Auto RTL on individual elements (when dir="rtl" is set on them) */
+.bubble .text[dir="rtl"] { text-align: right; }
+.bubble .text[dir="ltr"] { text-align: left; }
+.composer textarea[dir="rtl"] { text-align: right; direction: rtl; }
+.composer textarea[dir="ltr"] { text-align: left; direction: ltr; }
+.chat-item-name[dir="rtl"], .chat-item-name[dir="ltr"] { direction: inherit; }
+
+/* Make sure meta (time + ticks) doesn't break RTL text */
+.bubble .text[dir="rtl"] + .meta { float: left; margin-left: 0; margin-right: 8px; }
+.bubble .text[dir="ltr"] + .meta { float: right; margin-right: 0; margin-left: 8px; }
+
+/* ============================================================
+   Login page — Black Hub style (glassmorphism + neon glow)
+   ============================================================ */
+#login-screen.bh-login {
+    position: relative;
+    background: radial-gradient(circle at 50% 0%, #1f1f1f 0%, #0a0a0a 70%) !important;
+    overflow: hidden;
+}
+/* Animated background glow */
+#login-screen.bh-login::before {
+    content: '';
+    position: absolute;
+    width: 600px; height: 600px;
+    background: radial-gradient(circle, rgba(82,136,193,0.15) 0%, transparent 70%);
+    top: -200px; left: -200px;
+    animation: bgFloat1 12s ease-in-out infinite;
+    pointer-events: none;
+}
+#login-screen.bh-login::after {
+    content: '';
+    position: absolute;
+    width: 500px; height: 500px;
+    background: radial-gradient(circle, rgba(82,136,193,0.1) 0%, transparent 70%);
+    bottom: -150px; right: -150px;
+    animation: bgFloat2 14s ease-in-out infinite;
+    pointer-events: none;
+}
+@keyframes bgFloat1 {
+    0%, 100% { transform: translate(0, 0) scale(1); }
+    50% { transform: translate(80px, 60px) scale(1.1); }
+}
+@keyframes bgFloat2 {
+    0%, 100% { transform: translate(0, 0) scale(1); }
+    50% { transform: translate(-60px, -40px) scale(1.15); }
+}
+
+.bh-login .login-box {
+    position: relative;
+    z-index: 10;
+    background: rgba(255, 255, 255, 0.04);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 20px;
+    box-shadow: 0 12px 48px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255,255,255,0.02) inset;
+    padding: 40px 32px;
+    width: 100%;
+    max-width: 380px;
+    text-align: center;
+    animation: loginIn 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes loginIn {
+    from { opacity: 0; transform: translateY(20px) scale(0.96); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.bh-login .login-logo img {
+    border-radius: 22px;
+    box-shadow: 0 8px 32px rgba(82,136,193,0.35), 0 0 0 2px rgba(82,136,193,0.15);
+}
+.bh-login .login-title {
+    margin: 18px 0 4px 0;
+    font-size: 26px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    background: linear-gradient(135deg, #ffffff 0%, #5288c1 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+.bh-login .login-subtitle {
+    color: var(--text-3);
+    font-size: 13px;
+    margin: 0 0 28px 0;
+    letter-spacing: 0.3px;
+}
+.bh-login .login-box input {
+    width: 100%;
+    background: rgba(0,0,0,0.5);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 12px;
+    padding: 14px 16px;
+    margin-bottom: 12px;
+    font-size: 14px;
+    color: var(--text);
+    transition: 0.25s;
+}
+.bh-login .login-box input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(82,136,193,0.15), 0 0 20px rgba(82,136,193,0.2);
+    background: rgba(0,0,0,0.6);
+}
+.bh-login .btn-primary {
+    width: 100%;
+    background: linear-gradient(135deg, var(--accent) 0%, #3d6fa0 100%);
+    color: white;
+    padding: 14px;
+    border-radius: 12px;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    margin-top: 12px;
+    transition: 0.25s;
+    box-shadow: 0 4px 20px rgba(82,136,193,0.35);
+}
+.bh-login .btn-primary:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 8px 28px rgba(82,136,193,0.5);
+}
+.bh-login .btn-primary:active { transform: translateY(0); }
+.bh-login .login-error { min-height: 18px; }
+
+/* Developer signature — bottom of login */
+.bh-signature {
+    position: absolute;
+    bottom: 24px;
+    left: 0; right: 0;
+    text-align: center;
+    z-index: 5;
+}
+.bh-signature a {
+    color: var(--text-3);
+    font-size: 11px;
+    letter-spacing: 0.5px;
+    text-decoration: none;
+    transition: 0.2s;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: 20px;
+    border: 1px solid transparent;
+}
+.bh-signature a:hover {
+    color: var(--accent);
+    border-color: rgba(82,136,193,0.2);
+    background: rgba(82,136,193,0.05);
+}
+.bh-signature svg {
+    width: 14px; height: 14px;
+    fill: currentColor;
+    opacity: 0.7;
+}
+
+/* Tiny in-app footer signature (in main menu) */
+.menu-signature {
+    padding: 10px 14px;
+    margin-top: 6px;
+    border-top: 1px solid var(--border);
+    text-align: center;
+    font-size: 11px;
+    color: var(--text-3);
+}
+.menu-signature a {
+    color: var(--text-2);
+    text-decoration: none;
+    transition: 0.2s;
+}
+.menu-signature a:hover { color: var(--accent); }
+
+/* ============================================================
+   PHASE 7: Reaction picker (4 fixed emojis) + reactions on bubbles
+   ============================================================ */
+.reaction-picker {
+    position: fixed;
+    background: var(--bg-sidebar);
+    border: 1px solid var(--border-2);
+    border-radius: 30px;
+    padding: 6px 10px;
+    display: flex;
+    gap: 4px;
+    z-index: 10001;
+    box-shadow: 0 12px 36px rgba(0,0,0,0.65);
+    animation: pickIn 0.18s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+@keyframes pickIn {
+    from { transform: scale(0.7); opacity: 0; }
+    to { transform: scale(1); opacity: 1; }
+}
+.reaction-picker button {
+    width: 38px; height: 38px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 22px;
+    transition: transform 0.15s, background 0.15s;
+    background: transparent;
+}
+.reaction-picker button:hover {
+    background: var(--bg-hover);
+    transform: scale(1.2);
+}
+.reaction-picker button:active { transform: scale(0.95); }
+
+/* ============================================================
+   PHASE 7: Profile slide-out pane (Telegram-style with media tabs)
+   ============================================================ */
+#profile-pane {
+    position: fixed;
+    top: 0; right: 0; bottom: 0;
+    width: 380px;
+    max-width: 100%;
+    background: var(--bg-sidebar);
+    border-left: 1px solid var(--border);
+    z-index: 8000;
+    display: flex;
+    flex-direction: column;
+    transform: translateX(100%);
+    transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+    box-shadow: -8px 0 32px rgba(0, 0, 0, 0.5);
+}
+#profile-pane.open { transform: translateX(0); }
+[dir="rtl"] #profile-pane { right: auto; left: 0; border-left: none; border-right: 1px solid var(--border); transform: translateX(-100%); }
+[dir="rtl"] #profile-pane.open { transform: translateX(0); }
+
+@media (max-width: 768px) {
+    #profile-pane { width: 100%; }
+}
+
+.profile-pane-header {
+    padding: 0;
+    background: linear-gradient(180deg, #2b5278 0%, #1f3a5e 100%);
+    color: white;
+    position: relative;
+    text-align: center;
+    overflow: hidden;
+}
+.profile-pane-close {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    width: 40px; height: 40px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(0,0,0,0.25);
+    color: white;
+    z-index: 5;
+    transition: 0.15s;
+}
+.profile-pane-close:hover { background: rgba(0,0,0,0.45); }
+.profile-pane-close svg { width: 22px; height: 22px; fill: currentColor; }
+[dir="rtl"] .profile-pane-close { left: auto; right: 12px; }
+
+.profile-pane-body {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+.profile-pane-avatar-wrap {
+    padding: 36px 20px 26px 20px;
+    text-align: center;
+}
+.profile-pane-avatar {
+    width: 120px; height: 120px;
+    border-radius: 50%;
+    background: var(--accent);
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 52px;
+    color: white;
+    overflow: hidden;
+    border: 4px solid rgba(255,255,255,0.1);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+}
+.profile-pane-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.profile-pane-name {
+    color: white;
+    font-size: 22px;
+    font-weight: 500;
+    margin: 14px 0 4px 0;
+}
+.profile-pane-status {
+    color: rgba(255,255,255,0.75);
+    font-size: 13px;
+    margin: 0;
+}
+
+.profile-pane-info {
+    padding: 16px;
+    background: var(--bg-sidebar);
+}
+.profile-pane-info-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 6px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    transition: background 0.12s;
+    border-radius: 8px;
+}
+.profile-pane-info-row:hover { background: var(--bg-hover); }
+.profile-pane-info-row:last-child { border-bottom: none; }
+.profile-pane-info-row svg { width: 22px; height: 22px; fill: var(--accent); flex-shrink: 0; }
+.profile-pane-info-row.danger svg { fill: var(--red); }
+.profile-pane-info-row.danger { color: var(--red); }
+.profile-pane-info-content { flex: 1; min-width: 0; }
+.profile-pane-info-label { font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.3px; }
+.profile-pane-info-value { font-size: 14px; color: var(--text); margin-top: 2px; word-break: break-word; }
+
+/* Media tabs */
+.media-tabs {
+    display: flex;
+    border-top: 1px solid var(--border);
+    background: var(--bg-sidebar);
+    position: sticky;
+    top: 0;
+    z-index: 2;
+}
+.media-tab {
+    flex: 1;
+    padding: 12px 8px;
+    text-align: center;
+    color: var(--text-3);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: 0.15s;
+    border-bottom: 2px solid transparent;
+}
+.media-tab:hover { color: var(--text); }
+.media-tab.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+}
+.media-tab-count {
+    display: inline-block;
+    margin-left: 6px;
+    background: var(--bg-input);
+    color: var(--text-3);
+    padding: 1px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+}
+.media-tab.active .media-tab-count {
+    background: var(--accent-soft);
+    color: var(--accent);
+}
+
+.media-content {
+    padding: 8px;
+    min-height: 200px;
+}
+.media-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 2px;
+}
+.media-grid-item {
+    position: relative;
+    aspect-ratio: 1 / 1;
+    background: var(--bg-input);
+    border-radius: 4px;
+    overflow: hidden;
+    cursor: pointer;
+}
+.media-grid-item img,
+.media-grid-item video {
+    width: 100%; height: 100%;
+    object-fit: cover;
+}
+.media-grid-item.video::after {
+    content: '▶';
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0,0,0,0.35);
+    color: white;
+    font-size: 20px;
+    text-shadow: 0 2px 6px rgba(0,0,0,0.6);
+}
+.media-list-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--border);
+    transition: background 0.12s;
+    border-radius: 8px;
+}
+.media-list-item:hover { background: var(--bg-hover); }
+.media-list-icon {
+    width: 42px; height: 42px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+.media-list-icon svg { width: 20px; height: 20px; fill: currentColor; }
+.media-list-meta { flex: 1; min-width: 0; }
+.media-list-name {
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.media-list-sub { font-size: 11px; color: var(--text-3); margin-top: 1px; }
+.media-empty {
+    padding: 40px 20px;
+    text-align: center;
+    color: var(--text-3);
+    font-size: 13px;
+}
